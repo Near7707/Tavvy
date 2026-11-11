@@ -343,7 +343,18 @@ function petFiles(pet) {
 
 const isPhone = () => window.innerWidth <= PHONE_MAX_WIDTH;
 const device = () => (isPhone() ? 'phone' : 'pc');
-const stage = { floorY: 0, left: 0, right: 0, vw: 0, vh: 0 };
+const stage = { floorY: 0, left: 0, right: 0, vw: 0, vh: 0, ox: 0, oy: 0 };
+
+/**
+ * Where the overlay's (0,0) actually sits on screen. Normally (0,0), but on some phones the page
+ * shifts (e.g. when the keyboard opens) and the overlay moves with it. Everything is drawn in
+ * screen coordinates minus this offset.
+ */
+function measureOrigin() {
+    if (!layer) return;
+    const r = layer.getBoundingClientRect();
+    stage.ox = r.left; stage.oy = r.top;
+}
 
 function measure() {
     const vv = window.visualViewport;
@@ -360,6 +371,7 @@ function measure() {
     }
     stage.floorY = Math.min(floor, vh);
     stage.left = left; stage.right = right; stage.vw = vw; stage.vh = vh;
+    measureOrigin();
     for (const a of actors) a.fitStage();
     placeBed();
 }
@@ -383,8 +395,8 @@ function fx(actor, text, cls = '') {
     el.className = 'tavvy-fx ' + cls;
     el.textContent = text;
     const top = stage.floorY - actor.y - actor.h * actor.scale;
-    el.style.left = (actor.x + (Math.random() - 0.5) * actor.w * 0.4) + 'px';
-    el.style.top = top + 'px';
+    el.style.left = (actor.x + (Math.random() - 0.5) * actor.w * 0.4 - stage.ox) + 'px';
+    el.style.top = (top - stage.oy) + 'px';
     layer.appendChild(el);
     el.addEventListener('animationend', () => el.remove());
     setTimeout(() => el.remove(), 2000);
@@ -627,8 +639,8 @@ class Actor {
             const top = this.ptr.y - this.grab.y;
             this.x = left + this.w / 2;
             this.y = stage.floorY - top - this.h;
-            this.ptr.vx *= Math.pow(0.02, dt);                      // pointer stopped → swing settles
-            this.tiltT = clamp(-this.ptr.vx * 0.03, -HOLD_SWING_MAX, HOLD_SWING_MAX);
+            this.ptr.vx *= Math.pow(0.08, dt);                      // pointer stopped → swing settles
+            this.tiltT = clamp(-this.ptr.vx * 0.07, -HOLD_SWING_MAX, HOLD_SWING_MAX);
             shiver = Math.sin(this.clock * 55) * 0.6;
             this.fxT -= dt;
             if (this.fxT <= 0) { this.fxT = rand(2.2, 4); if (Math.random() < 0.6) fx(this, '💦', 'tavvy-fx-small'); }
@@ -693,7 +705,8 @@ class Actor {
         }
 
         // springs — BOTH branches (held / not held)
-        if (this.held) spring(this, 'tilt', 'tiltv', this.tiltT, 70, 0.3, dt);
+        if (this.held) spring(this, 'tilt', 'tiltv', this.tiltT, 55, 0.14, dt);   // loose: keeps swinging a while
+        if (this.held) this.tilt = clamp(this.tilt, -25, 25);
         else spring(this, 'tilt', 'tiltv', this.tiltT, 170, 0.42, dt);
         spring(this, 'sq', 'sqv', 1, 260, 0.32, dt);
 
@@ -707,7 +720,7 @@ class Actor {
         const sx = 1 + (1 - sy) * 0.7;
         const left = this.x - this.w / 2 + shiver;
         const top = stage.floorY - this.y - this.h + this.basePx - bob;
-        this.el.style.transform = `translate3d(${left.toFixed(1)}px, ${top.toFixed(1)}px, 0)`;
+        this.el.style.transform = `translate3d(${(left - stage.ox).toFixed(1)}px, ${(top - stage.oy).toFixed(1)}px, 0)`;
         this.body.style.transform = `rotate(${(this.tilt + waddle).toFixed(2)}deg) scale(${(sx * this.scale).toFixed(3)}, ${(sy * this.scale).toFixed(3)})`;
         const list = pose && pose.length ? pose : this.rec.look.roles.idle;
         const src = imgUrl(list[this.frame % list.length]);
@@ -718,7 +731,7 @@ class Actor {
 }
 
 /* ---------- animation loop (stops when nobody is awake) ---------- */
-let raf = 0, lastT = 0;
+let raf = 0, lastT = 0, remeasureT = 0;
 
 function ensureLoop() {
     if (raf || !actors.length) return;
@@ -730,6 +743,14 @@ function tick(t) {
     raf = 0;
     const dt = Math.min(1 / 30, Math.max(0, (t - lastT) / 1000));
     lastT = t;
+    // keep geometry fresh: floor every ~0.25s (keyboard, toolbar changes), overlay origin every frame
+    remeasureT += dt;
+    if (remeasureT > 0.25) { remeasureT = 0; measure(); }
+    else {
+        const ox = stage.ox, oy = stage.oy;
+        measureOrigin();
+        if (ox !== stage.ox || oy !== stage.oy) placeBed();
+    }
     for (const a of [...actors]) a.step(dt);
     if (actors.length) raf = requestAnimationFrame(tick);
 }
@@ -796,7 +817,7 @@ function currentBedPos() {
 
 function setBedPos(x, y, save) {
     const p = clampBed({ x, y });
-    bed.style.transform = `translate3d(${p.x}px, ${p.y}px, 0)`;
+    bed.style.transform = `translate3d(${p.x - stage.ox}px, ${p.y - stage.oy}px, 0)`;
     if (save && root) {
         root.settings.bedPos[device()] = { x: Math.round(p.x), y: Math.round(p.y) };
         saveSoon();
@@ -806,7 +827,7 @@ function setBedPos(x, y, save) {
 function placeBed() {
     if (!bed) return;
     const p = currentBedPos();
-    bed.style.transform = `translate3d(${p.x}px, ${p.y}px, 0)`;
+    bed.style.transform = `translate3d(${p.x - stage.ox}px, ${p.y - stage.oy}px, 0)`;
 }
 
 function bedCenter() {
@@ -1019,7 +1040,7 @@ function findBed() {
         lines.push('침대 버튼: 만들어지지 않음');
     } else {
         const x = Math.round(stage.vw / 2 - BED_SIZE / 2), y = Math.round(stage.vh / 2 - BED_SIZE / 2);
-        bed.style.transform = `translate3d(${x}px, ${y}px, 0)`;   // temporary, not saved
+        bed.style.transform = `translate3d(${x - stage.ox}px, ${y - stage.oy}px, 0)`;   // temporary, not saved
         bumpBed();
         const r = bed.getBoundingClientRect();
         const cs = getComputedStyle(bed);
@@ -1192,9 +1213,11 @@ function onReady() {
     window.addEventListener('orientationchange', () => setTimeout(measure, 250));
     window.visualViewport?.addEventListener('resize', remeasure);
     window.visualViewport?.addEventListener('scroll', remeasure);
+    window.addEventListener('scroll', remeasure, { passive: true });
+    document.addEventListener('focusin', () => setTimeout(measure, 350));
+    document.addEventListener('focusout', () => setTimeout(measure, 350));
     const sf = document.getElementById('send_form');
     if (sf && 'ResizeObserver' in window) new ResizeObserver(remeasure).observe(sf);
-    setInterval(() => { if (actors.length) measure(); }, 1000);
 
     // keep "last visit" fresh while staying in a room
     setInterval(() => {
