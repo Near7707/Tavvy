@@ -54,6 +54,7 @@ const BUILTIN = {
 const DEFAULT_SIZE = { phone: 64, pc: 96 };
 const PHONE_MAX_WIDTH = 1000;   // same breakpoint SillyTavern uses for its mobile layout
 const GRAVITY = 1900;           // px/s² (a bit floaty)
+const MAX_FALL = 620;           // px/s — falls ease into this speed (plush toy, not a brick)
 const SIZE_MIN = 32, SIZE_MAX = 192;   // px — per-pet size slider
 const HOLD_SWING_MAX = 15;      // degrees
 const DRAG_THRESHOLD = 8;       // px — bed button: tap vs drag
@@ -649,7 +650,8 @@ class Actor {
             if (this.fxT <= 0) { this.fxT = rand(2.2, 4); if (Math.random() < 0.6) fx(this, '💦', 'tavvy-fx-small'); }
             pose = this.role('held', 'surprise');
         } else if (this.air) {
-            this.vy -= GRAVITY * dt;
+            if (this.vy > 0) this.vy -= GRAVITY * dt;
+            else this.vy = Math.max(-MAX_FALL, this.vy - GRAVITY * dt * Math.max(0, 1 - (this.vy / MAX_FALL) ** 2));
             this.y += this.vy * dt;
             this.x = clamp(this.x + this.vx * dt, L, Math.max(L, R));
             if (this.y <= 0) { const impact = -this.vy; this.y = 0; this.land(impact); }
@@ -822,14 +824,22 @@ function clampBed(p) {
 
 function currentBedPos() {
     const saved = root?.settings?.bedPos?.[device()];
-    return clampBed(saved && typeof saved.x === 'number' ? saved : defaultBedPos());
+    if (saved && typeof saved.x === 'number') {
+        // lower half: remembered as "this far above the input bar" → rises with it when the keyboard opens
+        if (typeof saved.dy === 'number') return clampBed({ x: saved.x, y: stage.floorY - saved.dy });
+        if (typeof saved.y === 'number') return clampBed(saved);
+    }
+    return clampBed(defaultBedPos());
 }
 
 function setBedPos(x, y, save) {
     const p = clampBed({ x, y });
     bed.style.transform = `translate3d(${p.x - stage.ox}px, ${p.y - stage.oy}px, 0)`;
     if (save && root) {
-        root.settings.bedPos[device()] = { x: Math.round(p.x), y: Math.round(p.y) };
+        const lower = p.y + BED_SIZE / 2 > stage.floorY / 2;
+        root.settings.bedPos[device()] = lower
+            ? { x: Math.round(p.x), dy: Math.round(stage.floorY - p.y) }
+            : { x: Math.round(p.x), y: Math.round(p.y) };
         saveSoon();
     }
 }
@@ -1114,8 +1124,6 @@ function homeLabel(p) {
 }
 
 /* ---------- per-pet size (phone / PC kept apart) ---------- */
-let sizeTouchedAt = -Infinity;
-
 function petSize(p, dev = device()) {
     return p.look?.size?.[dev] || DEFAULT_SIZE[dev];
 }
@@ -1127,16 +1135,18 @@ function isSharp(p, size) {
 }
 
 function sizeLabel(p, size) {
-    return `${size}px${isSharp(p, size) ? ' ✦선명' : ''}${size === DEFAULT_SIZE[device()] ? ' (기본)' : ''}`;
+    return `px${isSharp(p, size) ? ' ✦선명' : ''}${size === DEFAULT_SIZE[device()] ? ' (기본)' : ''} · ${SIZE_MIN}~${SIZE_MAX}`;
 }
 
 function onSizeInput(input, done) {
     const pet = root?.pets.find(p => p.id === input.dataset.size);
     if (!pet) return;
-    sizeTouchedAt = performance.now();
-    let v = Number(input.value);
-    // snap gently to sharp sizes for built-in pets
-    for (const s of [32, 64, 96, 128, 160, 192]) if (Math.abs(v - s) <= 2 && isSharp(pet, s)) v = s;
+    let v = Math.round(Number(input.value));
+    if (!Number.isFinite(v) || v < SIZE_MIN || v > SIZE_MAX) {
+        // half-typed (e.g. "4" on the way to "48") → wait; on leaving the box, fix it into range
+        if (!done) return;
+        v = Number.isFinite(v) && input.value !== '' ? clamp(v, SIZE_MIN, SIZE_MAX) : petSize(pet);
+    }
     pet.look.size = { ...DEFAULT_SIZE, ...(pet.look.size || {}), [device()]: v };
     const label = document.querySelector(`[data-sizeval="${CSS.escape(pet.id)}"]`);
     if (label) label.textContent = sizeLabel(pet, v);
@@ -1172,13 +1182,13 @@ function renderPanel() {
   <div class="menu_button tavvy-del" data-del="${esc(p.id)}" title="삭제">삭제</div>
   <label class="tavvy-size">
     <span>크기(${dev === 'phone' ? '폰' : 'PC'})</span>
-    <input type="range" min="${SIZE_MIN}" max="${SIZE_MAX}" step="2" value="${size}" data-size="${esc(p.id)}">
+    <input type="number" class="text_pole" inputmode="numeric" min="${SIZE_MIN}" max="${SIZE_MAX}" step="1" value="${size}" data-size="${esc(p.id)}">
     <span class="tavvy-size-val" data-sizeval="${esc(p.id)}">${sizeLabel(p, size)}</span>
   </label>
 </div>`;
         }).join('');
-        // don't rebuild while a size slider is being dragged (the list refreshes on its own every so often)
-        if (html !== list.dataset.html && performance.now() - sizeTouchedAt > 1500) {
+        // don't rebuild while a size box is being typed in (the list refreshes on its own every so often)
+        if (html !== list.dataset.html && !list.contains(document.activeElement)) {
             list.innerHTML = html;
             list.dataset.html = html;
         }

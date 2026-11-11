@@ -177,8 +177,8 @@
     font-size: .85em;
     margin: 0;
 }
-.tavvy-settings .tavvy-size input[type="range"] { flex: 1; min-width: 80px; margin: 0; }
-.tavvy-settings .tavvy-size-val { min-width: 8.5em; opacity: .85; white-space: nowrap; }
+.tavvy-settings .tavvy-size input[type="number"] { width: 5em; flex: none; margin: 0; }
+.tavvy-settings .tavvy-size-val { opacity: .85; white-space: nowrap; }
 .tavvy-settings .menu_button.disabled { opacity: .5; }
 
 .tavvy-settings .tavvy-diag { white-space: pre-wrap; font-size: .8em; }
