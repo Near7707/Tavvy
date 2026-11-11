@@ -1055,6 +1055,16 @@ function findBed() {
     const lines = [];
     lines.push(`준비: ${ready ? '됨' : '안 됨'} · 이 방 펫: ${residents().length}`);
     lines.push(`화면 ${Math.round(stage.vw)}×${Math.round(stage.vh)} · 바닥 ${Math.round(stage.floorY)} · ${device()}`);
+    // room / home keys, shortened so character names are not shown
+    const key = (chatId, integ) => {
+        const id = String(chatId || '');
+        const tail = id.includes(' - ') ? id.slice(id.lastIndexOf(' - ') + 3) : id.slice(-20);
+        return `…${tail || '(없음)'} / ${integ ? String(integ).slice(0, 6) : '(번호 없음)'}`;
+    };
+    const live = readRoom();
+    lines.push(`지금 방: ${live ? key(live.chatId, live.integrity) + (live.branch ? ' · 분기' : '') : '없음'}`);
+    lines.push(`기억한 방: ${room ? key(room.chatId, room.integrity) : '없음'}`);
+    for (const p of root?.pets || []) lines.push(`${p.name}의 집: ${p.home ? key(p.home.chatId, p.home.integrity) : '집 없음'}`);
     if (!bed) {
         lines.push('침대 버튼: 만들어지지 않음');
     } else {
