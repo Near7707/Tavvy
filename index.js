@@ -905,9 +905,20 @@ function toggleWake() {
  * Room changes
  * ===================================================================== */
 
+const sameRoom = (a, b) => !!a && !!b && a.chatId === b.chatId && a.integrity === b.integrity;
+let roomRetry = 0;
+
 async function onChatChanged() {
+    const next = readRoom();
+    // SillyTavern sometimes reports a chat change without really leaving (e.g. after the app was in the
+    // background). Same room → keep pets as they are.
+    if (sameRoom(next, room)) { measure(); refreshBed(); renderPanel(); return; }
+    // A change to "no chat" can be a passing moment while the chat reloads → look again shortly.
+    clearTimeout(roomRetry);
+    if (!next) roomRetry = setTimeout(recheckRoom, 800);
+
     sleepInstant();
-    room = readRoom();
+    room = next;
     let changed = false;
     if (room && root) {
         const now = Date.now();
@@ -922,6 +933,14 @@ async function onChatChanged() {
     refreshBed();
     renderPanel();
     if (root?.settings.autoWake && residents().length) wakeAll();
+}
+
+/** Look at the current chat again; only acts if it differs from what we think. */
+function recheckRoom() {
+    if (!ready) return;
+    const next = readRoom();
+    if (sameRoom(next, room) || (!next && !room)) return;
+    onChatChanged();
 }
 
 /* =====================================================================
@@ -1217,12 +1236,21 @@ function onReady() {
     document.addEventListener('focusin', () => setTimeout(measure, 350));
     document.addEventListener('focusout', () => setTimeout(measure, 350));
     // coming back from another app (iPhone may shift or resize the page while we were away)
-    const onReturn = () => { if (!document.hidden) { measure(); setTimeout(measure, 300); setTimeout(measure, 1000); } };
+    const onReturn = () => {
+        if (document.hidden) return;
+        measure(); recheckRoom();
+        setTimeout(() => { measure(); recheckRoom(); }, 300);
+        setTimeout(() => { measure(); recheckRoom(); }, 1200);
+    };
     document.addEventListener('visibilitychange', onReturn);
     window.addEventListener('pageshow', onReturn);
     window.addEventListener('focus', onReturn);
     // cheap safety net while everyone is asleep (the awake loop already re-measures)
-    setInterval(() => { if (!actors.length && bed && !bed.hidden && !document.hidden) measure(); }, 2000);
+    setInterval(() => {
+        if (document.hidden) return;
+        recheckRoom();
+        if (!actors.length && bed && !bed.hidden) measure();
+    }, 2000);
     const sf = document.getElementById('send_form');
     if (sf && 'ResizeObserver' in window) new ResizeObserver(remeasure).observe(sf);
 
