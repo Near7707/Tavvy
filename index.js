@@ -6,6 +6,9 @@
 //          replies, and a little reaction when you send a message.
 // Stage 4: food — new messages fill the bowl, sparkles fly in and get eaten, four meal sizes,
 //          a nap after a big meal, being full, a number on the bed, daily backups.
+// Stage 5: closeness — growing closer by eating and being patted, hearts, looking at you,
+//          the reunion when woken (by personality), "it's been N days" by the bed,
+//          a little party when closeness goes up, and a journal per pet.
 
 import { saveSettings, saveSettingsDebounced, getRequestHeaders, eventSource, event_types } from '../../../../script.js';
 
@@ -24,12 +27,16 @@ const ctx = () => SillyTavern.getContext();
 // land:  reaction after falling back in from the top of the screen
 // send:  reaction when you send a message ('glance' = look, then turn away)
 // bump:  reaction after bumping into another pet ('flick' = turn away, 'aside' = "…" and step aside)
+// me:    chance to stop and react to you (the person in front of the screen), closeness 0 → 100
+//        (used × ME_SCALE when it decides by itself)
+// eat:   meal speed after waking (< 1 = gobbles it up, > 1 = slowly)
+// fussy: dislikes rapid taps (💢, closeness is never lost)
 const PERSONALITIES = {
-    aegyo:   { name: '애교쟁이', speed: 72, idle: [1.5, 3.5], doze: 0.06, dozeLen: [3, 6],  tap: '♥',  climb: [0.16, 0.24], perch: [2, 5],   land: '♥',  send: '♥',  bump: '♥' },
-    saechim: { name: '새침데기', speed: 55, idle: [2, 5],     doze: 0.10, dozeLen: [3, 7],  tap: '?',  climb: [0.07, 0.12], perch: [2, 5],   land: 'flick', send: 'glance', bump: 'flick' },
-    neugut:  { name: '느긋쟁이', speed: 30, idle: [3, 6],     doze: 0.35, dozeLen: [6, 14], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: '하암', send: '♪',  bump: '?' },
-    simsul:  { name: '심술쟁이', speed: 58, idle: [2, 4.5],   doze: 0.08, dozeLen: [3, 6],  tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: '흥',  bump: '💢' },
-    musim:   { name: '무심쟁이', speed: 42, idle: [3, 7],     doze: 0.12, dozeLen: [4, 9],  tap: '…',  climb: [0.08, 0.14], perch: [8, 16],  land: '…',  send: '…',  bump: 'aside' },
+    aegyo:   { name: '애교', speed: 72, idle: [1.5, 3.5], doze: 0.06, dozeLen: [3, 6],  tap: '♥',  climb: [0.16, 0.24], perch: [2, 5],   land: '♥',  send: '♥',  bump: '♥',     me: [0.60, 0.95], eat: 0.7 },
+    saechim: { name: '새침', speed: 55, idle: [2, 5],     doze: 0.10, dozeLen: [3, 7],  tap: '?',  climb: [0.07, 0.12], perch: [2, 5],   land: 'flick', send: 'glance', bump: 'flick', me: [0.15, 0.60], eat: 1, fussy: true },
+    neugut:  { name: '느긋', speed: 30, idle: [3, 6],     doze: 0.35, dozeLen: [6, 14], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: '하암', send: '♪',  bump: '?',     me: [0.15, 0.50], eat: 1.3 },
+    simsul:  { name: '심술', speed: 58, idle: [2, 4.5],   doze: 0.08, dozeLen: [3, 6],  tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: '흥',  bump: '💢',    me: [0.20, 0.60], eat: 1, fussy: true },
+    musim:   { name: '무심', speed: 42, idle: [3, 7],     doze: 0.12, dozeLen: [4, 9],  tap: '…',  climb: [0.08, 0.14], perch: [8, 16],  land: '…',  send: '…',  bump: 'aside', me: [0.05, 0.25], eat: 1 },
 };
 
 // Built-in pets (original characters made for this project).
@@ -93,6 +100,30 @@ const SPARK_MAX = 40;           // sparkles in one meal at most
 const SPARK_CHARS = 12;         // a message gives one sparkle per this many characters (2 … 14)
 const BACKUP_KEEP = 7;          // daily backups kept on the server
 
+// closeness (stage 5): points = messages eaten (mine + theirs) + pat points.
+// The thresholds sit at closeness 0 / 25 / 50 / 75 / 100, straight lines in between. Never saved — always worked out.
+const LEVELS = [
+    { name: '처음', min: 0,   hearts: '♡' },
+    { name: '관심', min: 30,  hearts: '♥' },
+    { name: '친구', min: 100, hearts: '♥♥' },
+    { name: '단짝', min: 220, hearts: '♥♥♥' },
+    { name: '내편', min: 400, hearts: '♥♥♥♥' },
+];
+const CLOSE = 50;               // closeness from which "친하면" reactions show (friends)
+const ME_SCALE = 0.5;           // "react to you" chance × this when it decides by itself
+const ME_REST = 6;              // s — not twice in a row within this
+const RAPID_TAPS = 3, RAPID_WINDOW = 1.5;   // this many taps within this many seconds = 연타
+const REVISIT_DAYS = 3;         // away this long → a little bubble by the bed
+const TEARY_DAYS = 7, TEARY_CLOSE = 60;     // away this long and this close → teary when it sees you
+const RECENT_H = 12;            // woken again within this many hours = "just saw you"
+const REVISIT_LINES = {
+    aegyo:   (n) => `${n}일이나 기다렸어…! 보고 싶었어 ♥`,
+    saechim: (n) => `…${n}일 만이네. 딱히 기다린 건 아니야.`,
+    neugut:  (n) => `하암… 벌써 ${n}일 지났어?`,
+    simsul:  (n) => `${n}일이나 어디 갔었어 💢`,
+    musim:   (n) => `…${n}일.`,
+};
+
 /* =====================================================================
  * Storage (format version + safety rails)
  * ===================================================================== */
@@ -110,6 +141,7 @@ function defaultSettings() {
         stageMode: 'chat',                     // 'chat' = whole chat (messages are ledges) / 'floor' = floor only
         lineLedges: true,                      // flat / document chat style: borders between messages are ledges
         badge: true,                           // number of waiting messages on the bed
+        heartMode: 'both',                     // closeness shown as 'both' (♥♥ 친구) / 'hearts' / 'name' / 'hide'
         backup: { lastDay: null, files: [] },  // daily backups: [{ day, path, pets }]
     };
 }
@@ -425,9 +457,57 @@ function liveRect(el) {
 
 const platOf = (el) => plats.find(p => p.el === el) || null;
 
-// Closeness (5단계). Until then everyone starts at "처음 ♡".
-const closeness = () => 0;
-const byCloseness = (lo, hi) => lo + (hi - lo) * closeness() / 100;
+/* ---------- closeness (stage 5) ---------- */
+const petPoints = (rec) => (rec?.eaten?.me || 0) + (rec?.eaten?.them || 0) + (rec?.pats?.score || 0);
+
+function levelOf(rec) {
+    const pts = petPoints(rec);
+    let k = 0;
+    LEVELS.forEach((l, i) => { if (pts >= l.min) k = i; });
+    return k;
+}
+
+/** 0 … 100 */
+function closenessOf(rec) {
+    const k = levelOf(rec);
+    if (k >= LEVELS.length - 1) return 100;
+    const a = LEVELS[k].min, b = LEVELS[k + 1].min;
+    return k * 25 + 25 * (petPoints(rec) - a) / (b - a);
+}
+
+/** Highest level already celebrated (kept as moments "level1" … "level4"). */
+function celebratedLevel(rec) {
+    let k = 0;
+    for (const m of rec?.journal?.moments || []) {
+        const r = /^level(\d)$/.exec(m?.kind || '');
+        if (r) k = Math.max(k, Number(r[1]));
+    }
+    return k;
+}
+
+/** A chance that grows with this pet's closeness: lo at 0, hi at 100. */
+const byCloseness = (who, lo, hi) => lo + (hi - lo) * closenessOf(who?.rec || who) / 100;
+
+/** "♥♥ 친구" — as the 친밀도 표시 setting says. */
+function levelLabel(rec, k = levelOf(rec)) {
+    const L = LEVELS[k];
+    const mode = root?.settings?.heartMode || 'both';
+    if (mode === 'hearts') return L.hearts;
+    if (mode === 'name') return L.name;
+    if (mode === 'hide') return '';
+    return `${L.hearts} ${L.name}`;
+}
+
+/** Pat (tap): one point a day (the day starts at 6 a.m.). */
+function patPet(rec) {
+    const day = dayKey();
+    rec.pats ??= { score: 0, lastDay: null };
+    if (rec.pats.lastDay === day) return false;
+    rec.pats.score = (rec.pats.score || 0) + 1;
+    rec.pats.lastDay = day;
+    saveSoon();
+    return true;
+}
 
 /**
  * Where the overlay's (0,0) actually sits on screen. Normally (0,0), but on some phones the page
@@ -545,6 +625,11 @@ class Actor {
         this.fullNow = false;        // became full during this meal → nods off afterwards
         this.slowT = 0;              // s — walking slowly after a big meal
         this.spin = 0;               // deg — rolling over (full)
+        this.reunion = null;         // { away, skip, long, teary } — the greeting after being woken
+        this.gq = null; this.gi = 0; this.gfx = false;   // greeting steps / which one / its effect shown
+        this.reunionMeal = false;    // this meal is the one right after waking (personality touches after it)
+        this.taps = [];              // recent tap times (연타)
+        this.lastMe = -1e9;          // last "react to you" (ms)
         this.build();
     }
 
@@ -610,7 +695,7 @@ class Actor {
 
     /** Free to react to things (not held, flying, hidden, leaving…). */
     free() {
-        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear', 'sniff', 'eat', 'nod', 'dance', 'roll'].includes(this.state);
+        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear', 'greet', 'sniff', 'eat', 'nod', 'dance', 'roll'].includes(this.state);
     }
 
     /** Can a sparkle reaching it be eaten right now? (dozing → piled beside it; held / flying → waits nearby) */
@@ -636,11 +721,14 @@ class Actor {
         const take = takeBowl(this.rec);
         saveNow();
         refreshBed();
+        renderPanel();
         if (!take.n) return this.setState('idle');
         const tier = mealTier(take.n);
-        this.meal = { post: tier === 'feast' ? 'feast' : tier === 'bowl' ? 'nod' : null, big: false };
+        this.meal = { post: tier === 'feast' ? 'feast' : tier === 'bowl' ? 'nod' : null, big: false,
+            nap: this.p.perch === 'doze' && (tier === 'bowl' || tier === 'feast') };   // 느긋: nods off halfway, then finishes
+        this.reunionMeal = true;
         if (take.becameFull) this.fullNow = true;
-        spawnMeal(this, take, tier);
+        spawnMeal(this, take, tier, this.p.eat || 1);
         this.setState('eat');
     }
 
@@ -653,12 +741,98 @@ class Actor {
         this.mealDone();
     }
 
-    /** After eating (and any nap / dance): full → doze off, a reply waiting to be looked at → go look. */
+    /** After eating (and any nap / dance): closeness went up → a little party; full → doze off; a reply waiting → go look. */
     mealDone() {
+        if (this.levelPending()) return this.startCheer();          // comes back here after the dance
+        if (this.reunionMeal) { this.reunionMeal = false; if (this.afterReunionMeal()) return; }
         if (this.fullNow) { this.fullNow = false; fx(this, '♪', 'tavvy-fx-small'); return this.setState('doze'); }
         const el = this.afterMeal; this.afterMeal = null;
         this.setState('idle');
         if (el && el.isConnected && !this.waiting) this.watchReply(el);
+    }
+
+    /** The end of the first meal after waking, by personality. true = it set what happens next. */
+    afterReunionMeal() {
+        const k = this.rec.personality?.base;
+        const mid = (stage.left + stage.right) / 2;
+        if (k === 'saechim') {                                  // done eating → a sly look at you
+            this.after = this.fullNow ? 'doze' : 'idle';
+            this.fullNow = false;
+            this.startLook('glance', mid);
+            return true;
+        }
+        if (k === 'simsul') { fx(this, '♥'); return false; }    // softened up by the food
+        if (k === 'musim') {
+            if (closenessOf(this.rec) >= CLOSE && !this.fullNow) { this.setState('perch'); return true; }   // stays sitting there ("…")
+            fx(this, '…');
+        }
+        return false;
+    }
+
+    levelPending() { return levelOf(this.rec) > celebratedLevel(this.rec); }
+
+    /** Closeness went up: "친밀도 상승!", coloured ✦, a dance. Two levels at once → one party. */
+    startCheer() {
+        const from = celebratedLevel(this.rec), to = levelOf(this.rec);
+        const day = dayKey();
+        for (let k = from + 1; k <= to; k++) this.rec.journal.moments.push({ kind: `level${k}`, day });
+        saveNow();
+        renderPanel();
+        showCheer(this, from, to);
+        this.after = 'idle';
+        this.setState('dance');
+    }
+
+    /** Stop and react to you (the person in front of the screen). */
+    startMe() {
+        const mid = (stage.left + stage.right) / 2;
+        if (this.side && Math.abs(mid - this.x) > 8) this.dir = mid >= this.x ? 1 : -1;
+        this.lastMe = performance.now();
+        this.setState('me');
+    }
+
+    endMe() {
+        const k = this.rec.personality?.base;
+        if (k === 'neugut') return this.setState('doze');                     // ♪ … and nods off
+        if (k === 'musim' && this.stepAside((stage.left + stage.right) / 2)) return;   // "…" and backs off a few steps
+        this.setState('idle');
+    }
+
+    /** A few steps away from x. false if there is no room. */
+    stepAside(ox) {
+        const [L, R] = this.range();
+        const away = ox >= this.x ? -1 : 1;
+        const tx = clamp(this.x + away * rand(50, 90), L, Math.max(L, R));
+        if (Math.abs(tx - this.x) <= 10) return false;
+        this.dir = away; this.tx = tx; this.edge = false;
+        this.setState('walk');
+        return true;
+    }
+
+    /** Woken up: look around, spot you "!", greet you by personality — then the food. */
+    startGreet() {
+        const plan = this.reunion || {};
+        this.reunion = null;
+        const k = this.rec.personality?.base;
+        const q = [];
+        const greets = k !== 'musim' && !plan.skip;             // 무심 never greets; lots of food soon after → straight to it
+        if (greets) q.push({ k: 'scan', d: 0.7 });
+        if (greets || plan.teary) q.push({ k: 'found', d: 0.4 });
+        if (plan.teary) q.push({ k: 'teary', d: 1.6 });          // so glad it is teary
+        if (greets) {
+            const g = { aegyo: [['wave', 0.7], ['bounce', 0.8]], saechim: [['flick', 1.0]], neugut: [['yawn', 1.1], ['wave', 0.7]], simsul: [['grumpy', 1.0]] }[k] || [];
+            for (let r = 0; r < (plan.long ? 2 : 1); r++) for (const [kk, d] of g) q.push({ k: kk, d });   // long apart, little food → longer
+        }
+        if (!q.length) return this.afterGreet();
+        const mid = (stage.left + stage.right) / 2;
+        if (this.side && Math.abs(mid - this.x) > 8) this.dir = mid >= this.x ? 1 : -1;
+        this.gq = q; this.gi = 0; this.gfx = false;
+        this.setState('greet');
+    }
+
+    afterGreet() {
+        this.gq = null;
+        this.setState(this.mealPending ? 'sniff' : 'idle');
     }
 
     get side() { return this.rec.look.facing === 'left' || this.rec.look.facing === 'right'; }
@@ -723,10 +897,24 @@ class Actor {
         this.el.addEventListener('lostpointercapture', end);   // finger lost without a pointerup → still let go
     }
 
+    /** Tap = a pat: a little hop and a reaction. Counts once a day toward closeness. */
     tap() {
         if (this.state === 'tuck' || this.state === 'wave' || this.held) return;
+        const now = performance.now();
+        this.taps = this.taps.filter(t => now - t < RAPID_WINDOW * 1000);
+        this.taps.push(now);
         if (!this.air) { this.air = true; this.vy = 300; this.vx = 0; this.next = 'idle'; }
+        if (this.p.fussy && this.taps.length >= RAPID_TAPS) return fx(this, '💢');   // 연타 싫어! (closeness is not lost)
+        patPet(this.rec);
+        const k = this.rec.personality?.base;
+        const close = closenessOf(this.rec) >= CLOSE;
         fx(this, this.p.tap);
+        const later = (fn) => setTimeout(() => { if (!this.gone && !this.held) fn(); }, 650);
+        if (k === 'saechim' && close) later(() => fx(this, '♥', 'tavvy-fx-small'));      // 친하면 작은 ♥
+        if (k === 'simsul') {
+            if (close) later(() => fx(this, '♥'));                                          // 💢 … then softens
+            else later(() => { if (this.free() && !this.air) this.stepAside(this.x + (Math.random() < 0.5 ? -1 : 1)); });   // not close yet → moves away
+        }
     }
 
     release() {
@@ -752,6 +940,7 @@ class Actor {
         if (this.plat) this.pr = liveRect(this.plat);
         const n = this.next || 'idle';
         this.next = null;
+        if (n === 'greet') return this.startGreet();
         if (this.landReact) {
             this.landReact = false;
             this.after = n;
@@ -761,12 +950,9 @@ class Actor {
             this.bumpReact = false;
             const o = this.bumpWith; this.bumpWith = null;
             const ox = o && !o.gone ? o.x : this.x + this.dir * 40;
-            if (this.p.bump === 'aside') {                // 무심쟁이: "…" and steps out of the way
+            if (this.p.bump === 'aside') {                // 무심: "…" and steps out of the way
                 fx(this, '…');
-                const [L, R] = this.range();
-                const away = ox >= this.x ? -1 : 1;
-                const tx = clamp(this.x + away * rand(50, 90), L, Math.max(L, R));
-                if (Math.abs(tx - this.x) > 10) { this.dir = away; this.tx = tx; this.edge = false; return this.setState('walk'); }
+                if (this.stepAside(ox)) return;
                 return this.setState(n);
             }
             this.after = n;
@@ -780,7 +966,7 @@ class Actor {
         this.sqT = 1;
         if (s === 'idle') { this.until = rand(...this.p.idle); this.tiltT = 0; }
         if (s === 'doze') { this.until = rand(...this.p.dozeLen) * (this.isFull() ? 1.4 : 1); this.fxT = 0.6; }
-        if (s === 'sniff') { this.fxT = 0; this.tiltT = 0; this.until = 1.35; }
+        if (s === 'sniff') { this.fxT = 0; this.tiltT = 0; this.until = 0.75; }
         if (s === 'eat') { this.eatIdle = 0; this.tiltT = 0; if (this.side && this.eatFrom != null && Math.abs(this.eatFrom - this.x) > 8) this.dir = this.eatFrom > this.x ? 1 : -1; }
         if (s === 'nod') { this.until = 2.6; this.fxT = 0.5; }
         if (s === 'dance') { this.until = 1.9; this.fxT = 0; }
@@ -799,6 +985,11 @@ class Actor {
         }
         if (s === 'wait') { this.fxT = rand(0.4, 1.2); this.scanT = 0.6; }
         if (s === 'watch') { this.fxT = 0; this.until = 2.8; }
+        if (s === 'me') {
+            this.fxT = 0;
+            const close = closenessOf(this.rec) >= CLOSE;
+            this.until = { aegyo: 1.0, saechim: close ? 1.9 : 1.1, neugut: 1.4, simsul: close ? 1.5 : 1.0, musim: 0.8 }[this.rec.personality?.base] || 1.2;
+        }
     }
 
     /** Walk somewhere on what it stands on (floor or ledge). toEdge = walk to the very end of a ledge. */
@@ -818,15 +1009,18 @@ class Actor {
     decide() {
         if (this.mealPending) return this.setState('sniff');
         if (this.food > 0) return this.setState('eat');
+        if (this.levelPending()) return this.startCheer();          // e.g. a pat tipped it over
         if (this.afterMeal) { const el = this.afterMeal; this.afterMeal = null; if (el.isConnected && !this.waiting) { this.watchReply(el); if (this.state !== 'idle') return; } }
         if (gen.active && this.waiting) return this.setState('wait');
         const full = this.isFull();
         const r = Math.random();
         const dz = this.p.doze + (full ? 0.25 : 0);
         if (r < dz) return this.setState('doze');
+        // stop and react to you now and then (friendlier = more often)
+        if (performance.now() - this.lastMe > ME_REST * 1000 && Math.random() < byCloseness(this, ...this.p.me) * ME_SCALE) return this.startMe();
         if (full && !this.plat && Math.random() < 0.12) return this.setState('roll');   // 데굴데굴
         // hop up onto a message by itself
-        if (ledgesOn() && Math.random() < byCloseness(...this.p.climb)) {
+        if (ledgesOn() && Math.random() < byCloseness(this, ...this.p.climb)) {
             const t = this.pickClimb();
             if (t && this.climbTo(t, 'perch')) return;
         }
@@ -1011,7 +1205,7 @@ class Actor {
         this.dir = mid >= bx ? 1 : -1;
         this.vx = this.dir * rand(60, 130);
         this.vy = 420;
-        this.air = true; this.next = this.mealPending ? 'sniff' : 'idle';
+        this.air = true; this.next = 'greet';
         this.scale = 0.3;
         this.setState('appear');
     }
@@ -1200,19 +1394,23 @@ class Actor {
                     if (this.fxT === 1 && this.t > 1.4) { this.fxT = 2; fx(this, '!'); }
                     if (this.t > this.until) this.setState('idle');
                     break;
-                case 'sniff': {                        // 킁킁 toward the chat … "!" → food
+                case 'sniff': {                        // a look toward the chat, "!" → food
                     breath = 1;
                     pose = this.role('look', 'idle');
                     const d = (stage.left + stage.right) / 2 >= this.x ? 1 : -1;
-                    this.tiltT = d * (4 + Math.sin(this.t * 14) * 3);
-                    if (this.fxT === 0 && this.t > 0.15) { this.fxT = 1; fx(this, '킁킁', 'tavvy-fx-small'); }
-                    if (this.fxT === 1 && this.t > 0.95) { this.fxT = 2; fx(this, '!'); this.sq = 0.9; }
+                    this.tiltT = d * 4;
+                    if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '!'); this.sq = 0.9; }
                     if (this.t > this.until) this.startMeal();
                     break;
                 }
                 case 'eat':                            // sparkles flying in
                     breath = 1;
                     pose = this.role('eat', 'idle');
+                    if (this.meal?.nap && this.t > 1.6 && this.food > 3) {      // 느긋: a nap halfway through, then the rest
+                        this.meal.nap = false;
+                        this.setState('doze'); this.until = rand(2, 3);
+                        break;
+                    }
                     if (this.food > 0) this.eatIdle = 0;
                     else if ((this.eatIdle += dt) > 0.45) this.finishMeal();
                     break;
@@ -1236,6 +1434,61 @@ class Actor {
                     if (this.fxT === 0) { this.fxT = 1; fx(this, '♪'); }
                     if (this.fxT === 1 && this.t > 0.95) { this.fxT = 2; fx(this, '♪'); }
                     if (this.t > this.until) this.mealDone();
+                    break;
+                }
+                case 'me': {                           // reacting to you
+                    breath = 1;
+                    const k = this.rec.personality?.base, close = closenessOf(this.rec) >= CLOSE, d = this.side ? this.dir : 1;
+                    pose = this.role('look', 'idle');
+                    if (k === 'aegyo') {                                 // ♥♥ 통통
+                        pose = this.role('happy', 'idle'); this.tiltT = 0;
+                        bob = Math.abs(Math.sin(this.t * Math.PI * 2.5)) * 6 * this.k;
+                        if (this.fxT === 0 && this.t > 0.05) { this.fxT = 1; fx(this, '♥'); }
+                        if (this.fxT === 1 && this.t > 0.45) { this.fxT = 2; fx(this, '♥'); }
+                    } else if (k === 'saechim') {                        // looks… turns away (close: looks back, small ♥)
+                        this.tiltT = this.t < 0.6 ? d * 5 : close && this.t > 1.2 ? d * 4 : -d * 9;
+                        if (close && this.fxT === 0 && this.t > 1.3) { this.fxT = 1; fx(this, '♥', 'tavvy-fx-small'); }
+                    } else if (k === 'neugut') {                         // looks, ♪ (then dozes off)
+                        this.tiltT = d * 3;
+                        if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '♪'); }
+                    } else if (k === 'simsul') {                         // 💢 (close: then ♥)
+                        if (this.fxT === 0 && this.t > 0.1) { this.fxT = 1; fx(this, '💢'); }
+                        if (close && this.fxT === 1 && this.t > 0.9) { this.fxT = 2; fx(this, '♥'); }
+                        this.tiltT = this.fxT === 2 ? 0 : -d * 4;
+                        if (this.fxT === 2) pose = this.role('happy', 'idle');
+                    } else {                                             // 무심: "…" (then backs off)
+                        this.tiltT = 0;
+                        if (this.fxT === 0 && this.t > 0.1) { this.fxT = 1; fx(this, '…'); }
+                    }
+                    if (this.t > this.until) this.endMe();
+                    break;
+                }
+                case 'greet': {                        // just woken: look around, spot you, say hello
+                    const g = this.gq?.[this.gi];
+                    if (!g) { this.afterGreet(); break; }
+                    breath = 1;
+                    const d = this.side ? this.dir : 1;
+                    const first = !this.gfx; this.gfx = true;
+                    pose = this.role('look', 'idle');
+                    switch (g.k) {
+                        case 'scan': this.tiltT = Math.sin(this.t * 8) * 7; break;                       // 두리번
+                        case 'found': this.tiltT = 0; if (first) { fx(this, '!'); this.sq = 0.9; } break;
+                        case 'teary':                                                                   // 울먹
+                            this.tiltT = 0; pose = this.role('cry', 'surprise', 'idle');
+                            if (first || (this.t % 0.55) < dt) fx(this, '💧', 'tavvy-fx-small');
+                            break;
+                        case 'wave': this.tiltT = Math.sin(this.t * 12) * 9; pose = this.role('wave', 'happy', 'idle'); break;
+                        case 'bounce':
+                            this.tiltT = 0; pose = this.role('happy', 'idle');
+                            bob = Math.abs(Math.sin(this.t * Math.PI * 2.5)) * 6 * this.k;
+                            if (first) fx(this, '♥');
+                            break;
+                        case 'flick': this.tiltT = this.t < 0.15 ? d * 4 : -d * 9; break;              // 밥 못 본 척 고개 홱
+                        case 'yawn': this.tiltT = -d * 3; pose = this.role('idle'); if (first) fx(this, '하암'); break;
+                        case 'grumpy': this.tiltT = -d * 4; if (first) fx(this, '💢'); break;          // 왜 이제 와
+                        default: break;
+                    }
+                    if (this.t > g.d) { this.gi++; this.t = 0; this.gfx = false; }
                     break;
                 }
                 case 'roll': {                         // full: 데굴데굴
@@ -1361,7 +1614,7 @@ function bumpCheck() {
  * Food (stage 4) — counting, the bowl, sparkles, backups
  * ===================================================================== */
 
-const EATABLE = ['idle', 'walk', 'eat', 'look', 'wait', 'watch', 'perch', 'edge'];
+const EATABLE = ['idle', 'walk', 'eat', 'look', 'wait', 'watch', 'perch', 'edge', 'me'];
 
 /** "2026-11-12" — the day starts at 6 a.m. */
 function dayKey(t = Date.now()) {
@@ -1442,6 +1695,7 @@ function onCounted(id, fromUser) {
     }
     saveSoon();
     refreshBed();
+    renderPanel();
     if (!eaters.length) return eaters;
     maybeBackup();
     const chars = String(m.mes || '').length;
@@ -1563,13 +1817,14 @@ function spawnNibble(a, el, kind, n) {
 }
 
 /** The waiting bowl, after waking up. Sizes: 간식 / 한 끼 (2–3 waves) / 고봉밥 (with clumps) / 잔칫상. */
-function spawnMeal(a, take, tier) {
+function spawnMeal(a, take, tier, speed = 1) {
     const n = take.n;
     let count, waves = 1, span, clumps = 0;
     if (tier === 'snack') { count = clamp(Math.round(2 + n * 1.2), 3, 12); span = 0.5 + n * 0.1; }
     else if (tier === 'meal') { count = Math.round(14 + (n - 10) / 39 * 10); waves = n < 25 ? 2 : 3; span = 0.5; }
     else if (tier === 'bowl') { count = Math.round(26 + Math.min(1, (n - 50) / 150) * 8); span = 3.5; clumps = 4; }
     else { count = SPARK_MAX; span = 3.2; clumps = 6; }
+    span *= speed;                     // 애교 gobbles it up, 느긋 takes its time
     count = Math.min(count, SPARK_MAX);
     // colours split by the number of my / their messages in this meal
     const mine = Math.round(count * take.me / Math.max(1, n));
@@ -1583,7 +1838,7 @@ function spawnMeal(a, take, tier) {
     for (let i = 0; i < count; i++) {
         const w = waves > 1 ? Math.floor(i * waves / count) : 0;
         const inWave = waves > 1 ? (i - Math.ceil(w * count / waves)) / Math.ceil(count / waves) : i / count;
-        const delay = w * 1.3 + inWave * span;
+        const delay = w * 1.3 * speed + inWave * span;
         const p = pointIn(src(kinds[i]));
         sx += p.x;
         new Sparkle(a, p.x, p.y, kinds[i], { delay, size: big.has(i) ? 1.6 : 1 });
@@ -1737,6 +1992,7 @@ function placeBed() {
     if (!bed) return;
     const p = currentBedPos();
     bed.style.transform = `translate3d(${p.x - stage.ox}px, ${p.y - stage.oy}px, 0)`;
+    placeBubble();
 }
 
 function bedCenter() {
@@ -1749,6 +2005,89 @@ function bumpBed() {
     bed.classList.remove('tavvy-bump');
     void bed.offsetWidth;
     bed.classList.add('tavvy-bump');
+}
+
+/* ---------- a little bubble by the bed ("it's been N days") ---------- */
+let bubble = null, bubbleT = 0;
+
+function hideBubble() {
+    clearTimeout(bubbleT);
+    if (bubble) { bubble.remove(); bubble = null; }
+}
+
+function showBubble(text, ms = 7000) {
+    hideBubble();
+    if (!bed || bed.hidden) return;
+    bubble = document.createElement('div');
+    bubble.className = 'tavvy-bubble';
+    bubble.textContent = text;
+    bubble.addEventListener('pointerdown', (e) => { e.stopPropagation(); hideBubble(); });
+    ensureLayer().appendChild(bubble);
+    placeBubble();
+    bubbleT = setTimeout(hideBubble, ms);
+}
+
+/** Next to the bed, opening toward the middle of the screen. */
+function placeBubble() {
+    if (!bubble || !bed) return;
+    const b = currentBedPos();
+    const w = bubble.offsetWidth, h = bubble.offsetHeight;
+    const rightSide = b.x + BED_SIZE / 2 > stage.vw / 2;
+    let x = rightSide ? b.x - w - 6 : b.x + BED_SIZE + 6;
+    let y = b.y + BED_SIZE / 2 - h / 2;
+    x = clamp(x, 4, Math.max(4, stage.vw - w - 4));
+    y = clamp(y, 4, Math.max(4, stage.vh - h - 4));
+    bubble.classList.toggle('tavvy-bubble-left', rightSide);
+    bubble.style.transform = `translate3d(${x - stage.ox}px, ${y - stage.oy}px, 0)`;
+}
+
+/** Entering a room after REVISIT_DAYS or more: the one that waited longest says so. */
+function revisitBubble() {
+    if (actors.length) return;
+    const now = Date.now();
+    let best = null, bestAway = 0;
+    for (const p of residents()) {
+        const prev = prevVisit.get(p.id);
+        if (typeof prev !== 'number') continue;
+        const away = now - prev;
+        if (away >= REVISIT_DAYS * 86400e3 && away > bestAway) { best = p; bestAway = away; }
+    }
+    if (!best) return;
+    const n = Math.floor(bestAway / 86400e3);
+    const line = (REVISIT_LINES[best.personality?.base] || REVISIT_LINES.aegyo)(n);
+    showBubble(residents().length > 1 ? `${best.name}: ${line}` : line);
+}
+
+/* ---------- closeness went up: banner + coloured ✦ ---------- */
+const CHEER_COLORS = ['#ff7eb6', '#ffd23f', '#6fc3ff', '#8be07a'];
+
+function showCheer(a, from, to) {
+    const top = stage.floorY - a.y - a.h;
+    const el = document.createElement('div');
+    el.className = 'tavvy-cheer';
+    const mode = root?.settings?.heartMode || 'both';
+    el.innerHTML = '<b>친밀도 상승!</b>' + (mode === 'hide' ? '' : `<span>${esc(levelLabel(a.rec, from))} → ${esc(levelLabel(a.rec, to))}</span>`);
+    ensureLayer().appendChild(el);
+    const w = el.offsetWidth, h = el.offsetHeight;
+    const x = clamp(a.x - w / 2, 4, Math.max(4, stage.vw - w - 4));
+    const y = clamp(top - h - 22, 4, Math.max(4, stage.vh - h - 4));
+    el.style.left = (x - stage.ox) + 'px';
+    el.style.top = (y - stage.oy) + 'px';
+    setTimeout(() => el.remove(), 3200);
+    for (let i = 0; i < 14; i++) {
+        const s = document.createElement('div');
+        s.className = 'tavvy-burst';
+        s.textContent = '✦';
+        const ang = (i / 14) * Math.PI * 2 + rand(-0.2, 0.2), dist = rand(40, 80);
+        s.style.color = CHEER_COLORS[i % CHEER_COLORS.length];
+        s.style.left = (a.x - stage.ox) + 'px';
+        s.style.top = (top + a.h * 0.4 - stage.oy) + 'px';
+        s.style.setProperty('--dx', `${Math.cos(ang) * dist}px`);
+        s.style.setProperty('--dy', `${Math.sin(ang) * dist - 20}px`);
+        s.style.animationDelay = `${(i % 3) * 0.08}s`;
+        ensureLayer().appendChild(s);
+        setTimeout(() => s.remove(), 1600);
+    }
 }
 
 function refreshBed() {
@@ -1780,9 +2119,22 @@ async function wakeAll() {
         const b = bedCenter();
         bumpBed();
         let i = 0;
+        hideBubble();
+        const now = Date.now();
         for (const rec of here) {
             const a = new Actor(rec);
             a.mealPending = bowlCount(rec) > 0;
+            // how long since we last met (before entering this room) → how the reunion goes
+            const prev = prevVisit.get(rec.id);
+            const away = typeof prev === 'number' ? Math.max(0, now - prev) : 0;
+            const n = bowlCount(rec);
+            a.reunion = {
+                away,
+                skip: away < RECENT_H * 3600e3 && n >= MEAL_TIERS[1].min,                    // just saw you, lots of food → straight to it
+                long: away >= REVISIT_DAYS * 86400e3 && n < MEAL_TIERS[1].min,             // long apart, little food → a longer hello
+                teary: away >= TEARY_DAYS * 86400e3 && closenessOf(rec) >= TEARY_CLOSE,
+            };
+            prevVisit.set(rec.id, now);              // waking again during this visit = "just saw you"
             try { await a.load(); } catch (e) { console.warn('[Tavvy] could not load pet image', e); continue; }
             actors.push(a);
             a.hopOutFrom(b.x, b.y);
@@ -1860,7 +2212,7 @@ function onGenStart(type, opts, dryRun) {
     setTimeout(() => {
         if (!gen.active) return;
         measurePlats();
-        for (const a of actors) if (!a.waiting && Math.random() < byCloseness(0.3, 0.85)) a.startWait();
+        for (const a of actors) if (!a.waiting && Math.random() < byCloseness(a, 0.3, 0.85)) a.startWait();
     }, 500);
 }
 
@@ -1898,7 +2250,7 @@ function onReplyReceived(id, type) {
         measurePlats();
         for (const a of actors) {
             if (a.state === 'watch' && a.plat === el) continue;           // already up there
-            if (Math.random() >= byCloseness(0.3, 0.85)) continue;
+            if (Math.random() >= byCloseness(a, 0.3, 0.85)) continue;
             if (eaters.includes(a)) a.afterMeal = el;                      // eat it first, then go and look
             else a.watchReply(el);
         }
@@ -1914,7 +2266,7 @@ function onMySend(id) {
         const x = r ? (r.left + r.right) / 2 : (stage.left + stage.right) / 2;
         measurePlats();
         for (const a of actors) {
-            if (!a.free() || Math.random() >= byCloseness(0.3, 0.85)) continue;
+            if (!a.free() || Math.random() >= byCloseness(a, 0.3, 0.85)) continue;
             a.after = a.state === 'perch' ? 'idle' : a.waiting ? 'wait' : 'idle';
             a.startLook(a.p.send, x);
         }
@@ -1954,7 +2306,9 @@ async function onChatChanged() {
     measure();
     refreshBed();
     renderPanel();
+    hideBubble();
     if (root?.settings.autoWake && residents().length) wakeAll();
+    else revisitBubble();
 }
 
 /** Look at the current chat again; only acts if it differs from what we think. */
@@ -2027,6 +2381,14 @@ function panelHtml() {
       </label>
       <label class="checkbox_label"><input id="tavvy-lines" type="checkbox"> 줄 모양 채팅에서 메시지 사이 경계선도 발판으로 쓰기</label>
       <label class="checkbox_label"><input id="tavvy-badge" type="checkbox"> 재워 둔 동안 침대에 쌓인 밥 수 보기</label>
+      <label>친밀도 표시
+        <select id="tavvy-hearts" class="text_pole">
+          <option value="both">하트 + 이름 (♥♥ 친구)</option>
+          <option value="hearts">하트만</option>
+          <option value="name">이름만</option>
+          <option value="hide">숨기기</option>
+        </select>
+      </label>
       <div id="tavvy-bedreset" class="menu_button">깨우기 버튼 위치 처음으로</div>
       <div id="tavvy-bedfind" class="menu_button">깨우기 버튼 찾기 (화면 가운데로)</div>
       <div id="tavvy-diag" class="tavvy-note tavvy-diag"></div>
@@ -2102,10 +2464,22 @@ function bindPanel() {
         saveSoon();
         refreshBed();
     });
+    $id('tavvy-hearts').addEventListener('change', (e) => {
+        if (!root) return;
+        root.settings.heartMode = ['both', 'hearts', 'name', 'hide'].includes(e.target.value) ? e.target.value : 'both';
+        saveSoon();
+        renderPanel();
+    });
     $id('tavvy-restore').addEventListener('click', () => restoreBackup($id('tavvy-backups').value));
     $id('tavvy-list').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-del]');
-        if (btn) deletePet(btn.dataset.del);
+        if (btn) return deletePet(btn.dataset.del);
+        const jb = e.target.closest('[data-journal]');
+        if (jb) {
+            const id = jb.dataset.journal;
+            if (openJournals.has(id)) openJournals.delete(id); else openJournals.add(id);
+            renderPanel();
+        }
     });
     $id('tavvy-list').addEventListener('input', (e) => {
         if (e.target.matches?.('[data-size]')) onSizeInput(e.target, false);
@@ -2196,6 +2570,56 @@ function onSizeInput(input, done) {
     if (done) { input.value = v; saveSoon(); }
 }
 
+/* ---------- journal (기록장) — what happened, never changes behaviour ---------- */
+const openJournals = new Set();   // pet ids whose journal is unfolded (runtime only)
+
+/** Days between two day keys ("2026-11-12"). */
+function daysBetween(a, b) {
+    const t = (k) => { const [y, m, d] = String(k).split('-').map(Number); return Date.UTC(y, m - 1, d); };
+    return Math.round((t(b) - t(a)) / 86400e3);
+}
+
+function addDays(key, n) {
+    const [y, m, d] = String(key).split('-').map(Number);
+    const t = new Date(Date.UTC(y, m - 1, d + n));
+    return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
+}
+
+const MOMENT_NAMES = { firstFeast: '첫 잔칫상', firstFull: '첫 배부름', moved: '이사한 날' };
+
+function journalHtml(p) {
+    const today = dayKey();
+    const met = dayKey(p.createdAt || Date.now());
+    const together = daysBetween(met, today) + 1;
+    const e = p.eaten || {}, j = p.journal || {};
+    const label = levelLabel(p);
+    const moments = [{ day: met, name: '만난 날' }];
+    for (const m of j.moments || []) {
+        const r = /^level(\d)$/.exec(m?.kind || '');
+        if (r) moments.push({ day: m.day, name: `${josa(LEVELS[Number(r[1])]?.name || '?', '이', '가')} 된 날` });
+        else if (MOMENT_NAMES[m?.kind]) moments.push({ day: m.day, name: MOMENT_NAMES[m.kind] });
+    }
+    if (together >= 100) moments.push({ day: addDays(met, 99), name: '만난 지 100일' });
+    for (let y = 1; y < 100; y++) {                                   // every year on the day we met
+        const ann = met.replace(/^\d+/, (v) => String(Number(v) + y));
+        if (ann > today) break;
+        moments.push({ day: ann, name: `만난 지 ${y}년` });
+    }
+    moments.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+    const rows = [
+        label ? ['친밀도', label] : null,
+        ['함께한 지', `${together}일째`],
+        ['대화한 날', `${j.talkDays || 0}일`],
+        ['주고받은 메시지', `나 ${e.me || 0} · 상대 ${e.them || 0} · 합계 ${(e.me || 0) + (e.them || 0)}`],
+        ['먹은 토큰', `약 ${(e.tokens || 0).toLocaleString()}`],
+    ].filter(Boolean);
+    return `<div class="tavvy-journal">
+  ${rows.map(([k, v]) => `<div><span>${k}</span><b>${esc(v)}</b></div>`).join('')}
+  <div class="tavvy-journal-sec">기념 순간</div>
+  ${moments.map(m => `<div><span>${esc(m.day)}</span><b>${esc(m.name)}</b></div>`).join('')}
+</div>`;
+}
+
 function renderPanel() {
     if (!$id('tavvy-list') || !root) return;
     const warn = $id('tavvy-warn');
@@ -2206,6 +2630,7 @@ function renderPanel() {
     $id('tavvy-lines').checked = root.settings.lineLedges !== false;
     $id('tavvy-lines').disabled = !stageIsChat();
     $id('tavvy-badge').checked = root.settings.badge !== false;
+    $id('tavvy-hearts').value = root.settings.heartMode || 'both';
     const files = [...(root.settings.backup?.files || [])].reverse();
     const bhtml = files.length
         ? files.map(f => `<option value="${esc(f.day)}">${esc(f.day)} · 펫 ${Number(f.pets) || 0}마리</option>`).join('')
@@ -2229,15 +2654,19 @@ function renderPanel() {
             const icon = imgUrl(p.look?.roles?.idle?.[0]);
             const dev = device();
             const size = petSize(p);
+            const lv = levelLabel(p);
+            const open = openJournals.has(p.id);
             return `<div class="tavvy-row">
   <img src="${esc(icon)}" alt="">
-  <div class="tavvy-row-main"><b>${esc(p.name)}</b><span>${pers} · ${homeLabel(p)}</span></div>
+  <div class="tavvy-row-main"><b>${esc(p.name)}</b><span>${pers} · ${homeLabel(p)}${lv ? ' · ' + esc(lv) : ''}</span></div>
+  <div class="menu_button tavvy-jbtn" data-journal="${esc(p.id)}">${open ? '기록장 닫기' : '기록장'}</div>
   <div class="menu_button tavvy-del" data-del="${esc(p.id)}" title="삭제">삭제</div>
   <label class="tavvy-size">
     <span>크기(${dev === 'phone' ? '폰' : 'PC'})</span>
     <input type="number" class="text_pole" inputmode="numeric" min="${SIZE_MIN}" max="${SIZE_MAX}" step="1" value="${size}" data-size="${esc(p.id)}">
     <span class="tavvy-size-val" data-sizeval="${esc(p.id)}">${sizeLabel(p, size)}</span>
   </label>
+  ${open ? journalHtml(p) : ''}
 </div>`;
         }).join('');
         // don't rebuild while a size box is being typed in (the list refreshes on its own every so often)
