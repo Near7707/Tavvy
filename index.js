@@ -1,6 +1,9 @@
 // Tavvy — a tiny companion that lives in your SillyTavern chat room.
 // Stage 1: data skeleton & safety rails.
 // Stage 2: bed button, life on the floor (breathe / walk / doze), dangling, falling.
+// Stage 3: the whole chat is the stage — message ledges, riding them, climbing up, hopping off the
+//          end, falling back in from the top, line borders as ledges, waiting for / watching
+//          replies, and a little reaction when you send a message.
 
 import { saveSettings, saveSettingsDebounced, getRequestHeaders, eventSource, event_types } from '../../../../script.js';
 
@@ -14,12 +17,16 @@ const ctx = () => SillyTavern.getContext();
  * Constants
  * ===================================================================== */
 
+// climb: chance to hop up onto a message on its own (closeness 0 → 100), per "what next?" moment
+// perch: how long it sits after climbing ('doze' = falls asleep up there)
+// land:  reaction after falling back in from the top of the screen
+// send:  reaction when you send a message ('glance' = look, then turn away)
 const PERSONALITIES = {
-    aegyo:   { name: '애교쟁이', speed: 72, idle: [1.5, 3.5], doze: 0.06, dozeLen: [3, 6],  tap: '♥' },
-    saechim: { name: '새침데기', speed: 55, idle: [2, 5],     doze: 0.10, dozeLen: [3, 7],  tap: '?' },
-    neugut:  { name: '느긋쟁이', speed: 30, idle: [3, 6],     doze: 0.35, dozeLen: [6, 14], tap: '♪' },
-    simsul:  { name: '심술쟁이', speed: 58, idle: [2, 4.5],   doze: 0.08, dozeLen: [3, 6],  tap: '💢' },
-    musim:   { name: '무심쟁이', speed: 42, idle: [3, 7],     doze: 0.12, dozeLen: [4, 9],  tap: '…' },
+    aegyo:   { name: '애교쟁이', speed: 72, idle: [1.5, 3.5], doze: 0.06, dozeLen: [3, 6],  tap: '♥',  climb: [0.16, 0.24], perch: [2, 5],   land: '♥',  send: '♥' },
+    saechim: { name: '새침데기', speed: 55, idle: [2, 5],     doze: 0.10, dozeLen: [3, 7],  tap: '?',  climb: [0.07, 0.12], perch: [2, 5],   land: 'flick', send: 'glance' },
+    neugut:  { name: '느긋쟁이', speed: 30, idle: [3, 6],     doze: 0.35, dozeLen: [6, 14], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: '하암', send: '♪' },
+    simsul:  { name: '심술쟁이', speed: 58, idle: [2, 4.5],   doze: 0.08, dozeLen: [3, 6],  tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: '흥' },
+    musim:   { name: '무심쟁이', speed: 42, idle: [3, 7],     doze: 0.12, dozeLen: [4, 9],  tap: '…',  climb: [0.08, 0.14], perch: [8, 16],  land: '…',  send: '…' },
 };
 
 // Built-in pets (original characters made for this project).
@@ -60,6 +67,10 @@ const HOLD_SWING_MAX = 15;      // degrees
 const DRAG_THRESHOLD = 8;       // px — bed button: tap vs drag
 const PICK_THRESHOLD = 6;       // px — pet: tap vs pick up
 const PICK_DELAY = 220;         // ms — press and hold also picks up
+const CLIMB_MAX = 5;            // × pet height — highest ledge it can hop up to
+const OFF_DELAY = [1.2, 2.6];   // s — gone with a ledge that left the top of the screen, then falls back in
+const EDGE_CHANCE = 0.2;        // on a ledge: chance a walk goes to the end (then hops / drops off)
+const WATCH_MIN_CHARS = 150;    // a reply this long is worth climbing up to look at
 
 /* =====================================================================
  * Storage (format version + safety rails)
@@ -75,6 +86,8 @@ function defaultSettings() {
     return {
         autoWake: false,                       // wake pets automatically when entering a room
         bedPos: { phone: null, pc: null },     // floating bed button position per device
+        stageMode: 'chat',                     // 'chat' = whole chat (messages are ledges) / 'floor' = floor only
+        lineLedges: true,                      // flat / document chat style: borders between messages are ledges
     };
 }
 
@@ -345,7 +358,53 @@ function petFiles(pet) {
 
 const isPhone = () => window.innerWidth <= PHONE_MAX_WIDTH;
 const device = () => (isPhone() ? 'phone' : 'pc');
-const stage = { floorY: 0, left: 0, right: 0, vw: 0, vh: 0, ox: 0, oy: 0 };
+const stage = { floorY: 0, left: 0, right: 0, vw: 0, vh: 0, ox: 0, oy: 0, chatTop: 0 };
+
+/* ---------- ledges (top edges of chat messages) ---------- */
+// Measured on scroll / new messages / resize / every ~0.25s while awake — not every frame.
+// A pet standing on one reads only its own ledge each frame, so it rides along smoothly.
+const plats = [];   // { el, top, left, right, user }
+
+const stageIsChat = () => root?.settings?.stageMode !== 'floor';
+const isBubbleChat = () => document.body.classList.contains('bubblechat');
+const ledgesOn = () => stageIsChat() && (isBubbleChat() || root?.settings?.lineLedges !== false);
+
+function chatEl() { return document.getElementById('chat'); }
+
+function measurePlats() {
+    plats.length = 0;
+    const chat = chatEl();
+    if (!chat) { stage.chatTop = 0; return; }
+    stage.chatTop = Math.max(0, chat.getBoundingClientRect().top);
+    if (!ledgesOn()) return;
+    const els = chat.querySelectorAll(':scope > .mes, .typing_indicator');
+    for (let i = els.length - 1; i >= 0; i--) {
+        const el = els[i];
+        const r = el.getBoundingClientRect();
+        if (r.height <= 0 || r.width < 40) continue;
+        if (r.bottom < stage.chatTop) break;               // everything before this is above the view
+        if (r.top < stage.chatTop || r.top > stage.floorY - 6) continue;
+        plats.push({
+            el, top: r.top,
+            left: Math.max(r.left, stage.left), right: Math.min(r.right, stage.right),
+            user: el.getAttribute('is_user') === 'true',
+        });
+    }
+}
+
+/** Live position of one ledge, or null if it is gone / hidden. */
+function liveRect(el) {
+    if (!el || !el.isConnected) return null;
+    const r = el.getBoundingClientRect();
+    if (r.height <= 0 || r.width <= 0) return null;
+    return r;
+}
+
+const platOf = (el) => plats.find(p => p.el === el) || null;
+
+// Closeness (5단계). Until then everyone starts at "처음 ♡".
+const closeness = () => 0;
+const byCloseness = (lo, hi) => lo + (hi - lo) * closeness() / 100;
 
 /**
  * Where the overlay's (0,0) actually sits on screen. Normally (0,0), but on some phones the page
@@ -374,6 +433,7 @@ function measure() {
     stage.floorY = Math.min(floor, vh);
     stage.left = left; stage.right = right; stage.vw = vw; stage.vh = vh;
     measureOrigin();
+    measurePlats();
     for (const a of actors) a.fitStage();
     placeBed();
 }
@@ -438,6 +498,16 @@ class Actor {
         this.w = 64; this.h = 64; this.natW = 64; this.natH = 64;
         this.curSrc = '';
         this.gone = false;
+        this.plat = null;            // the message element it stands on (null = floor)
+        this.pr = null;              // that ledge's live rect this frame
+        this.sqT = 1;                // squish target (crouch / sit)
+        this.edge = false;           // walking to the end of a ledge
+        this.after = 'idle';         // state after a reaction / climb
+        this.landReact = false;      // react when landing (fell back in from the top)
+        this.look = null;            // { kind, x } for the 'look' state
+        this.waiting = false;        // waiting for a reply (chosen when generation started)
+        this.scanT = 0;
+        this.tried = new WeakSet();  // ledges it couldn't reach while waiting
         this.build();
     }
 
@@ -480,10 +550,30 @@ class Actor {
 
     fitStage() {
         this.resize();
-        const L = stage.left + this.w / 2, R = stage.right - this.w / 2;
-        if (!this.held) this.x = R > L ? clamp(this.x, L, R) : (stage.left + stage.right) / 2;
-        if (this.state === 'walk') this.tx = clamp(this.tx, L, R);
-        if (this.y > stage.floorY - 4) this.y = Math.max(0, stage.floorY - this.h);   // keep on screen
+        if (this.held || this.state === 'off') return;
+        if (this.air) {
+            const L = stage.left + this.w / 2, R = stage.right - this.w / 2;
+            this.x = R > L ? clamp(this.x, L, R) : (stage.left + stage.right) / 2;
+            return;
+        }
+        const [L, R] = this.range(this.state === 'edge' || (this.state === 'walk' && this.edge) ? 0.2 : 0.5);
+        this.x = R > L ? clamp(this.x, L, R) : (L + R) / 2;
+        if (this.state === 'walk') { const [l2, r2] = this.range(this.edge ? 0.2 : 0.5); this.tx = clamp(this.tx, l2, Math.max(l2, r2)); }
+        if (!this.plat && this.y > stage.floorY - 4) this.y = Math.max(0, stage.floorY - this.h);   // keep on screen
+    }
+
+    /** Where its centre may go on what it stands on. inset = fraction of its width kept from each end. */
+    range(inset = 0.5) {
+        let l = stage.left, r = stage.right;
+        if (this.plat && this.pr) { l = Math.max(l, this.pr.left); r = Math.min(r, this.pr.right); }
+        return [l + this.w * inset, r - this.w * inset];
+    }
+
+    foot() { return stage.floorY - this.y; }   // screen y of its feet
+
+    /** Free to react to things (not held, flying, hidden, leaving…). */
+    free() {
+        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear'].includes(this.state);
     }
 
     get side() { return this.rec.look.facing === 'left' || this.rec.look.facing === 'right'; }
@@ -554,50 +644,223 @@ class Actor {
         this.held = false;
         this.el.classList.remove('tavvy-held');
         this.vx = 0; this.vy = 0;
+        this.plat = null; this.waiting = false;
         if (this.y <= 0) { this.y = 0; this.land(0); }
         else { this.air = true; this.next = 'idle'; this.setState('fall'); }
     }
 
     land(impact) {
         this.air = false;
+        this.leftPlat = null;
         this.vy = 0; this.vx = 0;
         this.body.style.transformOrigin = '';
         const soft = (this.rec.look.squish ?? 0.5) * 2;
         if (soft > 0) this.sq = 1 - Math.min(0.22, impact / 4200) * soft;
         // a big landing bounces once, lightly
-        if (impact > 500) { this.air = true; this.vy = impact * 0.18; return; }
+        if (impact > 500) { this.air = true; this.plat = null; this.vy = impact * 0.18; return; }
+        if (this.plat) this.pr = liveRect(this.plat);
         const n = this.next || 'idle';
         this.next = null;
+        if (this.landReact) {
+            this.landReact = false;
+            this.after = n;
+            return this.startLook(this.p.land, this.x + this.dir * 40);
+        }
         this.setState(n);
     }
 
     setState(s) {
         this.state = s; this.t = 0;
+        this.sqT = 1;
         if (s === 'idle') { this.until = rand(...this.p.idle); this.tiltT = 0; }
         if (s === 'doze') { this.until = rand(...this.p.dozeLen); this.fxT = 0.6; }
         if (s === 'walk') { this.tiltT = 0; this.walkPh = 0; }
+        if (s === 'perch') {
+            if (this.p.perch === 'doze') return this.setState('doze');
+            this.until = rand(...this.p.perch);
+            this.tiltT = 0;
+            if (this.rec.personality?.base === 'musim') fx(this, '…');
+        }
+        if (s === 'wait') { this.fxT = rand(0.4, 1.2); this.scanT = 0.6; }
+        if (s === 'watch') { this.fxT = 0; this.until = 2.8; }
+    }
+
+    /** Walk somewhere on what it stands on (floor or ledge). toEdge = walk to the very end of a ledge. */
+    walkTo(tx, toEdge = false) {
+        this.tx = tx; this.edge = toEdge;
+        const d = tx > this.x ? 1 : -1;
+        if (d !== this.dir && this.side) {
+            // flip with a little hop
+            this.dir = d;
+            this.air = true; this.vy = 280; this.vx = 0; this.next = 'walk';   // lands back on the same ledge
+            return;
+        }
+        this.dir = d;
+        this.setState('walk');
     }
 
     decide() {
+        if (gen.active && this.waiting) return this.setState('wait');
         const r = Math.random();
         if (r < this.p.doze) return this.setState('doze');
+        // hop up onto a message by itself
+        if (ledgesOn() && Math.random() < byCloseness(...this.p.climb)) {
+            const t = this.pickClimb();
+            if (t && this.climbTo(t, 'perch')) return;
+        }
+        // while a reply is being written, sometimes glance at the chat
+        if (gen.active && Math.random() < 0.3) return this.startLook('peek', (stage.left + stage.right) / 2);
         if (r < this.p.doze + 0.62) {
-            const L = stage.left + this.w / 2, R = stage.right - this.w / 2;
+            const [L, R] = this.range();
+            if (this.plat && Math.random() < EDGE_CHANCE) {
+                const [l2, r2] = this.range(0.2);
+                return this.walkTo(Math.random() < 0.5 ? l2 : r2, true);
+            }
             if (R - L < 10) return this.setState('idle');
             let tx = rand(L, R);
             if (Math.abs(tx - this.x) < 30) tx = clamp(this.x + (Math.random() < 0.5 ? -1 : 1) * rand(40, 140), L, R);
-            this.tx = tx;
-            const d = tx > this.x ? 1 : -1;
-            if (d !== this.dir && this.side) {
-                // flip with a little hop
-                this.dir = d;
-                this.air = true; this.vy = 280; this.vx = 0; this.next = 'walk';
-                return;
-            }
-            this.dir = d;
-            return this.setState('walk');
+            return this.walkTo(tx);
         }
         return this.setState('idle');
+    }
+
+    /* ---------- ledges: climbing, hopping off, going off the top ---------- */
+
+    /** Ledges it could hop up to from here. */
+    reachable() {
+        const foot = this.foot();
+        return plats.filter(p => p.el !== this.plat && foot - p.top >= 8 && foot - p.top <= CLIMB_MAX * this.h
+            && p.right - p.left >= this.w * 0.8);
+    }
+
+    pickClimb() {
+        const list = this.reachable();
+        if (!list.length) return null;
+        // 무심쟁이 likes the highest one; the rest pick one at random
+        if (this.rec.personality?.base === 'musim') return list.reduce((a, b) => (b.top < a.top ? b : a));
+        return list[Math.floor(Math.random() * list.length)];
+    }
+
+    /** Crouch, then one big hop up onto ledge `p`. Returns false if it can't. */
+    climbTo(p, after = 'perch') {
+        if (!p || !this.free()) return false;
+        const dH = this.foot() - p.top;
+        if (dH < 8 || dH > CLIMB_MAX * this.h) return false;
+        const lo = p.left + this.w * 0.5, hi = p.right - this.w * 0.5;
+        if (hi < lo) return false;
+        this.climb = { el: p.el, tx: clamp(this.x + rand(-40, 40), lo, hi) };
+        this.after = after;
+        const d = this.climb.tx >= this.x ? 1 : -1;
+        if (this.side) this.dir = d;
+        this.setState('crouch');
+        return true;
+    }
+
+    launch() {
+        const c = this.climb; this.climb = null;
+        const r = c && liveRect(c.el);
+        const dH = r ? this.foot() - r.top : 0;
+        if (!r || dH < 8 || dH > CLIMB_MAX * this.h * 1.2 || !ledgesOn()) return this.setState('idle');
+        const extra = Math.max(14, this.h * 0.35);
+        const vy = Math.sqrt(2 * GRAVITY * (dH + extra));
+        const T = vy / GRAVITY + Math.sqrt(2 * extra / GRAVITY) * 1.05;
+        const tx = clamp(c.tx, r.left + this.w * 0.5, Math.max(r.left + this.w * 0.5, r.right - this.w * 0.5));
+        this.plat = null;
+        this.air = true; this.vy = vy; this.vx = (tx - this.x) / T;
+        this.next = this.after || 'perch';
+        this.after = 'idle';
+        this.sq = 1.08;
+        this.setState('jump');
+    }
+
+    /** Its ledge disappeared (deleted / swiped / chat reloaded) → falls. */
+    dropOff() {
+        this.plat = null; this.pr = null;
+        this.air = true; this.vy = 0; this.vx = 0; this.next = 'idle';
+        this.setState('fall');
+    }
+
+    /** Its ledge left the top of the screen → gone with it, back in a moment from above. */
+    goOff() {
+        this.plat = null; this.pr = null;
+        this.el.style.visibility = 'hidden';
+        this.setState('off');
+        this.until = rand(...OFF_DELAY);
+    }
+
+    fallFromTop() {
+        this.el.style.visibility = '';
+        const [L, R] = [stage.left + this.w / 2, stage.right - this.w / 2];
+        this.x = R > L ? clamp(this.x + rand(-50, 50), L, R) : (stage.left + stage.right) / 2;
+        this.y = stage.floorY - stage.chatTop + this.h + 10;   // feet just above the top of the chat
+        this.air = true; this.vy = 0; this.vx = 0; this.next = 'idle';
+        this.landReact = true;
+        this.setState('fall');
+    }
+
+    /** Called every frame while standing on a ledge: ride along, step down, fall or go off. */
+    trackPlat() {
+        if (!this.plat) return true;
+        if (!ledgesOn()) { this.dropOff(); return false; }
+        const r = liveRect(this.plat);
+        if (!r) { this.dropOff(); return false; }
+        if (r.top < stage.chatTop - 1) { this.goOff(); return false; }
+        if (r.top >= stage.floorY - 1) { this.plat = null; this.pr = null; this.y = 0; return true; }   // scrolled down to the floor
+        this.pr = r;
+        this.y = stage.floorY - r.top;
+        const [L, R] = this.range(this.state === 'walk' && this.edge ? 0.2 : 0.5);
+        if (this.state !== 'edge') this.x = R > L ? clamp(this.x, L, R) : (L + R) / 2;
+        return true;
+    }
+
+    /** Off the end of a ledge: a little hop, or just stepping off. */
+    hopOff() {
+        const d = this.dir;
+        this.leftPlat = this.plat;      // don't get caught by the ledge it is leaving
+        this.plat = null; this.pr = null;
+        this.air = true; this.next = 'idle';
+        if (Math.random() < 0.6) { this.vy = 260; this.vx = d * rand(70, 110); this.setState('jump'); }
+        else { this.x += d * this.w * 0.3; this.vy = 0; this.vx = d * 40; this.setState('fall'); }
+    }
+
+    /* ---------- looking at things (reactions) ---------- */
+
+    /** kind: an effect text ('♥', '…'), 'glance', 'flick', 'peek', 'up'. tx = screen x it looks toward. */
+    startLook(kind, tx) {
+        const d = tx >= this.x ? 1 : -1;
+        if (this.side && Math.abs(tx - this.x) > 8) this.dir = d;
+        this.look = { kind, d };
+        this.setState('look');
+        this.until = kind === 'glance' || kind === 'flick' ? 1.1 : kind === 'peek' ? rand(1.2, 2) : 1.4;
+        if (kind === 'peek') { if (Math.random() < 0.4) fx(this, '?', 'tavvy-fx-small'); }
+        else if (kind === 'up') fx(this, '!');
+        else if (kind !== 'glance' && kind !== 'flick') fx(this, kind);
+    }
+
+    /* ---------- waiting for a reply / watching it ---------- */
+
+    startWait() {
+        this.waiting = true;
+        this.tried = new WeakSet();
+        if (this.free()) this.setState('wait');
+    }
+
+    endWait() {
+        if (!this.waiting) return;
+        this.waiting = false;
+        if (!this.free() && this.state !== 'wait') return;
+        if (this.plat && this.plat === gen.target) return this.setState('watch');
+        if (this.state === 'wait' || this.state === 'doze') this.startLook('up', this.x);
+    }
+
+    /** A long reply arrived: climb up and look at it, or look up at it from below. */
+    watchReply(el) {
+        if (!this.free() || this.waiting) return;
+        if (this.plat === el) return this.setState('watch');
+        const p = platOf(el);
+        if (p && this.climbTo(p, 'watch')) return;
+        const r = liveRect(el);
+        this.startLook('up', r ? (r.left + r.right) / 2 : this.x);
     }
 
     /* ---------- wake / sleep ---------- */
@@ -616,6 +879,10 @@ class Actor {
     goToBed(done) {
         if (this.held) { this.held = false; this.el.classList.remove('tavvy-held'); this.body.style.transformOrigin = ''; }
         this.onGone = done;
+        this.waiting = false;
+        if (this.state === 'off') { this.vanish(); bumpBed(); return; }
+        this.plat = null;      // waves where it is, then goes into the bed (doesn't ride a ledge away)
+        this.air = false;
         this.setState('wave');
         this.tiltT = 0;
     }
@@ -649,13 +916,40 @@ class Actor {
             this.fxT -= dt;
             if (this.fxT <= 0) { this.fxT = rand(2.2, 4); if (Math.random() < 0.6) fx(this, '💦', 'tavvy-fx-small'); }
             pose = this.role('held', 'surprise');
+        } else if (this.state === 'off') {
+            if (this.t > this.until) this.fallFromTop();
+            return;
         } else if (this.air) {
+            this.plat = null;
+            const prevFoot = this.foot();
             if (this.vy > 0) this.vy -= GRAVITY * dt;
             else this.vy = Math.max(-MAX_FALL, this.vy - GRAVITY * dt * Math.max(0, 1 - (this.vy / MAX_FALL) ** 2));
             this.y += this.vy * dt;
             this.x = clamp(this.x + this.vx * dt, L, Math.max(L, R));
-            if (this.y <= 0) { const impact = -this.vy; this.y = 0; this.land(impact); }
+            let landed = false;
+            if (this.vy < 0 && plats.length) {
+                // falling past the top edge of a message → caught there
+                const foot = this.foot();
+                let hit = null;
+                for (const p of plats) {
+                    if (p.el === this.leftPlat) continue;
+                    if (p.top < prevFoot - 0.5 || p.top > foot) continue;
+                    if (this.x < p.left + this.w * 0.2 || this.x > p.right - this.w * 0.2) continue;
+                    if (!hit || p.top < hit.top) hit = p;
+                }
+                if (hit && hit.el.isConnected) {
+                    const impact = -this.vy;
+                    this.y = stage.floorY - hit.top;
+                    this.plat = hit.el;
+                    landed = true;
+                    this.land(impact);
+                }
+            }
+            if (!landed && this.y <= 0) { const impact = -this.vy; this.y = 0; this.land(impact); }
             pose = this.state === 'fall' ? this.role('fall', 'surprise') : this.role('jump', 'idle');
+        } else if (!this.trackPlat()) {
+            // its ledge went away this frame (falling or gone off the top)
+            if (this.state === 'off') return;
         } else {
             switch (this.state) {
                 case 'idle':
@@ -666,7 +960,12 @@ class Actor {
                 case 'walk': {
                     const d = this.tx - this.x;
                     const sp = this.p.speed;
-                    if (Math.abs(d) <= sp * dt) { this.x = this.tx; this.setState('idle'); break; }
+                    if (Math.abs(d) <= sp * dt) {
+                        this.x = this.tx;
+                        if (this.edge && this.plat) { this.edge = false; this.setState('edge'); this.until = rand(0.6, 1.1); }
+                        else { this.edge = false; this.setState('idle'); }
+                        break;
+                    }
                     this.x += Math.sign(d) * sp * dt;
                     const rate = sp / 22;                  // steps per second
                     const before = Math.floor(this.walkPh);
@@ -690,6 +989,70 @@ class Actor {
                     this.fxT -= dt;
                     if (this.fxT <= 0) { this.fxT = 1.5; fx(this, 'Z', 'tavvy-fx-z'); }
                     pose = this.role('sleep', 'idle');
+                    if (this.t > this.until) this.setState('idle');
+                    break;
+                case 'crouch':                         // gathering itself for a big hop
+                    this.sqT = 0.8;
+                    breath = 0;
+                    if (this.t > 0.35) this.launch();
+                    break;
+                case 'perch':                          // sitting on a message
+                    this.sqT = 0.94;
+                    breath = 0.8;
+                    pose = this.role('sit', 'idle');
+                    if (this.t > this.until) this.decide();
+                    break;
+                case 'edge':                           // at the end of a ledge: stop, look down… then off
+                    this.tiltT = (this.side ? this.dir : 1) * 7;
+                    if (this.t > 0.25 && !this.edgeFx) { this.edgeFx = true; if (Math.random() < 0.5) fx(this, '?', 'tavvy-fx-small'); }
+                    if (this.t > this.until) { this.edgeFx = false; this.tiltT = 0; this.hopOff(); }
+                    break;
+                case 'look': {                         // a short reaction toward something
+                    const k = this.look?.kind, d = this.look?.d || 1;
+                    breath = 1;
+                    pose = this.role('look', 'idle');
+                    if (k === 'glance') { this.tiltT = this.t < 0.6 ? d * 6 : -d * 9; }           // look… then turn away
+                    else if (k === 'flick') { this.tiltT = this.t < 0.15 ? 0 : -d * 9; }
+                    else if (k === 'up' || k === 'peek') { this.tiltT = d * 4; }
+                    else if (k === '♥') { this.tiltT = 0; pose = this.role('happy', 'idle'); }
+                    else this.tiltT = d * 4;
+                    if (this.t > this.until) {
+                        this.look = null;
+                        let n = this.after || 'idle';
+                        this.after = 'idle';
+                        if (n === 'wait' && !(gen.active && this.waiting)) n = 'idle';
+                        if (n === 'perch' && !this.plat) n = 'idle';
+                        this.setState(n);
+                    }
+                    break;
+                }
+                case 'wait': {                         // a reply is being written: wait for it, on it if possible
+                    breath = 1;
+                    pose = this.role('look', 'idle');
+                    const onIt = !!this.plat && this.plat === gen.target;
+                    this.tiltT = onIt ? (this.side ? this.dir : 1) * 6 : -3;                  // look down at it / up toward it
+                    this.fxT -= dt;
+                    if (this.fxT <= 0) { this.fxT = rand(2.4, 3.6); fx(this, '?', 'tavvy-fx-small'); }
+                    this.scanT -= dt;
+                    if (this.scanT <= 0 && !onIt) {
+                        this.scanT = 0.5;
+                        const el = genTarget();
+                        if (el && !this.tried.has(el)) {
+                            const p = platOf(el);
+                            if (p && this.climbTo(p, 'wait')) break;
+                            if (p) this.tried.add(el);        // in view but out of reach → wait from below
+                        }
+                    }
+                    if (!this.waiting || !gen.active) { this.waiting = false; this.setState('idle'); break; }
+                    if (this.p.perch === 'doze' && this.t > 6) this.setState('doze');   // 느긋쟁이 nods off while waiting
+                    break;
+                }
+                case 'watch':                          // looking at the reply from on top of it
+                    breath = 1;
+                    pose = this.role('look', 'idle');
+                    this.tiltT = (this.side ? this.dir : 1) * 6;
+                    if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '?'); }
+                    if (this.fxT === 1 && this.t > 1.4) { this.fxT = 2; fx(this, '!'); }
                     if (this.t > this.until) this.setState('idle');
                     break;
                 case 'wave':
@@ -720,7 +1083,7 @@ class Actor {
         if (this.held) spring(this, 'tilt', 'tiltv', this.tiltT, 55, 0.14, dt);   // loose: keeps swinging a while
         if (this.held) this.tilt = clamp(this.tilt, -25, 25);
         else spring(this, 'tilt', 'tiltv', this.tiltT, 170, 0.42, dt);
-        spring(this, 'sq', 'sqv', 1, 260, 0.32, dt);
+        spring(this, 'sq', 'sqv', this.sqT, 260, 0.32, dt);
 
         this.render(pose, { shiver, bob, waddle, breath });
     }
@@ -757,7 +1120,11 @@ function tick(t) {
     lastT = t;
     // keep geometry fresh: floor every ~0.25s (keyboard, toolbar changes), overlay origin every frame
     remeasureT += dt;
-    if (remeasureT > 0.25) { remeasureT = 0; measure(); }
+    if (remeasureT > 0.25) {
+        remeasureT = 0; measure();
+        // missed "generation ended" signal (stopped / error) → stop waiting
+        if (gen.active && document.body.dataset.generating !== 'true' && t - gen.t0 > 3000) onGenEnd();
+    }
     else {
         const ox = stage.ox, oy = stage.oy;
         measureOrigin();
@@ -922,6 +1289,106 @@ function toggleWake() {
 }
 
 /* =====================================================================
+ * Replies: waiting, watching, seeing off my message
+ * ===================================================================== */
+
+// target = the message being written ("…" box / streaming reply), when there is one on screen
+const gen = { active: false, type: '', startLen: 0, t0: 0, firstToken: false, target: null };
+const watched = new Set();   // replies already looked at ("같은 답은 한 번만")
+
+function chatMsgs() {
+    const chat = chatEl();
+    return chat ? chat.querySelectorAll(':scope > .mes') : [];
+}
+
+/** The reply being written right now, if it is on screen. */
+function genTarget() {
+    const chat = chatEl();
+    if (!chat) return null;
+    const ms = chatMsgs();
+    const last = ms[ms.length - 1];
+    let el = null;
+    if (last && last.getAttribute('is_user') !== 'true') {
+        const id = Number(last.getAttribute('mesid'));
+        // swipe / continue write into the last message; otherwise it is a newer one
+        if (['swipe', 'continue'].includes(gen.type) || (Number.isFinite(id) && id >= gen.startLen - (gen.type === 'regenerate' ? 1 : 0))) el = last;
+    }
+    if (!el) el = chat.querySelector('.typing_indicator');      // a "typing…" box from another extension
+    gen.target = el;
+    return el;
+}
+
+function onGenStart(type, opts, dryRun) {
+    if (dryRun || type === 'quiet' || type === 'impersonate' || opts?.quiet_prompt) return;
+    gen.active = true;
+    gen.type = type || 'normal';
+    gen.startLen = ctx().chat?.length ?? 0;
+    gen.t0 = performance.now();
+    gen.firstToken = false;
+    gen.target = null;
+    // regenerate removes the old reply right after this signal → look a moment later
+    setTimeout(() => {
+        if (!gen.active) return;
+        measurePlats();
+        for (const a of actors) if (!a.waiting && Math.random() < byCloseness(0.3, 0.85)) a.startWait();
+    }, 500);
+}
+
+function onStreamToken() {
+    if (!gen.active || gen.firstToken) return;
+    gen.firstToken = true;
+    for (const a of actors) if (a.waiting && a.state === 'wait') fx(a, '!');
+}
+
+function onGenEnd() {
+    if (!gen.active) return;
+    genTarget();
+    measurePlats();
+    gen.active = false;
+    for (const a of actors) a.endWait();
+    gen.target = null;
+}
+
+function msgEl(id) {
+    return chatEl()?.querySelector(`:scope > .mes[mesid="${CSS.escape(String(id))}"]`) || null;
+}
+
+function onReplyReceived(id, type) {
+    if (gen.active) onGenEnd();
+    if (!actors.length || !['normal', undefined, '', 'regenerate', 'swipe'].includes(type)) return;
+    const m = ctx().chat?.[id];
+    if (!m || m.is_user || String(m.mes || '').length < WATCH_MIN_CHARS) return;
+    const key = `${id}:${m.swipe_id ?? 0}:${String(m.mes).length}`;
+    if (watched.has(key)) return;
+    watched.add(key);
+    setTimeout(() => {                      // after it is drawn
+        const el = msgEl(id);
+        if (!el) return;
+        measurePlats();
+        for (const a of actors) {
+            if (a.state === 'watch' && a.plat === el) continue;           // already up there
+            if (Math.random() < byCloseness(0.3, 0.85)) a.watchReply(el);
+        }
+    }, 250);
+}
+
+/** I sent a message: a short look toward my new message. */
+function onMySend(id) {
+    if (!actors.length) return;
+    setTimeout(() => {
+        const el = msgEl(id);
+        const r = liveRect(el);
+        const x = r ? (r.left + r.right) / 2 : (stage.left + stage.right) / 2;
+        measurePlats();
+        for (const a of actors) {
+            if (!a.free() || Math.random() >= byCloseness(0.3, 0.85)) continue;
+            a.after = a.state === 'perch' ? 'idle' : a.waiting ? 'wait' : 'idle';
+            a.startLook(a.p.send, x);
+        }
+    }, 120);
+}
+
+/* =====================================================================
  * Room changes
  * ===================================================================== */
 
@@ -938,6 +1405,8 @@ async function onChatChanged() {
     if (!next) roomRetry = setTimeout(recheckRoom, 800);
 
     sleepInstant();
+    gen.active = false; gen.target = null;
+    watched.clear();
     room = next;
     let changed = false;
     if (room && root) {
@@ -1016,6 +1485,13 @@ function panelHtml() {
 
       <div class="tavvy-sec">설정</div>
       <label class="checkbox_label"><input id="tavvy-autowake" type="checkbox"> 방에 들어올 때 자동으로 깨우기</label>
+      <label>무대
+        <select id="tavvy-stage" class="text_pole">
+          <option value="chat">채팅창 전체 (말풍선 위에도 올라가요)</option>
+          <option value="floor">바닥만 (입력창 위에서만 지내요)</option>
+        </select>
+      </label>
+      <label class="checkbox_label"><input id="tavvy-lines" type="checkbox"> 줄 모양 채팅에서 메시지 사이 경계선도 발판으로 쓰기</label>
       <div id="tavvy-bedreset" class="menu_button">깨우기 버튼 위치 처음으로</div>
       <div id="tavvy-bedfind" class="menu_button">깨우기 버튼 찾기 (화면 가운데로)</div>
       <div id="tavvy-diag" class="tavvy-note tavvy-diag"></div>
@@ -1054,6 +1530,19 @@ function bindPanel() {
         root.settings.autoWake = e.target.checked;
         saveSoon();
     });
+    $id('tavvy-stage').addEventListener('change', (e) => {
+        if (!root) return;
+        root.settings.stageMode = e.target.value === 'floor' ? 'floor' : 'chat';
+        saveSoon();
+        measure();
+        renderPanel();
+    });
+    $id('tavvy-lines').addEventListener('change', (e) => {
+        if (!root) return;
+        root.settings.lineLedges = e.target.checked;
+        saveSoon();
+        measure();
+    });
     $id('tavvy-bedreset').addEventListener('click', () => {
         if (!root) return;
         root.settings.bedPos = { phone: null, pc: null };
@@ -1081,6 +1570,7 @@ function findBed() {
     const lines = [];
     lines.push(`준비: ${ready ? '됨' : '안 됨'} · 이 방 펫: ${residents().length}`);
     lines.push(`화면 ${Math.round(stage.vw)}×${Math.round(stage.vh)} · 바닥 ${Math.round(stage.floorY)} · ${device()}`);
+    lines.push(`채팅 윗선 ${Math.round(stage.chatTop)} · 보이는 발판 ${plats.length} · ${isBubbleChat() ? '말풍선' : '줄 모양'} · 무대 ${stageIsChat() ? '채팅창 전체' : '바닥만'}`);
     // room / home keys, shortened so character names are not shown
     const key = (chatId, integ) => {
         const id = String(chatId || '');
@@ -1160,6 +1650,9 @@ function renderPanel() {
     warn.hidden = !readOnly;
     warn.textContent = readOnly ? readOnlyReason : '';
     $id('tavvy-autowake').checked = !!root.settings.autoWake;
+    $id('tavvy-stage').value = stageIsChat() ? 'chat' : 'floor';
+    $id('tavvy-lines').checked = root.settings.lineLedges !== false;
+    $id('tavvy-lines').disabled = !stageIsChat();
 
     const here = residents();
     $id('tavvy-room').textContent = !room
@@ -1303,6 +1796,22 @@ function onReady() {
 
     eventSource.on(event_types.CHAT_CHANGED, () => { if (ready) onChatChanged(); });
     eventSource.on(event_types.APP_READY, onReady);
+    const on = (name, fn) => { if (event_types[name]) eventSource.on(event_types[name], fn); };
+    on('GENERATION_STARTED', (type, opts, dryRun) => { if (ready) onGenStart(type, opts, dryRun); });
+    on('STREAM_TOKEN_RECEIVED', () => onStreamToken());
+    on('GENERATION_ENDED', () => onGenEnd());
+    on('GENERATION_STOPPED', () => onGenEnd());
+    on('MESSAGE_RECEIVED', (id, type) => { if (ready) onReplyReceived(id, type); });
+    on('USER_MESSAGE_RENDERED', (id) => { if (ready) onMySend(id); });
+    // messages added / removed / reloaded → ledges moved
+    const ledgesMoved = () => { if (actors.length) requestAnimationFrame(measurePlats); };
+    ['MESSAGE_DELETED', 'MORE_MESSAGES_LOADED', 'MESSAGE_SWIPED', 'CHARACTER_MESSAGE_RENDERED', 'MESSAGE_UPDATED'].forEach(n => on(n, ledgesMoved));
+    // the chat scrolling (capture: the chat box scrolls by itself, not the window)
+    let st = 0;
+    document.addEventListener('scroll', () => {
+        if (!actors.length || st) return;
+        st = requestAnimationFrame(() => { st = 0; measurePlats(); });
+    }, { capture: true, passive: true });
     // Safety net for versions where APP_READY already fired before we loaded.
     setTimeout(() => { if (!ready && document.getElementById('send_form')) onReady(); }, 4000);
 
