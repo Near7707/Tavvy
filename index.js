@@ -1216,6 +1216,13 @@ function onReady() {
     window.addEventListener('scroll', remeasure, { passive: true });
     document.addEventListener('focusin', () => setTimeout(measure, 350));
     document.addEventListener('focusout', () => setTimeout(measure, 350));
+    // coming back from another app (iPhone may shift or resize the page while we were away)
+    const onReturn = () => { if (!document.hidden) { measure(); setTimeout(measure, 300); setTimeout(measure, 1000); } };
+    document.addEventListener('visibilitychange', onReturn);
+    window.addEventListener('pageshow', onReturn);
+    window.addEventListener('focus', onReturn);
+    // cheap safety net while everyone is asleep (the awake loop already re-measures)
+    setInterval(() => { if (!actors.length && bed && !bed.hidden && !document.hidden) measure(); }, 2000);
     const sf = document.getElementById('send_form');
     if (sf && 'ResizeObserver' in window) new ResizeObserver(remeasure).observe(sf);
 
