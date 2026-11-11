@@ -957,6 +957,8 @@ function panelHtml() {
       <div class="tavvy-sec">설정</div>
       <label class="checkbox_label"><input id="tavvy-autowake" type="checkbox"> 방에 들어올 때 자동으로 깨우기</label>
       <div id="tavvy-bedreset" class="menu_button">깨우기 버튼 위치 처음으로</div>
+      <div id="tavvy-bedfind" class="menu_button">깨우기 버튼 찾기 (화면 가운데로)</div>
+      <div id="tavvy-diag" class="tavvy-note tavvy-diag"></div>
     </div>
   </div>
 </div>`;
@@ -999,10 +1001,39 @@ function bindPanel() {
         placeBed();
         say('깨우기 버튼을 처음 자리로 옮겼어요.');
     });
+    $id('tavvy-bedfind').addEventListener('click', findBed);
     $id('tavvy-list').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-del]');
         if (btn) deletePet(btn.dataset.del);
     });
+}
+
+/** Diagnostic: bring the bed to the middle of the screen and report what the page sees. */
+function findBed() {
+    measure();
+    refreshBed();
+    const lines = [];
+    lines.push(`준비: ${ready ? '됨' : '안 됨'} · 이 방 펫: ${residents().length}`);
+    lines.push(`화면 ${Math.round(stage.vw)}×${Math.round(stage.vh)} · 바닥 ${Math.round(stage.floorY)} · ${device()}`);
+    if (!bed) {
+        lines.push('침대 버튼: 만들어지지 않음');
+    } else {
+        const x = Math.round(stage.vw / 2 - BED_SIZE / 2), y = Math.round(stage.vh / 2 - BED_SIZE / 2);
+        bed.style.transform = `translate3d(${x}px, ${y}px, 0)`;   // temporary, not saved
+        bumpBed();
+        const r = bed.getBoundingClientRect();
+        const cs = getComputedStyle(bed);
+        const ls = getComputedStyle(layer);
+        lines.push(`침대 버튼: ${bed.hidden ? '숨김' : '보임'} · ${cs.display} · 투명도 ${cs.opacity} · 위치 ${Math.round(r.left)},${Math.round(r.top)} 크기 ${Math.round(r.width)}×${Math.round(r.height)}`);
+        const lr = layer.getBoundingClientRect();
+        lines.push(`무대: ${ls.display} · z ${ls.zIndex} · ${Math.round(lr.left)},${Math.round(lr.top)} ${Math.round(lr.width)}×${Math.round(lr.height)} · 부모 ${layer.parentElement?.tagName}`);
+        const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        const desc = top ? (top.id ? '#' + top.id : top.tagName.toLowerCase() + (top.className && typeof top.className === 'string' ? '.' + top.className.split(' ')[0] : '')) : '없음';
+        lines.push(`그 자리 맨 위: ${desc}`);
+        lines.push('설정 창을 닫고 화면 가운데에 🛏️ 가 보이는지 확인해 주세요.');
+    }
+    const d = $id('tavvy-diag');
+    if (d) d.textContent = lines.join('\n');
 }
 
 function say(text) {
