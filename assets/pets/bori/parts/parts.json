@@ -1,0 +1,109 @@
+{
+ "canvas": [
+  64,
+  64
+ ],
+ "note": "frames = parts stacked bottom to top",
+ "frames": {
+  "idle": [
+   "tail",
+   "legs_far",
+   "body",
+   "legs_near",
+   "ears",
+   "head",
+   "eye_open",
+   "face_idle"
+  ],
+  "sleep": [
+   "tail",
+   "legs_far",
+   "body",
+   "legs_near",
+   "ears",
+   "head",
+   "eye_sleep",
+   "face_sleep"
+  ],
+  "happy": [
+   "tail_up",
+   "legs_far",
+   "body",
+   "legs_near",
+   "ears",
+   "head",
+   "eye_happy",
+   "face_happy"
+  ],
+  "walk1": [
+   "tail",
+   "legs_far_walk1",
+   "body",
+   "legs_near_walk1",
+   "ears",
+   "head",
+   "eye_open",
+   "face_idle"
+  ],
+  "walk2": [
+   "tail",
+   "legs_far_walk2",
+   "body",
+   "legs_near_walk2",
+   "ears",
+   "head",
+   "eye_open",
+   "face_idle"
+  ],
+  "cry": [
+   "tail",
+   "legs_far",
+   "body",
+   "legs_near",
+   "ears",
+   "head",
+   "eye_cry",
+   "face_sleep"
+  ],
+  "surprise": [
+   "tail",
+   "legs_far",
+   "body",
+   "legs_near",
+   "ears",
+   "head",
+   "eye_surprise",
+   "face_surprise"
+  ],
+  "eat1": [
+   "tail",
+   "legs_far",
+   "body",
+   "legs_near",
+   "ears",
+   "head",
+   "eye_happy",
+   "face_eat"
+  ],
+  "eat2": [
+   "tail",
+   "legs_far",
+   "body",
+   "legs_near",
+   "ears",
+   "head",
+   "eye_happy",
+   "face_idle"
+  ],
+  "sit": [
+   "tail_sit",
+   "legs_sit_far",
+   "body_sit",
+   "legs_sit_near",
+   "ears",
+   "head",
+   "eye_open",
+   "face_idle"
+  ]
+ }
+}

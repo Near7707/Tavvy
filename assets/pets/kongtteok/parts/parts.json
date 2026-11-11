@@ -1,0 +1,72 @@
+{
+ "canvas": [
+  64,
+  64
+ ],
+ "note": "frames = parts stacked bottom to top",
+ "frames": {
+  "idle": [
+   "ears",
+   "body",
+   "feet",
+   "eyes_open",
+   "face_idle"
+  ],
+  "sleep": [
+   "ears",
+   "body",
+   "feet",
+   "eyes_sleep",
+   "face_sleep"
+  ],
+  "happy": [
+   "ears",
+   "body",
+   "feet",
+   "eyes_happy",
+   "face_happy"
+  ],
+  "walk1": [
+   "ears",
+   "body",
+   "feet_walk1",
+   "eyes_open",
+   "face_idle"
+  ],
+  "walk2": [
+   "ears",
+   "body",
+   "feet_walk2",
+   "eyes_open",
+   "face_idle"
+  ],
+  "cry": [
+   "ears",
+   "body",
+   "feet",
+   "eyes_cry",
+   "face_cry"
+  ],
+  "surprise": [
+   "ears",
+   "body",
+   "feet",
+   "eyes_surprise",
+   "face_surprise"
+  ],
+  "eat1": [
+   "ears",
+   "body",
+   "feet",
+   "eyes_happy",
+   "face_eat"
+  ],
+  "eat2": [
+   "ears",
+   "body",
+   "feet",
+   "eyes_happy",
+   "face_idle"
+  ]
+ }
+}
