@@ -193,3 +193,5 @@
 }
 .tavvy-settings .tavvy-form .menu_button,
 .tavvy-settings > .inline-drawer > .inline-drawer-content > .menu_button { align-self: flex-start; }
+.tavvy-settings .tavvy-filerow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tavvy-settings .tavvy-filerow .menu_button { margin: 0; white-space: nowrap; }

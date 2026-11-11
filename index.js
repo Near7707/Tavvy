@@ -21,12 +21,13 @@ const ctx = () => SillyTavern.getContext();
 // perch: how long it sits after climbing ('doze' = falls asleep up there)
 // land:  reaction after falling back in from the top of the screen
 // send:  reaction when you send a message ('glance' = look, then turn away)
+// bump:  reaction after bumping into another pet ('flick' = turn away, 'aside' = "…" and step aside)
 const PERSONALITIES = {
-    aegyo:   { name: '애교쟁이', speed: 72, idle: [1.5, 3.5], doze: 0.06, dozeLen: [3, 6],  tap: '♥',  climb: [0.16, 0.24], perch: [2, 5],   land: '♥',  send: '♥' },
-    saechim: { name: '새침데기', speed: 55, idle: [2, 5],     doze: 0.10, dozeLen: [3, 7],  tap: '?',  climb: [0.07, 0.12], perch: [2, 5],   land: 'flick', send: 'glance' },
-    neugut:  { name: '느긋쟁이', speed: 30, idle: [3, 6],     doze: 0.35, dozeLen: [6, 14], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: '하암', send: '♪' },
-    simsul:  { name: '심술쟁이', speed: 58, idle: [2, 4.5],   doze: 0.08, dozeLen: [3, 6],  tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: '흥' },
-    musim:   { name: '무심쟁이', speed: 42, idle: [3, 7],     doze: 0.12, dozeLen: [4, 9],  tap: '…',  climb: [0.08, 0.14], perch: [8, 16],  land: '…',  send: '…' },
+    aegyo:   { name: '애교쟁이', speed: 72, idle: [1.5, 3.5], doze: 0.06, dozeLen: [3, 6],  tap: '♥',  climb: [0.16, 0.24], perch: [2, 5],   land: '♥',  send: '♥',  bump: '♥' },
+    saechim: { name: '새침데기', speed: 55, idle: [2, 5],     doze: 0.10, dozeLen: [3, 7],  tap: '?',  climb: [0.07, 0.12], perch: [2, 5],   land: 'flick', send: 'glance', bump: 'flick' },
+    neugut:  { name: '느긋쟁이', speed: 30, idle: [3, 6],     doze: 0.35, dozeLen: [6, 14], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: '하암', send: '♪',  bump: '?' },
+    simsul:  { name: '심술쟁이', speed: 58, idle: [2, 4.5],   doze: 0.08, dozeLen: [3, 6],  tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: '흥',  bump: '💢' },
+    musim:   { name: '무심쟁이', speed: 42, idle: [3, 7],     doze: 0.12, dozeLen: [4, 9],  tap: '…',  climb: [0.08, 0.14], perch: [8, 16],  land: '…',  send: '…',  bump: 'aside' },
 };
 
 // Built-in pets (original characters made for this project).
@@ -71,6 +72,9 @@ const CLIMB_MAX = 5;            // × pet height — highest ledge it can hop up
 const OFF_DELAY = [1.2, 2.6];   // s — gone with a ledge that left the top of the screen, then falls back in
 const EDGE_CHANCE = 0.2;        // on a ledge: chance a walk goes to the end (then hops / drops off)
 const WATCH_MIN_CHARS = 150;    // a reply this long is worth climbing up to look at
+const LONG_WAIT = 20;           // s — a reply taking this long makes everyone glance at the chat more ("?")
+const BUMP_DIST = 0.42;         // × (sum of both widths) — how close two pets get before they bump
+const BUMP_CHANCE = 0.6;        // the rest just walk past each other
 
 /* =====================================================================
  * Storage (format version + safety rails)
@@ -508,6 +512,10 @@ class Actor {
         this.waiting = false;        // waiting for a reply (chosen when generation started)
         this.scanT = 0;
         this.tried = new WeakSet();  // ledges it couldn't reach while waiting
+        this.restless = false;       // was picked up while waiting → goes on with its day, glancing "?" now and then
+        this.bumpReact = false;      // react when landing after a bump
+        this.bumpWith = null;        // the pet it bumped into
+        this.passing = new Set();    // pets it decided to walk past (no bump until they part)
         this.build();
     }
 
@@ -644,7 +652,9 @@ class Actor {
         this.held = false;
         this.el.classList.remove('tavvy-held');
         this.vx = 0; this.vy = 0;
-        this.plat = null; this.waiting = false;
+        this.plat = null;
+        if (this.waiting && gen.active) this.restless = true;   // put down mid-wait: no more waiting, but still curious
+        this.waiting = false;
         if (this.y <= 0) { this.y = 0; this.land(0); }
         else { this.air = true; this.next = 'idle'; this.setState('fall'); }
     }
@@ -665,6 +675,21 @@ class Actor {
             this.landReact = false;
             this.after = n;
             return this.startLook(this.p.land, this.x + this.dir * 40);
+        }
+        if (this.bumpReact) {
+            this.bumpReact = false;
+            const o = this.bumpWith; this.bumpWith = null;
+            const ox = o && !o.gone ? o.x : this.x + this.dir * 40;
+            if (this.p.bump === 'aside') {                // 무심쟁이: "…" and steps out of the way
+                fx(this, '…');
+                const [L, R] = this.range();
+                const away = ox >= this.x ? -1 : 1;
+                const tx = clamp(this.x + away * rand(50, 90), L, Math.max(L, R));
+                if (Math.abs(tx - this.x) > 10) { this.dir = away; this.tx = tx; this.edge = false; return this.setState('walk'); }
+                return this.setState(n);
+            }
+            this.after = n;
+            return this.startLook(this.p.bump, ox);
         }
         this.setState(n);
     }
@@ -708,8 +733,8 @@ class Actor {
             const t = this.pickClimb();
             if (t && this.climbTo(t, 'perch')) return;
         }
-        // while a reply is being written, sometimes glance at the chat
-        if (gen.active && Math.random() < 0.3) return this.startLook('peek', (stage.left + stage.right) / 2);
+        // while a reply is being written, sometimes glance at the chat (more often when curious)
+        if (gen.active && Math.random() < (this.fidgety() ? 0.45 : 0.3)) return this.startLook('peek', (stage.left + stage.right) / 2);
         if (r < this.p.doze + 0.62) {
             const [L, R] = this.range();
             if (this.plat && Math.random() < EDGE_CHANCE) {
@@ -832,7 +857,7 @@ class Actor {
         this.look = { kind, d };
         this.setState('look');
         this.until = kind === 'glance' || kind === 'flick' ? 1.1 : kind === 'peek' ? rand(1.2, 2) : 1.4;
-        if (kind === 'peek') { if (Math.random() < 0.4) fx(this, '?', 'tavvy-fx-small'); }
+        if (kind === 'peek') { if (this.fidgety() || Math.random() < 0.4) fx(this, '?', 'tavvy-fx-small'); }
         else if (kind === 'up') fx(this, '!');
         else if (kind !== 'glance' && kind !== 'flick') fx(this, kind);
     }
@@ -851,6 +876,24 @@ class Actor {
         if (!this.free() && this.state !== 'wait') return;
         if (this.plat && this.plat === gen.target) return this.setState('watch');
         if (this.state === 'wait' || this.state === 'doze') this.startLook('up', this.x);
+    }
+
+    /** Curious about the reply: put down while waiting, or the reply is taking long. */
+    fidgety() {
+        return gen.active && (this.restless || (performance.now() - gen.t0) / 1000 > LONG_WAIT);
+    }
+
+    /** Bumped into another pet: a squish, a little hop back, "!" — then a reaction on landing. */
+    bump(d, other) {
+        const woke = ['doze', 'perch'].includes(this.state);
+        const n = this.waiting && gen.active ? 'wait' : 'idle';
+        this.edge = false; this.look = null;
+        this.sq = 0.8;
+        fx(this, '!');
+        this.bumpWith = other; this.bumpReact = true;
+        this.air = true; this.vy = woke ? 340 : 220; this.vx = d * rand(50, 75);
+        this.next = n;
+        this.setState('jump');
     }
 
     /** A long reply arrived: climb up and look at it, or look up at it from below. */
@@ -1131,7 +1174,32 @@ function tick(t) {
         if (ox !== stage.ox || oy !== stage.oy) placeBed();
     }
     for (const a of [...actors]) a.step(dt);
+    if (actors.length > 1) bumpCheck();
     if (actors.length) raf = requestAnimationFrame(tick);
+}
+
+/* ---------- two pets meeting on the same floor / ledge ---------- */
+const BUMPABLE = ['idle', 'walk', 'doze', 'perch', 'look', 'wait', 'watch', 'edge'];
+
+function bumpCheck() {
+    for (let i = 0; i < actors.length; i++) {
+        for (let j = i + 1; j < actors.length; j++) {
+            const a = actors[i], b = actors[j];
+            const ok = (x) => !x.held && !x.air && !x.gone && BUMPABLE.includes(x.state);
+            const dist = Math.abs(a.x - b.x);
+            const near = (a.w + b.w) * BUMP_DIST;
+            if (!ok(a) || !ok(b) || a.plat !== b.plat) { a.passing.delete(b); b.passing.delete(a); continue; }
+            if (dist > near * 1.4) { a.passing.delete(b); b.passing.delete(a); continue; }
+            if (dist > near || a.passing.has(b)) continue;
+            // only when one of them walks into the other
+            const into = (x, y) => x.state === 'walk' && Math.sign(x.tx - x.x) === Math.sign(y.x - x.x);
+            if (!into(a, b) && !into(b, a)) continue;
+            if (Math.random() >= BUMP_CHANCE) { a.passing.add(b); b.passing.add(a); continue; }
+            const d = a.x < b.x ? -1 : a.x > b.x ? 1 : (Math.random() < 0.5 ? -1 : 1);
+            a.bump(d, b); b.bump(-d, a);
+            a.passing.add(b); b.passing.add(a);    // no second bump until they have parted
+        }
+    }
 }
 
 /* =====================================================================
@@ -1326,6 +1394,7 @@ function onGenStart(type, opts, dryRun) {
     gen.t0 = performance.now();
     gen.firstToken = false;
     gen.target = null;
+    for (const a of actors) a.restless = false;
     // regenerate removes the old reply right after this signal → look a moment later
     setTimeout(() => {
         if (!gen.active) return;
@@ -1345,7 +1414,7 @@ function onGenEnd() {
     genTarget();
     measurePlats();
     gen.active = false;
-    for (const a of actors) a.endWait();
+    for (const a of actors) { a.endWait(); a.restless = false; }
     gen.target = null;
 }
 
@@ -1468,6 +1537,7 @@ function panelHtml() {
         </div>
         <div id="tavvy-mine" class="tavvy-mine" hidden>
           <input id="tavvy-file" type="file" accept="image/png">
+          <div class="tavvy-filerow"><div id="tavvy-filebtn" class="menu_button">그림 고르기</div><span id="tavvy-filename" class="tavvy-note">아직 안 골랐어요</span></div>
           <label class="checkbox_label"><input id="tavvy-crop" type="checkbox" checked> 투명 여백 자르기</label>
           <label>그림 방향
             <select id="tavvy-facing" class="text_pole">
@@ -1515,9 +1585,12 @@ function bindPanel() {
             nameEl.value = BUILTIN[r.value].name;
         }
     }));
+    // SillyTavern hides every file input (input[type=file] { display:none }) → our own button opens it
+    $id('tavvy-filebtn').addEventListener('click', () => $id('tavvy-file').click());
     $id('tavvy-file').addEventListener('change', async (e) => {
         mineFile = e.target.files?.[0] || null;
         const prev = $id('tavvy-mine-prev');
+        $id('tavvy-filename').textContent = mineFile ? mineFile.name : '아직 안 골랐어요';
         if (!mineFile) { prev.removeAttribute('src'); return; }
         try {
             const out = await preparePng(mineFile, $id('tavvy-crop').checked);
