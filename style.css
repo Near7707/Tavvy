@@ -1,11 +1,16 @@
 /* Tavvy */
 
+/* A zero-size anchor at the top-left of the screen. Children are placed with transforms.
+   (No inset/overflow: on some phones the fixed box gets 0 height and would clip everything.) */
 #tavvy-layer {
     position: fixed;
-    inset: 0;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 0;
+    overflow: visible;
     pointer-events: none;
     z-index: 2900;
-    overflow: hidden;
 }
 
 /* ---------- pet ---------- */
@@ -166,3 +171,14 @@
 .tavvy-settings .menu_button.disabled { opacity: .5; }
 
 .tavvy-settings .tavvy-diag { white-space: pre-wrap; font-size: .8em; }
+
+/* buttons: keep them one line, sized to their text */
+.tavvy-settings .menu_button {
+    width: fit-content;
+    max-width: 100%;
+    white-space: nowrap;
+    padding-left: 12px;
+    padding-right: 12px;
+}
+.tavvy-settings .tavvy-form .menu_button,
+.tavvy-settings > .inline-drawer > .inline-drawer-content > .menu_button { align-self: flex-start; }

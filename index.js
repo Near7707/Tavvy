@@ -1023,7 +1023,7 @@ function findBed() {
         bumpBed();
         const r = bed.getBoundingClientRect();
         const cs = getComputedStyle(bed);
-        const ls = getComputedStyle(layer);
+        const ls = getComputedStyle(layer);   // layer is a 0×0 anchor on purpose
         lines.push(`침대 버튼: ${bed.hidden ? '숨김' : '보임'} · ${cs.display} · 투명도 ${cs.opacity} · 위치 ${Math.round(r.left)},${Math.round(r.top)} 크기 ${Math.round(r.width)}×${Math.round(r.height)}`);
         const lr = layer.getBoundingClientRect();
         lines.push(`무대: ${ls.display} · z ${ls.zIndex} · ${Math.round(lr.left)},${Math.round(lr.top)} ${Math.round(lr.width)}×${Math.round(lr.height)} · 부모 ${layer.parentElement?.tagName}`);
