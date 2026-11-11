@@ -4,6 +4,8 @@
 // Stage 3: the whole chat is the stage — message ledges, riding them, climbing up, hopping off the
 //          end, falling back in from the top, line borders as ledges, waiting for / watching
 //          replies, and a little reaction when you send a message.
+// Stage 4: food — new messages fill the bowl, sparkles fly in and get eaten, four meal sizes,
+//          a nap after a big meal, being full, a number on the bed, daily backups.
 
 import { saveSettings, saveSettingsDebounced, getRequestHeaders, eventSource, event_types } from '../../../../script.js';
 
@@ -77,6 +79,20 @@ const BUMP_DIST = 0.42;         // × (sum of both widths) — how close two pet
 const BUMP_CHANCE = 0.05;       // the rest just walk past each other
 const BUMP_REST = 300;          // seconds — after a bump, the same two pets just pass each other for this long
 
+// food (stage 4)
+const COUNT_TYPES = ['normal', 'command', '', undefined];   // new replies / command messages count; regenerate, swipe, continue… don't
+const MEAL_TIERS = [            // by number of messages waiting in the bowl
+    { key: 'snack', min: 1 },   // 간식
+    { key: 'meal', min: 10 },   // 한 끼
+    { key: 'bowl', min: 50 },   // 고봉밥
+    { key: 'feast', min: 200 }, // 잔칫상
+];
+const FULL_AT = 100;            // messages eaten in one day → full (resets at 6 a.m.)
+const DAY_START_H = 6;          // the day changes at 6 a.m.
+const SPARK_MAX = 40;           // sparkles in one meal at most
+const SPARK_CHARS = 12;         // a message gives one sparkle per this many characters (2 … 14)
+const BACKUP_KEEP = 7;          // daily backups kept on the server
+
 /* =====================================================================
  * Storage (format version + safety rails)
  * ===================================================================== */
@@ -93,6 +109,8 @@ function defaultSettings() {
         bedPos: { phone: null, pc: null },     // floating bed button position per device
         stageMode: 'chat',                     // 'chat' = whole chat (messages are ledges) / 'floor' = floor only
         lineLedges: true,                      // flat / document chat style: borders between messages are ledges
+        badge: true,                           // number of waiting messages on the bed
+        backup: { lastDay: null, files: [] },  // daily backups: [{ day, path, pets }]
     };
 }
 
@@ -115,7 +133,7 @@ function newPetRecord({ id, name, personality, look }) {
         bowl: { me: 0, them: 0, tokens: 0 },          // food waiting
         eaten: { me: 0, them: 0, tokens: 0 },         // lifetime eaten
         pats: { score: 0, lastDay: null },
-        today: { day: null, eaten: 0 },
+        today: { day: null, eaten: 0, full: false },
         lastVisit: now,
         journal: { talkDays: 0, lastTalkDay: null, moments: [] },
     };
@@ -518,6 +536,15 @@ class Actor {
         this.bumpWith = null;        // the pet it bumped into
         this.passing = new Set();    // pets it decided to walk past (no bump until they part)
         this.bumpedAt = new Map();   // other pet → time of our last bump (rest time)
+        this.food = 0;               // sparkles on their way to it
+        this.eatT = 0;               // eating pose shown a moment after each sparkle (when not in 'eat')
+        this.eatIdle = 0;            // 'eat' with nothing left coming → done after a beat
+        this.mealPending = false;    // just woke up with food in the bowl → sniff, then eat
+        this.meal = null;            // { post: 'nod' | 'feast' | null, big }
+        this.afterMeal = null;       // a reply to climb up and look at once it has eaten
+        this.fullNow = false;        // became full during this meal → nods off afterwards
+        this.slowT = 0;              // s — walking slowly after a big meal
+        this.spin = 0;               // deg — rolling over (full)
         this.build();
     }
 
@@ -583,7 +610,55 @@ class Actor {
 
     /** Free to react to things (not held, flying, hidden, leaving…). */
     free() {
-        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear'].includes(this.state);
+        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear', 'sniff', 'eat', 'nod', 'dance', 'roll'].includes(this.state);
+    }
+
+    /** Can a sparkle reaching it be eaten right now? (dozing → piled beside it; held / flying → waits nearby) */
+    canEat() {
+        return !this.held && !this.air && !this.gone && EATABLE.includes(this.state);
+    }
+
+    isFull() {
+        const t = rollToday(this.rec);
+        return t.full || t.eaten >= FULL_AT;
+    }
+
+    /** A sparkle got eaten. */
+    onAbsorb(big) {
+        this.frame++;
+        this.eatT = 0.35;
+        this.sq = Math.min(this.sq, big ? 0.82 : 0.93);
+    }
+
+    /** Woke up, sniffed the air: everything in the bowl comes flying in. */
+    startMeal() {
+        this.mealPending = false;
+        const take = takeBowl(this.rec);
+        saveNow();
+        refreshBed();
+        if (!take.n) return this.setState('idle');
+        const tier = mealTier(take.n);
+        this.meal = { post: tier === 'feast' ? 'feast' : tier === 'bowl' ? 'nod' : null, big: false };
+        if (take.becameFull) this.fullNow = true;
+        spawnMeal(this, take, tier);
+        this.setState('eat');
+    }
+
+    /** Nothing left coming in. */
+    finishMeal() {
+        const m = this.meal;
+        if (m?.post === 'feast' && !m.big) { m.big = true; spawnBig(this); this.eatIdle = 0; return; }   // the big one, last
+        this.meal = null;
+        if (m?.post) { this.after = m.post === 'feast' ? 'dance' : 'idle'; return this.setState('nod'); }
+        this.mealDone();
+    }
+
+    /** After eating (and any nap / dance): full → doze off, a reply waiting to be looked at → go look. */
+    mealDone() {
+        if (this.fullNow) { this.fullNow = false; fx(this, '♪', 'tavvy-fx-small'); return this.setState('doze'); }
+        const el = this.afterMeal; this.afterMeal = null;
+        this.setState('idle');
+        if (el && el.isConnected && !this.waiting) this.watchReply(el);
     }
 
     get side() { return this.rec.look.facing === 'left' || this.rec.look.facing === 'right'; }
@@ -605,6 +680,7 @@ class Actor {
             this.grab.x = clamp(down.x - left, 0, this.w);
             this.grab.y = clamp(down.y - top, 0, this.h);
             this.held = true; this.air = false; this.next = null;
+            this.spin = 0;
             this.setState('held');
             this.ptr.x = e?.clientX ?? down.x; this.ptr.y = e?.clientY ?? down.y;
             this.ptr.lastX = this.ptr.x; this.ptr.lastT = performance.now(); this.ptr.vx = 0;
@@ -703,7 +779,17 @@ class Actor {
         this.state = s; this.t = 0;
         this.sqT = 1;
         if (s === 'idle') { this.until = rand(...this.p.idle); this.tiltT = 0; }
-        if (s === 'doze') { this.until = rand(...this.p.dozeLen); this.fxT = 0.6; }
+        if (s === 'doze') { this.until = rand(...this.p.dozeLen) * (this.isFull() ? 1.4 : 1); this.fxT = 0.6; }
+        if (s === 'sniff') { this.fxT = 0; this.tiltT = 0; this.until = 1.35; }
+        if (s === 'eat') { this.eatIdle = 0; this.tiltT = 0; if (this.side && this.eatFrom != null && Math.abs(this.eatFrom - this.x) > 8) this.dir = this.eatFrom > this.x ? 1 : -1; }
+        if (s === 'nod') { this.until = 2.6; this.fxT = 0.5; }
+        if (s === 'dance') { this.until = 1.9; this.fxT = 0; }
+        if (s === 'roll') {
+            const [L, R] = this.range();
+            this.until = 0.9;
+            if (this.x + this.dir * 45 > R || this.x + this.dir * 45 < L) this.dir = -this.dir;
+            this.body.style.transformOrigin = '50% 55%';
+        }
         if (s === 'walk') { this.tiltT = 0; this.walkPh = 0; }
         if (s === 'perch') {
             if (this.p.perch === 'doze') return this.setState('doze');
@@ -730,9 +816,15 @@ class Actor {
     }
 
     decide() {
+        if (this.mealPending) return this.setState('sniff');
+        if (this.food > 0) return this.setState('eat');
+        if (this.afterMeal) { const el = this.afterMeal; this.afterMeal = null; if (el.isConnected && !this.waiting) { this.watchReply(el); if (this.state !== 'idle') return; } }
         if (gen.active && this.waiting) return this.setState('wait');
+        const full = this.isFull();
         const r = Math.random();
-        if (r < this.p.doze) return this.setState('doze');
+        const dz = this.p.doze + (full ? 0.25 : 0);
+        if (r < dz) return this.setState('doze');
+        if (full && !this.plat && Math.random() < 0.12) return this.setState('roll');   // 데굴데굴
         // hop up onto a message by itself
         if (ledgesOn() && Math.random() < byCloseness(...this.p.climb)) {
             const t = this.pickClimb();
@@ -740,7 +832,7 @@ class Actor {
         }
         // while a reply is being written, sometimes glance at the chat (more often when curious)
         if (gen.active && Math.random() < (this.fidgety() ? 0.45 : 0.3)) return this.startLook('peek', (stage.left + stage.right) / 2);
-        if (r < this.p.doze + 0.62) {
+        if (r < dz + (full ? 0.45 : 0.62)) {
             const [L, R] = this.range();
             if (this.plat && Math.random() < EDGE_CHANCE) {
                 const [l2, r2] = this.range(0.2);
@@ -919,7 +1011,7 @@ class Actor {
         this.dir = mid >= bx ? 1 : -1;
         this.vx = this.dir * rand(60, 130);
         this.vy = 420;
-        this.air = true; this.next = 'idle';
+        this.air = true; this.next = this.mealPending ? 'sniff' : 'idle';
         this.scale = 0.3;
         this.setState('appear');
     }
@@ -939,6 +1031,7 @@ class Actor {
         if (this.gone) return;
         this.gone = true;
         this.el.remove();
+        for (const sp of sparkles.filter(x => x.a === this)) sp.remove(false);   // eaten already (record) — just the show stops
         const i = actors.indexOf(this);
         if (i >= 0) actors.splice(i, 1);
         this.onGone?.();
@@ -952,6 +1045,8 @@ class Actor {
         let pose = this.role('idle');
 
         if (this.state !== 'tuck' && this.scale < 1) this.scale = Math.min(1, this.scale + dt * 4);
+        if (this.slowT > 0) this.slowT -= dt;
+        if (this.eatT > 0) this.eatT -= dt;
 
         if (this.held) {
             const left = this.ptr.x - this.grab.x;
@@ -1003,11 +1098,13 @@ class Actor {
                 case 'idle':
                 case 'appear':
                     breath = 1;
+                    if (this.state === 'idle' && (this.food > 0 || this.mealPending)) { this.decide(); break; }   // food coming → stop and eat
                     if (this.t > this.until) this.decide();
                     break;
                 case 'walk': {
+                    if (this.food > 0) { this.edge = false; this.setState('eat'); break; }
                     const d = this.tx - this.x;
-                    const sp = this.p.speed;
+                    const sp = this.p.speed * (this.isFull() ? 0.6 : 1) * (this.slowT > 0 ? 0.6 : 1);
                     if (Math.abs(d) <= sp * dt) {
                         this.x = this.tx;
                         if (this.edge && this.plat) { this.edge = false; this.setState('edge'); this.until = rand(0.6, 1.1); }
@@ -1103,6 +1200,52 @@ class Actor {
                     if (this.fxT === 1 && this.t > 1.4) { this.fxT = 2; fx(this, '!'); }
                     if (this.t > this.until) this.setState('idle');
                     break;
+                case 'sniff': {                        // 킁킁 toward the chat … "!" → food
+                    breath = 1;
+                    pose = this.role('look', 'idle');
+                    const d = (stage.left + stage.right) / 2 >= this.x ? 1 : -1;
+                    this.tiltT = d * (4 + Math.sin(this.t * 14) * 3);
+                    if (this.fxT === 0 && this.t > 0.15) { this.fxT = 1; fx(this, '킁킁', 'tavvy-fx-small'); }
+                    if (this.fxT === 1 && this.t > 0.95) { this.fxT = 2; fx(this, '!'); this.sq = 0.9; }
+                    if (this.t > this.until) this.startMeal();
+                    break;
+                }
+                case 'eat':                            // sparkles flying in
+                    breath = 1;
+                    pose = this.role('eat', 'idle');
+                    if (this.food > 0) this.eatIdle = 0;
+                    else if ((this.eatIdle += dt) > 0.45) this.finishMeal();
+                    break;
+                case 'nod':                            // after a big meal: leaning over, nodding, Z
+                    breath = 0.6;
+                    pose = this.role('nod', 'sleep', 'idle');
+                    this.tiltT = (this.side ? this.dir : 1) * (11 + Math.max(0, Math.sin(this.t * 3.4)) * 7);
+                    this.fxT -= dt;
+                    if (this.fxT <= 0) { this.fxT = 1.1; fx(this, 'Z', 'tavvy-fx-z'); }
+                    if (this.t > this.until) {
+                        this.slowT = 8;
+                        const n = this.after || 'idle'; this.after = 'idle';
+                        if (n === 'dance') this.setState('dance'); else this.mealDone();
+                    }
+                    break;
+                case 'dance': {                        // feast finished: a happy little dance
+                    pose = this.role('dance', 'happy', 'idle');
+                    const beat = Math.floor(this.t * 2.2);
+                    bob = Math.abs(Math.sin(this.t * Math.PI * 2.2)) * 7 * this.k;
+                    this.tiltT = (beat % 2 ? 1 : -1) * 10;
+                    if (this.fxT === 0) { this.fxT = 1; fx(this, '♪'); }
+                    if (this.fxT === 1 && this.t > 0.95) { this.fxT = 2; fx(this, '♪'); }
+                    if (this.t > this.until) this.mealDone();
+                    break;
+                }
+                case 'roll': {                         // full: 데굴데굴
+                    const f = Math.min(1, this.t / this.until);
+                    const [L, R] = this.range();
+                    this.x = clamp(this.x + this.dir * (45 / this.until) * dt, L, Math.max(L, R));
+                    this.spin = 360 * this.dir * f;
+                    if (f >= 1) { this.spin = 0; this.body.style.transformOrigin = ''; this.setState('idle'); }
+                    break;
+                }
                 case 'wave':
                     this.tiltT = Math.sin(this.t * 12) * 9;
                     pose = this.role('wave', 'happy');
@@ -1127,6 +1270,9 @@ class Actor {
             }
         }
 
+        // a sparkle just eaten while doing something else → eating face for a moment
+        if (this.eatT > 0 && ['wait', 'watch', 'perch', 'look', 'edge'].includes(this.state)) pose = this.role('eat', 'idle');
+
         // springs — BOTH branches (held / not held)
         if (this.held) spring(this, 'tilt', 'tiltv', this.tiltT, 55, 0.14, dt);   // loose: keeps swinging a while
         if (this.held) this.tilt = clamp(this.tilt, -25, 25);
@@ -1144,7 +1290,7 @@ class Actor {
         const left = this.x - this.w / 2 + shiver;
         const top = stage.floorY - this.y - this.h + this.basePx - bob;
         this.el.style.transform = `translate3d(${(left - stage.ox).toFixed(1)}px, ${(top - stage.oy).toFixed(1)}px, 0)`;
-        this.body.style.transform = `rotate(${(this.tilt + waddle).toFixed(2)}deg) scale(${(sx * this.scale).toFixed(3)}, ${(sy * this.scale).toFixed(3)})`;
+        this.body.style.transform = `rotate(${(this.tilt + waddle + this.spin).toFixed(2)}deg) scale(${(sx * this.scale).toFixed(3)}, ${(sy * this.scale).toFixed(3)})`;
         const list = pose && pose.length ? pose : this.rec.look.roles.idle;
         const src = imgUrl(list[this.frame % list.length]);
         if (src !== this.curSrc) { this.img.src = src; this.curSrc = src; }
@@ -1180,6 +1326,7 @@ function tick(t) {
     }
     for (const a of [...actors]) a.step(dt);
     if (actors.length > 1) bumpCheck();
+    if (sparkles.length) stepSparkles(dt);
     if (actors.length) raf = requestAnimationFrame(tick);
 }
 
@@ -1211,6 +1358,305 @@ function bumpCheck() {
 }
 
 /* =====================================================================
+ * Food (stage 4) — counting, the bowl, sparkles, backups
+ * ===================================================================== */
+
+const EATABLE = ['idle', 'walk', 'eat', 'look', 'wait', 'watch', 'perch', 'edge'];
+
+/** "2026-11-12" — the day starts at 6 a.m. */
+function dayKey(t = Date.now()) {
+    const d = new Date(t - DAY_START_H * 3600e3);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** The pet's "today" record, reset when the day has changed. */
+function rollToday(rec) {
+    const day = dayKey();
+    rec.today ??= { day: null, eaten: 0, full: false };
+    if (rec.today.day !== day) { rec.today.day = day; rec.today.eaten = 0; rec.today.full = false; }
+    return rec.today;
+}
+
+function addMoment(rec, kind) {
+    const j = rec.journal;
+    if (!j || !Array.isArray(j.moments) || j.moments.some(m => m.kind === kind)) return;
+    j.moments.push({ kind, day: dayKey() });
+}
+
+const bowlCount = (rec) => (rec.bowl?.me || 0) + (rec.bowl?.them || 0);
+
+/** A new message: into every resident's bowl (asleep or awake). */
+function addToBowl(rec, kind, tokens) {
+    rec.bowl[kind] = (rec.bowl[kind] || 0) + 1;
+    rec.bowl.tokens = (rec.bowl.tokens || 0) + tokens;
+    const day = dayKey(), j = rec.journal;
+    if (j && j.lastTalkDay !== day) { j.talkDays = (j.talkDays || 0) + 1; j.lastTalkDay = day; }
+}
+
+/** Starting to eat: the whole bowl moves to "eaten" in one go. The animation after this is only a show. */
+function takeBowl(rec) {
+    const b = rec.bowl, e = rec.eaten;
+    const take = { me: b.me || 0, them: b.them || 0, tokens: b.tokens || 0 };
+    take.n = take.me + take.them;
+    if (!take.n && !take.tokens) return take;
+    e.me = (e.me || 0) + take.me; e.them = (e.them || 0) + take.them; e.tokens = (e.tokens || 0) + take.tokens;
+    b.me = 0; b.them = 0; b.tokens = 0;
+    const t = rollToday(rec);
+    const wasFull = t.full || t.eaten >= FULL_AT;
+    t.eaten += take.n;
+    if (mealTier(take.n) === 'feast') { t.full = true; addMoment(rec, 'firstFeast'); }
+    const full = t.full || t.eaten >= FULL_AT;
+    if (full && !wasFull) { take.becameFull = true; addMoment(rec, 'firstFull'); }
+    return take;
+}
+
+function mealTier(n) {
+    let k = null;
+    for (const t of MEAL_TIERS) if (n >= t.min) k = t.key;
+    return k;
+}
+
+function msgTokens(m) {
+    const t = Number(m?.extra?.token_count);
+    if (Number.isFinite(t) && t > 0) return Math.round(t);
+    return Math.ceil(String(m?.mes || '').length / 3.35);     // no stored count → guess from length
+}
+
+/** A message that counts arrived (mine or theirs). */
+function onCounted(id, fromUser) {
+    if (!ready || !room || !root) return;
+    const here = residents();
+    if (!here.length) return;
+    const m = ctx().chat?.[id];
+    if (!m) return;
+    const kind = (fromUser ?? m.is_user) ? 'me' : 'them';
+    const tokens = msgTokens(m);
+    for (const rec of here) addToBowl(rec, kind, tokens);
+    // awake pets eat it right away (a pet that just woke up eats it with the rest of its bowl)
+    const eaters = [];
+    for (const a of actors) {
+        if (a.gone || a.mealPending || !here.includes(a.rec)) continue;
+        const t = takeBowl(a.rec);
+        if (t.n) eaters.push(a);
+        if (t.becameFull) a.fullNow = true;
+    }
+    saveSoon();
+    refreshBed();
+    if (!eaters.length) return eaters;
+    maybeBackup();
+    const chars = String(m.mes || '').length;
+    const n = clamp(Math.round(chars / SPARK_CHARS), 2, 14);
+    setTimeout(() => {                         // after the message is drawn (and after a quick "seeing off" look)
+        const el = msgEl(id);
+        for (const a of eaters) if (!a.gone) spawnNibble(a, el, kind, n);
+    }, kind === 'me' ? 600 : 250);
+    return eaters;
+}
+
+/* ---------- sparkles ---------- */
+const sparkles = [];
+const SPARK_COLOR = { me: '#7cc8ff', them: '#ffc94d' };
+
+class Sparkle {
+    constructor(actor, x, y, kind, { delay = 0, size = 1, big = false } = {}) {
+        this.a = actor; this.kind = kind; this.size = size; this.big = big;
+        this.x = x; this.y = y;
+        this.delay = delay;
+        this.mode = 'pending';
+        this.off = { x: rand(-0.8, 0.8), y: rand(0, 1), ph: rand(0, 6.3), side: Math.random() < 0.5 ? -1 : 1 };
+        this.el = document.createElement('div');
+        this.el.className = 'tavvy-spark' + (big ? ' tavvy-spark-big' : '');
+        this.el.textContent = '✦';
+        this.el.style.color = SPARK_COLOR[kind] || SPARK_COLOR.them;
+        this.el.style.visibility = 'hidden';
+        ensureLayer().appendChild(this.el);
+        actor.food++;
+        sparkles.push(this);
+    }
+
+    mouth() {
+        const a = this.a;
+        return { x: a.x + (a.side ? a.dir * a.w * 0.15 : 0), y: a.foot() - a.h * 0.5 + 6 };
+    }
+
+    /** Where it goes while the pet can't eat: piled beside a dozing pet, or floating nearby. */
+    restSpot() {
+        const a = this.a;
+        if (a.state === 'doze') return { x: a.x + this.off.side * a.w * (0.55 + this.off.y * 0.4), y: a.foot() - 6 - this.off.y * 6, pile: true };
+        return { x: a.x + this.off.x * a.w, y: a.foot() - a.h - 14 - this.off.y * 18, pile: false };
+    }
+
+    fly(dur) {
+        this.mode = 'fly';
+        this.t = 0;
+        this.from = { x: this.x, y: this.y };
+        this.ctrl = { x: rand(-50, 50), y: -rand(40, 110) };
+        this.dur = dur;
+    }
+
+    remove(pop) {
+        const i = sparkles.indexOf(this);
+        if (i >= 0) sparkles.splice(i, 1);
+        if (pop) { this.el.classList.add('tavvy-spark-pop'); setTimeout(() => this.el.remove(), 260); }
+        else this.el.remove();
+        this.a.food = Math.max(0, this.a.food - 1);
+    }
+
+    step(dt, clock) {
+        const a = this.a;
+        if (a.gone || a.state === 'off' || a.state === 'tuck' || a.state === 'wave') return this.remove(false);
+        if (this.mode === 'pending') {
+            this.delay -= dt;
+            if (this.delay > 0) return;
+            this.el.style.visibility = '';
+            const m = this.mouth();
+            this.fly(clamp(Math.hypot(m.x - this.x, m.y - this.y) / 260, 0.8, 1.5));
+        }
+        let sway = 0;
+        if (this.mode === 'fly') {
+            this.t += dt / this.dur;
+            const eat = a.canEat();
+            const to = eat ? this.mouth() : this.restSpot();
+            const f = Math.min(1, this.t);
+            const e = f < 0.5 ? 2 * f * f : 1 - Math.pow(-2 * f + 2, 2) / 2;    // ease in-out ("둥실")
+            const cx = (this.from.x + to.x) / 2 + this.ctrl.x, cy = Math.min(this.from.y, to.y) + this.ctrl.y;
+            this.x = (1 - e) ** 2 * this.from.x + 2 * (1 - e) * e * cx + e * e * to.x;
+            this.y = (1 - e) ** 2 * this.from.y + 2 * (1 - e) * e * cy + e * e * to.y;
+            sway = Math.sin(clock * 5 + this.off.ph) * 7 * (1 - f);
+            if (f >= 1) {
+                if (eat) { a.onAbsorb(this.big); return this.remove(true); }
+                this.mode = 'rest';
+            }
+        } else if (this.mode === 'rest') {
+            if (a.canEat()) return this.fly(this.big ? 0.7 : 0.45);
+            const r = this.restSpot();
+            const k = Math.min(1, dt * 6);
+            this.x += (r.x - this.x) * k; this.y += (r.y - this.y) * k;
+            if (!r.pile) sway = Math.sin(clock * 2.4 + this.off.ph) * 4;
+        }
+        const tw = 0.85 + Math.sin(clock * 9 + this.off.ph) * 0.15;
+        this.el.style.transform = `translate3d(${(this.x + sway - stage.ox).toFixed(1)}px, ${(this.y - stage.oy).toFixed(1)}px, 0) translate(-50%, -50%) scale(${(this.size * tw).toFixed(2)})`;
+    }
+}
+
+let sparkClock = 0;
+function stepSparkles(dt) {
+    sparkClock += dt;
+    for (const s of [...sparkles]) s.step(dt, sparkClock);
+}
+
+/** A point inside element `el` that is on screen (or somewhere in the chat if it isn't). */
+function pointIn(el) {
+    const r = liveRect(el);
+    const top = stage.chatTop + 12, bottom = stage.floorY - 12;
+    if (r && r.bottom > top && r.top < bottom) {
+        return { x: rand(Math.max(r.left, stage.left) + 20, Math.min(r.right, stage.right) - 20), y: clamp(rand(r.top + 10, r.bottom - 10), top, bottom) };
+    }
+    return { x: rand(stage.left + 30, stage.right - 30), y: rand(top, Math.max(top, top + (bottom - top) * 0.5)) };
+}
+
+/** One new message while awake. */
+function spawnNibble(a, el, kind, n) {
+    const p = pointIn(el);
+    a.eatFrom = p.x;
+    for (let i = 0; i < n; i++) new Sparkle(a, p.x + rand(-24, 24), p.y + rand(-10, 10), kind, { delay: i * 0.07 });
+}
+
+/** The waiting bowl, after waking up. Sizes: 간식 / 한 끼 (2–3 waves) / 고봉밥 (with clumps) / 잔칫상. */
+function spawnMeal(a, take, tier) {
+    const n = take.n;
+    let count, waves = 1, span, clumps = 0;
+    if (tier === 'snack') { count = clamp(Math.round(2 + n * 1.2), 3, 12); span = 0.5 + n * 0.1; }
+    else if (tier === 'meal') { count = Math.round(14 + (n - 10) / 39 * 10); waves = n < 25 ? 2 : 3; span = 0.5; }
+    else if (tier === 'bowl') { count = Math.round(26 + Math.min(1, (n - 50) / 150) * 8); span = 3.5; clumps = 4; }
+    else { count = SPARK_MAX; span = 3.2; clumps = 6; }
+    count = Math.min(count, SPARK_MAX);
+    // colours split by the number of my / their messages in this meal
+    const mine = Math.round(count * take.me / Math.max(1, n));
+    const kinds = Array.from({ length: count }, (_, i) => (i < mine ? 'me' : 'them')).sort(() => Math.random() - 0.5);
+    // where they come from: my / their messages on screen when there are some
+    const from = { me: plats.filter(p => p.user).map(p => p.el), them: plats.filter(p => !p.user).map(p => p.el) };
+    const src = (k) => { const l = from[k].length ? from[k] : [...from.me, ...from.them]; return l.length ? l[Math.floor(Math.random() * l.length)] : null; };
+    const big = new Set();
+    while (big.size < Math.min(clumps, count)) big.add(Math.floor(Math.random() * count));
+    let sx = 0;
+    for (let i = 0; i < count; i++) {
+        const w = waves > 1 ? Math.floor(i * waves / count) : 0;
+        const inWave = waves > 1 ? (i - Math.ceil(w * count / waves)) / Math.ceil(count / waves) : i / count;
+        const delay = w * 1.3 + inWave * span;
+        const p = pointIn(src(kinds[i]));
+        sx += p.x;
+        new Sparkle(a, p.x, p.y, kinds[i], { delay, size: big.has(i) ? 1.6 : 1 });
+    }
+    a.eatFrom = sx / count;
+}
+
+/** The last, big sparkle of a feast. */
+function spawnBig(a) {
+    const p = { x: (stage.left + stage.right) / 2, y: stage.chatTop + (stage.floorY - stage.chatTop) * 0.3 };
+    new Sparkle(a, p.x, p.y, 'them', { size: 2.6, big: true });
+}
+
+/* ---------- daily backup (one a day, the last 7 kept on the server) ---------- */
+let backingUp = false;
+
+function toBase64(str) {
+    const bytes = new TextEncoder().encode(str);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+}
+
+async function maybeBackup() {
+    if (backingUp || !canSave() || !attached || !root?.pets.length) return;
+    const b = root.settings.backup;
+    const day = dayKey();
+    if (b.lastDay === day) return;
+    backingUp = true;
+    try {
+        const data = JSON.stringify({ tavvyBackup: 1, formatVersion: FORMAT_VERSION, day, savedAt: Date.now(), pets: root.pets });
+        const path = await uploadFile(`tavvy_backup_${day}.json`, toBase64(data));
+        b.files = b.files.filter(f => f && f.day !== day);
+        b.files.push({ day, path, pets: root.pets.length });
+        b.files.sort((x, y) => (x.day < y.day ? -1 : 1));
+        while (b.files.length > BACKUP_KEEP) { const old = b.files.shift(); if (old?.path) deleteFile(old.path); }
+        b.lastDay = day;
+        saveSoon();
+        renderPanel();
+        log('backup', day);
+    } catch (e) {
+        console.warn('[Tavvy] backup failed', e);
+    } finally {
+        backingUp = false;
+    }
+}
+
+async function restoreBackup(day) {
+    if (readOnly) return say(readOnlyReason);
+    const f = root?.settings.backup.files.find(x => x.day === day);
+    if (!f) return say('백업을 골라 주세요.');
+    if (!(await confirmBox(`${day} 백업으로 되돌릴까요? 지금 펫 기록이 그날 기록으로 바뀌어요.`))) return;
+    let data;
+    try {
+        const res = await fetch(imgUrl(f.path), { cache: 'no-store' });
+        if (!res.ok) throw new Error(String(res.status));
+        data = await res.json();
+    } catch (e) {
+        return say('백업 파일을 읽지 못했어요: ' + (e.message || e));
+    }
+    if (!data || data.tavvyBackup !== 1 || !Array.isArray(data.pets) || typeof data.formatVersion !== 'number' || data.formatVersion > FORMAT_VERSION) {
+        return say('백업 파일 모양이 이상해서 되돌리지 않았어요.');
+    }
+    sleepInstant();
+    root.pets = data.pets;
+    migrate(root);
+    const ok = await saveNow();
+    refreshBed();
+    renderPanel();
+    say(ok ? `${day} 백업으로 되돌렸어요.` : '되돌렸지만 저장하지 못했어요. 페이지를 새로고침하기 전에 다시 시도해 주세요.');
+}
+
+/* =====================================================================
  * Bed button (wake / sleep / drag)
  * ===================================================================== */
 
@@ -1223,7 +1669,7 @@ function ensureBed() {
     bed = document.createElement('div');
     bed.id = 'tavvy-bed';
     bed.title = 'Tavvy — 톡: 깨우기/재우기 · 끌기: 옮기기';
-    bed.innerHTML = '<span class="tavvy-bed-icon">🛏️</span><span class="tavvy-bed-z">z</span>';
+    bed.innerHTML = '<span class="tavvy-bed-icon">🛏️</span><span class="tavvy-bed-z">z</span><span class="tavvy-bed-badge" hidden></span>';
     ensureLayer().appendChild(bed);
 
     let down = null;
@@ -1311,6 +1757,12 @@ function refreshBed() {
     ensureBed();
     bed.hidden = false;
     bed.classList.toggle('tavvy-awake', actors.length > 0);
+    // number of messages waiting in the bowl (while asleep)
+    const n = here.reduce((t, p) => t + bowlCount(p), 0);
+    const badge = bed.querySelector('.tavvy-bed-badge');
+    const show = !actors.length && n > 0 && root?.settings.badge !== false;
+    badge.hidden = !show;
+    if (show) badge.textContent = n > 999 ? '999+' : String(n);
     placeBed();
 }
 
@@ -1330,6 +1782,7 @@ async function wakeAll() {
         let i = 0;
         for (const rec of here) {
             const a = new Actor(rec);
+            a.mealPending = bowlCount(rec) > 0;
             try { await a.load(); } catch (e) { console.warn('[Tavvy] could not load pet image', e); continue; }
             actors.push(a);
             a.hopOutFrom(b.x, b.y);
@@ -1432,6 +1885,7 @@ function msgEl(id) {
 
 function onReplyReceived(id, type) {
     if (gen.active) onGenEnd();
+    const eaters = COUNT_TYPES.includes(type) ? (onCounted(id) || []) : [];
     if (!actors.length || !['normal', undefined, '', 'regenerate', 'swipe'].includes(type)) return;
     const m = ctx().chat?.[id];
     if (!m || m.is_user || String(m.mes || '').length < WATCH_MIN_CHARS) return;
@@ -1444,7 +1898,9 @@ function onReplyReceived(id, type) {
         measurePlats();
         for (const a of actors) {
             if (a.state === 'watch' && a.plat === el) continue;           // already up there
-            if (Math.random() < byCloseness(0.3, 0.85)) a.watchReply(el);
+            if (Math.random() >= byCloseness(0.3, 0.85)) continue;
+            if (eaters.includes(a)) a.afterMeal = el;                      // eat it first, then go and look
+            else a.watchReply(el);
         }
     }, 250);
 }
@@ -1570,9 +2026,17 @@ function panelHtml() {
         </select>
       </label>
       <label class="checkbox_label"><input id="tavvy-lines" type="checkbox"> 줄 모양 채팅에서 메시지 사이 경계선도 발판으로 쓰기</label>
+      <label class="checkbox_label"><input id="tavvy-badge" type="checkbox"> 재워 둔 동안 침대에 쌓인 밥 수 보기</label>
       <div id="tavvy-bedreset" class="menu_button">깨우기 버튼 위치 처음으로</div>
       <div id="tavvy-bedfind" class="menu_button">깨우기 버튼 찾기 (화면 가운데로)</div>
       <div id="tavvy-diag" class="tavvy-note tavvy-diag"></div>
+
+      <div class="tavvy-sec">백업 <small>(하루 한 번 자동, 최근 ${BACKUP_KEEP}개)</small></div>
+      <div class="tavvy-filerow">
+        <select id="tavvy-backups" class="text_pole"></select>
+        <div id="tavvy-restore" class="menu_button">이 백업으로 되돌리기</div>
+      </div>
+      <div class="tavvy-note">되돌리면 모든 펫의 기록(먹은 양 등)이 그날 기록으로 바뀌어요. 그 뒤에 지운 펫의 내 그림은 돌아오지 않아요.</div>
     </div>
   </div>
 </div>`;
@@ -1632,6 +2096,13 @@ function bindPanel() {
         say('깨우기 버튼을 처음 자리로 옮겼어요.');
     });
     $id('tavvy-bedfind').addEventListener('click', findBed);
+    $id('tavvy-badge').addEventListener('change', (e) => {
+        if (!root) return;
+        root.settings.badge = e.target.checked;
+        saveSoon();
+        refreshBed();
+    });
+    $id('tavvy-restore').addEventListener('click', () => restoreBackup($id('tavvy-backups').value));
     $id('tavvy-list').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-del]');
         if (btn) deletePet(btn.dataset.del);
@@ -1734,6 +2205,14 @@ function renderPanel() {
     $id('tavvy-stage').value = stageIsChat() ? 'chat' : 'floor';
     $id('tavvy-lines').checked = root.settings.lineLedges !== false;
     $id('tavvy-lines').disabled = !stageIsChat();
+    $id('tavvy-badge').checked = root.settings.badge !== false;
+    const files = [...(root.settings.backup?.files || [])].reverse();
+    const bhtml = files.length
+        ? files.map(f => `<option value="${esc(f.day)}">${esc(f.day)} · 펫 ${Number(f.pets) || 0}마리</option>`).join('')
+        : '<option value="">아직 백업이 없어요</option>';
+    const sel = $id('tavvy-backups');
+    if (sel.dataset.html !== bhtml) { sel.innerHTML = bhtml; sel.dataset.html = bhtml; }
+    $id('tavvy-restore').classList.toggle('disabled', !files.length || readOnly);
 
     const here = residents();
     $id('tavvy-room').textContent = !room
@@ -1867,6 +2346,8 @@ function onReady() {
     ready = true;
     log('ready', { pets: root?.pets.length ?? 0, readOnly });
     onChatChanged();
+    setTimeout(maybeBackup, 8000);
+    setInterval(maybeBackup, 15 * 60 * 1000);     // also when the day changes while open
 }
 
 (function init() {
@@ -1884,6 +2365,7 @@ function onReady() {
     on('GENERATION_STOPPED', () => onGenEnd());
     on('MESSAGE_RECEIVED', (id, type) => { if (ready) onReplyReceived(id, type); });
     on('USER_MESSAGE_RENDERED', (id) => { if (ready) onMySend(id); });
+    on('MESSAGE_SENT', (id) => { onCounted(id, true); });
     // messages added / removed / reloaded → ledges moved
     const ledgesMoved = () => { if (actors.length) requestAnimationFrame(measurePlats); };
     ['MESSAGE_DELETED', 'MORE_MESSAGES_LOADED', 'MESSAGE_SWIPED', 'CHARACTER_MESSAGE_RENDERED', 'MESSAGE_UPDATED'].forEach(n => on(n, ledgesMoved));
