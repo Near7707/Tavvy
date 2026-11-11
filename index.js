@@ -53,7 +53,8 @@ const BUILTIN = {
 
 const DEFAULT_SIZE = { phone: 64, pc: 96 };
 const PHONE_MAX_WIDTH = 1000;   // same breakpoint SillyTavern uses for its mobile layout
-const GRAVITY = 2400;           // px/s²
+const GRAVITY = 1900;           // px/s² (a bit floaty)
+const SIZE_MIN = 32, SIZE_MAX = 192;   // px — per-pet size slider
 const HOLD_SWING_MAX = 15;      // degrees
 const DRAG_THRESHOLD = 8;       // px — bed button: tap vs drag
 const PICK_THRESHOLD = 6;       // px — pet: tap vs pick up
@@ -429,7 +430,7 @@ class Actor {
         this.sq = 1; this.sqv = 0;
         this.scale = 1;
         this.clock = Math.random() * 10;
-        this.frameT = 0; this.frame = 0;
+        this.frameT = 0; this.frame = 0; this.walkPh = 0;
         this.fxT = 0;
         this.grab = { x: 0, y: 0 };
         this.ptr = { x: 0, y: 0, vx: 0, lastX: 0, lastT: 0 };
@@ -561,7 +562,9 @@ class Actor {
         this.vy = 0; this.vx = 0;
         this.body.style.transformOrigin = '';
         const soft = (this.rec.look.squish ?? 0.5) * 2;
-        if (soft > 0) this.sq = 1 - Math.min(0.32, impact / 3200) * soft;
+        if (soft > 0) this.sq = 1 - Math.min(0.22, impact / 4200) * soft;
+        // a big landing bounces once, lightly
+        if (impact > 500) { this.air = true; this.vy = impact * 0.18; return; }
         const n = this.next || 'idle';
         this.next = null;
         this.setState(n);
@@ -571,7 +574,7 @@ class Actor {
         this.state = s; this.t = 0;
         if (s === 'idle') { this.until = rand(...this.p.idle); this.tiltT = 0; }
         if (s === 'doze') { this.until = rand(...this.p.dozeLen); this.fxT = 0.6; }
-        if (s === 'walk') { this.tiltT = 0; }
+        if (s === 'walk') { this.tiltT = 0; this.walkPh = 0; }
     }
 
     decide() {
@@ -663,13 +666,20 @@ class Actor {
                     const sp = this.p.speed;
                     if (Math.abs(d) <= sp * dt) { this.x = this.tx; this.setState('idle'); break; }
                     this.x += Math.sign(d) * sp * dt;
-                    const rate = sp / 22;
-                    bob = Math.abs(Math.sin(this.clock * rate * Math.PI)) * 2 * this.k;
-                    waddle = Math.sin(this.clock * rate * Math.PI) * 1.5;
-                    const frames = this.role('walk');
-                    this.frameT += dt;
-                    if (this.frameT > 0.5 / rate * 2) { this.frameT = 0; this.frame++; }
-                    pose = frames;
+                    const rate = sp / 22;                  // steps per second
+                    const before = Math.floor(this.walkPh);
+                    this.walkPh += rate * dt;
+                    const ph = this.walkPh % 1;
+                    // little hop on every step (light, springy walk)
+                    bob = Math.pow(Math.sin(ph * Math.PI), 0.7) * 4 * this.k;
+                    waddle = Math.sin(this.walkPh * Math.PI) * 1.5;
+                    if (Math.floor(this.walkPh) !== before) {
+                        // foot touches down: next frame + a tiny squish
+                        this.frame++;
+                        const soft = (this.rec.look.squish ?? 0.5) * 2;
+                        if (soft > 0) this.sq = Math.min(this.sq, 1 - 0.05 * soft);
+                    }
+                    pose = this.role('walk');
                     break;
                 }
                 case 'doze':
@@ -1046,6 +1056,12 @@ function bindPanel() {
         const btn = e.target.closest('[data-del]');
         if (btn) deletePet(btn.dataset.del);
     });
+    $id('tavvy-list').addEventListener('input', (e) => {
+        if (e.target.matches?.('[data-size]')) onSizeInput(e.target, false);
+    });
+    $id('tavvy-list').addEventListener('change', (e) => {
+        if (e.target.matches?.('[data-size]')) onSizeInput(e.target, true);
+    });
 }
 
 /** Diagnostic: bring the bed to the middle of the screen and report what the page sees. */
@@ -1097,6 +1113,37 @@ function homeLabel(p) {
     return '다른 방';
 }
 
+/* ---------- per-pet size (phone / PC kept apart) ---------- */
+let sizeTouchedAt = -Infinity;
+
+function petSize(p, dev = device()) {
+    return p.look?.size?.[dev] || DEFAULT_SIZE[dev];
+}
+
+/** Built-in pets are 32-cell dot art drawn at 64px → sizes in steps of 32 keep every dot even. */
+function isSharp(p, size) {
+    const first = p.look?.roles?.idle?.[0] || '';
+    return first.startsWith('builtin:') && size % 32 === 0;
+}
+
+function sizeLabel(p, size) {
+    return `${size}px${isSharp(p, size) ? ' ✦선명' : ''}${size === DEFAULT_SIZE[device()] ? ' (기본)' : ''}`;
+}
+
+function onSizeInput(input, done) {
+    const pet = root?.pets.find(p => p.id === input.dataset.size);
+    if (!pet) return;
+    sizeTouchedAt = performance.now();
+    let v = Number(input.value);
+    // snap gently to sharp sizes for built-in pets
+    for (const s of [32, 64, 96, 128, 160, 192]) if (Math.abs(v - s) <= 2 && isSharp(pet, s)) v = s;
+    pet.look.size = { ...DEFAULT_SIZE, ...(pet.look.size || {}), [device()]: v };
+    const label = document.querySelector(`[data-sizeval="${CSS.escape(pet.id)}"]`);
+    if (label) label.textContent = sizeLabel(pet, v);
+    for (const a of actors) if (a.rec === pet) a.fitStage();
+    if (done) { input.value = v; saveSoon(); }
+}
+
 function renderPanel() {
     if (!$id('tavvy-list') || !root) return;
     const warn = $id('tavvy-warn');
@@ -1112,16 +1159,29 @@ function renderPanel() {
     const list = $id('tavvy-list');
     if (!root.pets.length) {
         list.innerHTML = '<div class="tavvy-note">아직 펫이 없어요.</div>';
+        list.dataset.html = '';
     } else {
-        list.innerHTML = root.pets.map(p => {
+        const html = root.pets.map(p => {
             const pers = PERSONALITIES[p.personality?.base]?.name || '?';
             const icon = imgUrl(p.look?.roles?.idle?.[0]);
+            const dev = device();
+            const size = petSize(p);
             return `<div class="tavvy-row">
   <img src="${esc(icon)}" alt="">
   <div class="tavvy-row-main"><b>${esc(p.name)}</b><span>${pers} · ${homeLabel(p)}</span></div>
   <div class="menu_button tavvy-del" data-del="${esc(p.id)}" title="삭제">삭제</div>
+  <label class="tavvy-size">
+    <span>크기(${dev === 'phone' ? '폰' : 'PC'})</span>
+    <input type="range" min="${SIZE_MIN}" max="${SIZE_MAX}" step="2" value="${size}" data-size="${esc(p.id)}">
+    <span class="tavvy-size-val" data-sizeval="${esc(p.id)}">${sizeLabel(p, size)}</span>
+  </label>
 </div>`;
         }).join('');
+        // don't rebuild while a size slider is being dragged (the list refreshes on its own every so often)
+        if (html !== list.dataset.html && performance.now() - sizeTouchedAt > 1500) {
+            list.innerHTML = html;
+            list.dataset.html = html;
+        }
     }
     const btn = $id('tavvy-create');
     btn.classList.toggle('disabled', !room || readOnly);

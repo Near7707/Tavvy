@@ -168,6 +168,17 @@
 .tavvy-settings .tavvy-row-main { flex: 1; display: flex; flex-direction: column; }
 .tavvy-settings .tavvy-row-main span { font-size: .85em; opacity: .75; }
 .tavvy-settings .tavvy-del { margin: 0; }
+.tavvy-settings .tavvy-row { flex-wrap: wrap; }
+.tavvy-settings .tavvy-size {
+    flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: .85em;
+    margin: 0;
+}
+.tavvy-settings .tavvy-size input[type="range"] { flex: 1; min-width: 80px; margin: 0; }
+.tavvy-settings .tavvy-size-val { min-width: 8.5em; opacity: .85; white-space: nowrap; }
 .tavvy-settings .menu_button.disabled { opacity: .5; }
 
 .tavvy-settings .tavvy-diag { white-space: pre-wrap; font-size: .8em; }
