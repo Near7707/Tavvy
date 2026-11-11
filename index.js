@@ -74,7 +74,8 @@ const EDGE_CHANCE = 0.2;        // on a ledge: chance a walk goes to the end (th
 const WATCH_MIN_CHARS = 150;    // a reply this long is worth climbing up to look at
 const LONG_WAIT = 20;           // s — a reply taking this long makes everyone glance at the chat more ("?")
 const BUMP_DIST = 0.42;         // × (sum of both widths) — how close two pets get before they bump
-const BUMP_CHANCE = 0.6;        // the rest just walk past each other
+const BUMP_CHANCE = 0.2;        // the rest just walk past each other
+const BUMP_REST = 60;           // seconds — after a bump, the same two pets just pass each other for this long
 
 /* =====================================================================
  * Storage (format version + safety rails)
@@ -516,6 +517,7 @@ class Actor {
         this.bumpReact = false;      // react when landing after a bump
         this.bumpWith = null;        // the pet it bumped into
         this.passing = new Set();    // pets it decided to walk past (no bump until they part)
+        this.bumpedAt = new Map();   // other pet → time of our last bump (rest time)
         this.build();
     }
 
@@ -1194,9 +1196,12 @@ function bumpCheck() {
             // only when one of them walks into the other
             const into = (x, y) => x.state === 'walk' && Math.sign(x.tx - x.x) === Math.sign(y.x - x.x);
             if (!into(a, b) && !into(b, a)) continue;
-            if (Math.random() >= BUMP_CHANCE) { a.passing.add(b); b.passing.add(a); continue; }
+            const last = a.bumpedAt.get(b);
+            const resting = last !== undefined && (performance.now() - last) / 1000 < BUMP_REST;
+            if (resting || Math.random() >= BUMP_CHANCE) { a.passing.add(b); b.passing.add(a); continue; }
             const d = a.x < b.x ? -1 : a.x > b.x ? 1 : (Math.random() < 0.5 ? -1 : 1);
             a.bump(d, b); b.bump(-d, a);
+            const t = performance.now(); a.bumpedAt.set(b, t); b.bumpedAt.set(a, t);
             a.passing.add(b); b.passing.add(a);    // no second bump until they have parted
         }
     }
