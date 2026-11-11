@@ -74,8 +74,8 @@ const EDGE_CHANCE = 0.2;        // on a ledge: chance a walk goes to the end (th
 const WATCH_MIN_CHARS = 150;    // a reply this long is worth climbing up to look at
 const LONG_WAIT = 20;           // s — a reply taking this long makes everyone glance at the chat more ("?")
 const BUMP_DIST = 0.42;         // × (sum of both widths) — how close two pets get before they bump
-const BUMP_CHANCE = 0.2;        // the rest just walk past each other
-const BUMP_REST = 60;           // seconds — after a bump, the same two pets just pass each other for this long
+const BUMP_CHANCE = 0.05;       // the rest just walk past each other
+const BUMP_REST = 300;          // seconds — after a bump, the same two pets just pass each other for this long
 
 /* =====================================================================
  * Storage (format version + safety rails)
@@ -615,12 +615,14 @@ class Actor {
         this.el.addEventListener('pointerdown', (e) => {
             if (e.button !== undefined && e.button !== 0) return;
             e.preventDefault(); e.stopPropagation();
+            if (down) return;                                   // one finger at a time — a second finger is ignored
+            if (this.held) { this.release(); return; }          // held with no finger on it = stuck → a tap frees it
             try { this.el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-            down = { x: e.clientX, y: e.clientY, picked: false };
+            down = { id: e.pointerId, x: e.clientX, y: e.clientY, picked: false };
             timer = setTimeout(() => pick(null), PICK_DELAY);
         });
         this.el.addEventListener('pointermove', (e) => {
-            if (!down) return;
+            if (!down || e.pointerId !== down.id) return;
             if (!down.picked && Math.hypot(e.clientX - down.x, e.clientY - down.y) > PICK_THRESHOLD) pick(e);
             if (this.held) {
                 const now = performance.now();
@@ -632,8 +634,8 @@ class Actor {
             }
         });
         const end = (e) => {
+            if (!down || e.pointerId !== down.id) return;
             clearTimeout(timer);
-            if (!down) return;
             const wasPicked = down.picked;
             down = null;
             try { this.el.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
@@ -642,6 +644,7 @@ class Actor {
         };
         this.el.addEventListener('pointerup', end);
         this.el.addEventListener('pointercancel', end);
+        this.el.addEventListener('lostpointercapture', end);   // finger lost without a pointerup → still let go
     }
 
     tap() {
