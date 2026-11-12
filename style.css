@@ -733,3 +733,169 @@
 .tavvy-win .tw-swatch-white i:last-child { background: #d4537e; }
 .tavvy-win .tw-theme.tw-on .tw-swatch { border-color: var(--tw-sel); }
 .tavvy-win .tw-theme.tw-on span { font-weight: 600; }
+
+/* ---------- 0.7.0 ---------- */
+
+/* pictures sit on the ground even when a frame is shaped differently from the base picture */
+.tavvy-body img { object-position: 50% 100%; }
+
+/* speech bubble over a pet's head */
+.tavvy-say {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: max-content;
+    max-width: 210px;
+    padding: 5px 10px;
+    border-radius: 12px;
+    background: #fff;
+    color: #3b2a33;
+    border: 1.5px solid #f0a6c0;
+    font-size: 13px;
+    line-height: 1.35;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+    pointer-events: none;
+    z-index: 3;
+    overflow-wrap: anywhere;
+    animation: tavvy-say-in .18s ease-out;
+}
+@keyframes tavvy-say-in { from { opacity: 0; } to { opacity: 1; } }
+.tavvy-bubble.tavvy-bubble-special { border-color: #f0a6c0; font-weight: 600; }
+
+/* the window above the phone keyboard: top of the visible part, filling it */
+.tavvy-modal.tavvy-kb { align-items: flex-start; padding: 6px; }
+
+/* night sky window colour */
+.tavvy-win[data-theme="night"] {
+    --tw-bg: #22232e; --tw-fg: #e9e8f2; --tw-line: #444760; --tw-sub: #a9a8bd;
+    --tw-card: #33354a; --tw-card2: #2c2e3c; --tw-field: #33354a; --tw-accent: #f0a6c0; --tw-on-accent: #2a1b23;
+    --tw-bar: #3b3d52; --tw-chip-bg: rgba(240, 166, 192, .22); --tw-chip-fg: #f6d3e0; --tw-good-bg: rgba(130, 190, 110, .22); --tw-good-fg: #cfe8c3;
+    --tw-sel: #f0a6c0; --tw-tab-on: #33354a;
+    backdrop-filter: none;
+}
+.tavvy-win[data-theme="night"] .tavvy-win-head { background: #2c2e3c; }
+.tavvy-win[data-theme="night"] select option { color: initial; }
+.tavvy-win .tw-swatch-night { background: #22232e; }
+.tavvy-win .tw-swatch-night i:first-child { background: #444760; }
+.tavvy-win .tw-swatch-night i:last-child { background: #f0a6c0; }
+.tavvy-win .tw-themes { gap: 6px; }
+
+/* five tabs fit on a phone */
+.tavvy-win .tw-tabs { gap: 4px; }
+.tavvy-win .tw-tab { padding: 7px 2px; font-size: 12.5px; white-space: nowrap; }
+
+.tavvy-win textarea {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--tw-line);
+    background: var(--tw-field);
+    color: var(--tw-fg);
+    font: inherit;
+    font-size: 14px;
+    resize: vertical;
+    min-height: 2.6em;
+}
+.tavvy-win .tw-btn.tw-busy { opacity: .6; pointer-events: none; }
+.tavvy-win .tw-profrow[hidden] { display: none; }
+
+/* 그림 tab */
+.tavvy-win .tw-slots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.tavvy-win .tw-slot {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 8px 4px 7px;
+    border-radius: 12px;
+    background: var(--tw-card);
+    border: 1px solid var(--tw-line);
+    cursor: pointer;
+    text-align: center;
+    min-width: 0;
+}
+.tavvy-win .tw-slot b { font-size: 12.5px; font-weight: 600; }
+.tavvy-win .tw-slot .tw-sub { font-size: 11px; line-height: 1.25; }
+.tavvy-win .tw-slot-imgs { height: 40px; display: flex; align-items: center; justify-content: center; gap: 2px; }
+.tavvy-win .tw-slot-imgs img { height: 36px; width: 30px; object-fit: contain; image-rendering: pixelated; }
+.tavvy-win .tw-slot-none { background: transparent; border-style: dashed; }
+.tavvy-win .tw-slot-empty { font-size: 11px; color: var(--tw-sub); gap: 4px; }
+.tavvy-win .tw-fold { margin-top: 10px; border-top: 1px solid var(--tw-line); padding-top: 8px; }
+.tavvy-win .tw-fold summary { cursor: pointer; font-size: 13px; font-weight: 600; padding: 4px 0 8px; color: var(--tw-fg); }
+.tavvy-win .tw-roled-head { display: flex; align-items: center; gap: 12px; margin: 12px 0 2px; }
+.tavvy-win .tw-roled-head b { font-size: 16px; }
+.tavvy-win .tw-roled-prev {
+    flex: none;
+    width: 72px;
+    height: 72px;
+    border-radius: 16px;
+    background: var(--tw-card2);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+}
+.tavvy-win .tw-roled-prev img { width: 80%; height: 80%; object-fit: contain; object-position: 50% 100%; image-rendering: pixelated; margin-bottom: 6%; }
+.tavvy-win .tw-frames { display: flex; flex-wrap: wrap; gap: 8px; }
+.tavvy-win .tw-frame {
+    position: relative;
+    width: 56px;
+    height: 56px;
+    border-radius: 12px;
+    background: var(--tw-card);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.tavvy-win .tw-frame img { width: 78%; height: 78%; object-fit: contain; image-rendering: pixelated; }
+.tavvy-win .tw-frame span { position: absolute; left: 4px; bottom: 2px; font-size: 10px; color: var(--tw-sub); }
+.tavvy-win .tw-frame i[data-delframe] {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--tw-accent);
+    color: var(--tw-on-accent);
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+.tavvy-win .tw-frame em[data-moveframe] {
+    position: absolute;
+    left: -6px;
+    top: 50%;
+    margin-top: -10px;
+    width: 18px;
+    height: 20px;
+    border-radius: 6px;
+    background: var(--tw-card2);
+    border: 1px solid var(--tw-line);
+    color: var(--tw-sub);
+    font-size: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+.tavvy-win .tw-frame-add { background: transparent; border: 1px dashed var(--tw-line); color: var(--tw-sub); cursor: pointer; box-sizing: border-box; }
+
+/* 대사 tab: special days */
+.tavvy-win .tw-dates { display: flex; flex-direction: column; gap: 8px; }
+.tavvy-win .tw-dates:empty { display: none; }
+.tavvy-win .tw-date {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) 30px;
+    gap: 6px;
+    align-items: center;
+    padding: 8px;
+    border-radius: 12px;
+    background: var(--tw-card);
+}
+.tavvy-win .tw-date select { padding: 6px 6px; font-size: 13px; }
+.tavvy-win .tw-date input { grid-column: 1 / -1; font-size: 13px; }
+.tavvy-win .tw-icon-small { width: 30px; height: 30px; font-size: 14px; }

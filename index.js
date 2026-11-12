@@ -14,6 +14,9 @@
 //          liking your messages, not wanting to go to bed, dozing off while you're away,
 //          pressing against the screen, softer reactions, and little gifts.
 // 0.6.0: one Tavvy window (pet list, journal, behaviours, looks, settings) + saved looks.
+// 0.7.0: the window fits above the phone keyboard, "작별하기", a night-sky window colour;
+//        pictures for each action (several frames, speed, which way each one faces),
+//        speech lines for little moments (optionally filled in by AI), and special days.
 
 import { saveSettings, saveSettingsDebounced, getRequestHeaders, eventSource, event_types } from '../../../../script.js';
 
@@ -165,6 +168,87 @@ const TEAR_COLOR = '#6fc3ff', TEAR_ANGLE = 30;   // degrees (0 = sideways)
 const GIFT_CHANCE = 0.25;       // 애교 only, when reacting to you
 const GIFTS = ['🌼', '🍀', '🍬', '⭐', '🎁'];
 
+// pictures per action (6-2). key = role name in look.roles; fb = the picture used when this one is empty.
+// Every role here is actually used by some behaviour.
+const ROLE_GROUPS = [
+    { key: 'main', name: '자주 쓰는 동작', roles: [
+        { key: 'idle', name: '기본', note: '숨쉬기 · 꼭 필요해요' },
+        { key: 'walk', name: '걷기', fb: 'idle' },
+        { key: 'held', name: '들림', fb: 'surprise' },
+        { key: 'dance', name: '춤추기', fb: 'happy' },
+        { key: 'sleep', name: '졸기', fb: 'idle' },
+        { key: 'cry', name: '울기', fb: 'surprise' },
+    ] },
+    { key: 'move', name: '움직이기 더 보기', roles: [
+        { key: 'jump', name: '점프·착지', fb: 'idle' },
+        { key: 'fall', name: '떨어짐', fb: 'surprise' },
+        { key: 'climb', name: '말풍선 오르기', fb: 'jump' },
+        { key: 'roll', name: '구르기', fb: 'idle' },
+    ] },
+    { key: 'react', name: '반응', roles: [
+        { key: 'happy', name: '기쁨', fb: 'idle' },
+        { key: 'angry', name: '화남', fb: 'idle' },
+        { key: 'surprise', name: '놀람', fb: 'idle' },
+        { key: 'curious', name: '궁금', fb: 'look' },
+        { key: 'look', name: '바라보기', fb: 'idle' },
+        { key: 'flick', name: '고개 홱', fb: 'look' },
+        { key: 'aside', name: '등 돌리기', fb: 'walk' },
+        { key: 'fluster', name: '당황', fb: 'idle' },
+        { key: 'wave', name: '손 흔들기', fb: 'happy' },
+    ] },
+    { key: 'rest', name: '쉬기·먹기', roles: [
+        { key: 'sit', name: '앉기', fb: 'idle' },
+        { key: 'eat', name: '먹기', fb: 'idle' },
+        { key: 'nod', name: '식후 꾸벅', fb: 'sleep' },
+        { key: 'full', name: '배부름', fb: 'idle' },
+    ] },
+    { key: 'special', name: '특별 순간', roles: [
+        { key: 'appear', name: '등장', fb: 'jump' },
+        { key: 'press', name: '화면에 붙기', fb: 'happy' },
+        { key: 'gift', name: '선물 주기', fb: 'happy' },
+        { key: 'cheer', name: '축하', fb: 'dance' },
+    ] },
+];
+const ROLE_DEFS = Object.fromEntries(ROLE_GROUPS.flatMap(g => g.roles).map(r => [r.key, r]));
+const STEP_ROLES = { walk: '걸음에 맞춰 넘어가요', eat: '한 입 먹을 때마다 넘어가요' };   // frames follow steps / bites, not a clock
+const FRAME_FPS = { slow: 2.5, normal: 5, fast: 9 };
+const SPEED_NAMES = { slow: '느리게', normal: '보통', fast: '빠르게' };
+const FRAMES_MAX = 8;            // pictures in one action at most
+
+// speech lines (6-2)
+const TALK_MOMENTS = [
+    { key: 'wake', name: '깨울 때', ex: '좋은 아침!' },
+    { key: 'sleep', name: '재울 때', ex: '잘 자…' },
+    { key: 'pat', name: '쓰다듬을 때', ex: '헤헤, 간지러워' },
+    { key: 'meal', name: '밥 다 먹고', ex: '잘 먹었다!' },
+    { key: 'play', name: '혼자 놀 때', ex: '흥얼흥얼~' },
+    { key: 'wait', name: '답 기다릴 때', ex: '언제 와?' },
+    { key: 'level', name: '단계 오를 때', ex: '우리 더 친해졌다!' },
+    { key: 'reunion', name: '오랜만에 만났을 때', ex: '{{user}}, 보고 싶었어!' },
+];
+const TALK_FREQ = { off: '끔', some: '가끔', often: '자주' };
+const TALK_CHANCE = { some: 0.35, often: 0.7 };          // a moment comes → says something
+const TALK_PLAY = { some: 0.05, often: 0.12 };           // each "what next?" while playing alone
+const TALK_ALWAYS = ['level', 'reunion'];                // these always speak (unless 끔)
+const TALK_GAP = 8;              // s — ordinary lines not closer together than this
+const SAY_MS = 2600;             // how long a speech bubble stays
+const LINE_MAX = 40;             // characters in one line
+const LINES_MAX = 10;            // lines per moment
+const PERS_DESC = {
+    aegyo: '애교 많고 다정해요', saechim: '새침하고 쑥스러움을 잘 타요', neugut: '느긋하고 늘 졸려요',
+    simsul: '툴툴대지만 속은 다정해요', musim: '말수가 적고 무심해요',
+};
+
+// special days (6-2). Every year on the month/day. kind: me = 내 생일, char = 캐릭터 생일, anniv = 기념일, met = 만난 날
+const DATE_KINDS = { me: '내 생일', char: '캐릭터 생일', anniv: '기념일' };
+const LATE_DAYS = 7;             // missed the day → a "늦었지만…" version within this many days (the day itself counts)
+const SPECIAL_LINES = {
+    me: { aegyo: '생일 축하해 ♥', saechim: '…생일이라며. 축하해 줄게', neugut: '하암… 생일이구나. 축하해~', simsul: '생일이라고? …축하해 💢', musim: '…생일 축하해.' },
+    char: { aegyo: '오늘 내 생일이야! 축하해 줘 ♥', saechim: '…오늘 내 생일인 거 알지?', neugut: '오늘 내 생일이래… 하암', simsul: '내 생일인데 선물은? 💢', musim: '…생일.' },
+    anniv: { aegyo: '오늘 우리 기념일이야 ♥', saechim: '…기념일인 거 기억했어?', neugut: '기념일이네~ 느긋하게 보내자', simsul: '기념일 잊은 거 아니지? 💢', musim: '…기념일. 고마워.' },
+    met: { aegyo: '만난 지 {n}년! 고마워 ♥', saechim: '…만난 지 {n}년이네. 나쁘지 않았어.', neugut: '벌써 {n}년이야? 하암…', simsul: '{n}년이나 같이 있었네 💢 …앞으로도.', musim: '…{n}년.' },
+};
+
 /* =====================================================================
  * Storage (format version + safety rails)
  * ===================================================================== */
@@ -183,7 +267,8 @@ function defaultSettings() {
         lineLedges: true,                      // flat / document chat style: borders between messages are ledges
         badge: true,                           // number of waiting messages on the bed
         heartMode: 'both',                     // closeness shown as 'both' (♥♥ 친구) / 'hearts' / 'name' / 'hide'
-        winTheme: 'theme',                     // the Tavvy window: 'theme' (follow SillyTavern) / 'cream' / 'white'
+        winTheme: 'theme',                     // the Tavvy window: 'theme' (follow SillyTavern) / 'cream' / 'white' / 'night'
+        talkProfile: '',                       // connection profile used to write speech lines with AI ('' = the current connection)
         backup: { lastDay: null, files: [] },  // daily backups: [{ day, path, pets }]
     };
 }
@@ -200,8 +285,11 @@ function newPetRecord({ id, name, personality, look }) {
         createdAt: now,
         look,                                         // images, facing, size, softness
         personality: { base: personality, traits: [] },
-        lines: [],                                    // optional speech lines
-        dates: [],                                    // special days
+        lines: {},                                    // speech lines per moment: { wake: ['…'], … }
+        talkFreq: 'some',                             // how often it speaks: 'off' / 'some' / 'often'
+        dates: [],                                    // special days: [{ id, kind, md: 'MM-DD', msg }]
+        metOn: true,                                  // celebrate the day we met every year
+        celebrated: {},                               // date id ('met' for the day we met) → the day it was last celebrated
         sounds: {},                                   // per-moment sound files (empty = default)
         home: null,                                   // { chatId, integrity } or null = homeless
         bowl: { me: 0, them: 0, tokens: 0 },          // food waiting
@@ -228,11 +316,13 @@ function migrate(r) {
     fillDefaults(r.settings ??= {}, defaultSettings());
     for (const p of r.pets) {
         if (!p || typeof p !== 'object') continue;
+        if (Array.isArray(p.lines)) p.lines = p.lines.length ? { play: p.lines.filter(x => typeof x === 'string') } : {};   // was a plain list (always empty)
         const blank = newPetRecord({ id: p.id, name: p.name, personality: 'aegyo', look: {} });
         delete blank.createdAt; delete blank.lastVisit; delete blank.home;
         fillDefaults(p, blank);
         p.look ??= {};
-        fillDefaults(p.look, { kind: 'single', facing: 'front', roles: {}, baseline: 0, size: DEFAULT_SIZE, squish: 0.5 });
+        fillDefaults(p.look, { kind: 'single', facing: 'front', roles: {}, roleOpts: {}, baseline: 0, size: DEFAULT_SIZE, squish: 0.5 });
+        if (!Array.isArray(p.dates)) p.dates = [];
     }
     // saved looks (내가 올린 외형): pictures uploaded once can be picked again for new pets.
     // Pictures pets already wear go in on their own (once — they are found by their file).
@@ -248,10 +338,12 @@ function migrate(r) {
             facing: p.look.facing || 'front',
             squish: p.look.squish ?? 0.5,
             roles: structuredClone(p.look.roles),
+            roleOpts: structuredClone(p.look.roleOpts || {}),
             baseline: p.look.baseline || 0,
             createdAt: p.createdAt || Date.now(),
         });
     }
+    for (const l of r.looks) if (l && typeof l === 'object' && (!l.roleOpts || typeof l.roleOpts !== 'object')) l.roleOpts = {};
     // future: if (r.formatVersion < 2) { ...; r.formatVersion = 2; }
 }
 
@@ -393,45 +485,78 @@ function builtinLook(key) {
     const b = BUILTIN[key];
     const roles = {};
     for (const [role, files] of Object.entries(b.roles)) roles[role] = files.map(f => `builtin:${key}/${f}`);
-    return { kind: b.roles.walk?.length > 1 ? 'frames' : 'single', facing: b.facing, roles, baseline: b.baseline, size: { ...DEFAULT_SIZE }, squish: 0.5 };
+    return { kind: b.roles.walk?.length > 1 ? 'frames' : 'single', facing: b.facing, roles, roleOpts: {}, baseline: b.baseline, size: { ...DEFAULT_SIZE }, squish: 0.5 };
+}
+
+/** The box around the visible (non-transparent) part of an image, or null if it is empty. */
+function opaqueBox(g, w, h) {
+    const d = g.getImageData(0, 0, w, h).data;
+    let x0 = w, y0 = h, x1 = -1, y1 = -1;
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            if (d[(y * w + x) * 4 + 3] > 8) {
+                if (x < x0) x0 = x; if (x > x1) x1 = x;
+                if (y < y0) y0 = y; if (y > y1) y1 = y;
+            }
+        }
+    }
+    return x1 >= 0 ? { sx: x0, sy: y0, sw: x1 - x0 + 1, sh: y1 - y0 + 1 } : null;
+}
+
+async function fileCanvas(file) {
+    const url = URL.createObjectURL(file);
+    try {
+        const im = await loadImage(url);
+        const cv = document.createElement('canvas');
+        cv.width = im.naturalWidth; cv.height = im.naturalHeight;
+        const g = cv.getContext('2d');
+        g.drawImage(im, 0, 0);
+        return { cv, g, w: cv.width, h: cv.height };
+    } finally {
+        URL.revokeObjectURL(url);
+    }
+}
+
+/**
+ * Several pictures for one action (frames): cropped with ONE shared box when they are the same size,
+ * so the frames don't jump around. Returns [{ base64, dataUrl, w, h }] in the given order.
+ */
+async function prepareFrames(files, crop) {
+    const cvs = await Promise.all(files.map(fileCanvas));
+    const same = cvs.every(c => c.w === cvs[0].w && c.h === cvs[0].h);
+    let shared = null;
+    if (crop && same) {
+        for (const c of cvs) {
+            const b = opaqueBox(c.g, c.w, c.h);
+            if (!b) continue;
+            if (!shared) { shared = { ...b }; continue; }
+            const x1 = Math.max(shared.sx + shared.sw, b.sx + b.sw), y1 = Math.max(shared.sy + shared.sh, b.sy + b.sh);
+            shared.sx = Math.min(shared.sx, b.sx); shared.sy = Math.min(shared.sy, b.sy);
+            shared.sw = x1 - shared.sx; shared.sh = y1 - shared.sy;
+        }
+    }
+    return cvs.map(c => finishPng(c, crop && !same, shared));
 }
 
 /** Read a user PNG, optionally crop transparent margins, limit size. Returns { base64, w, h }. */
 async function preparePng(file, crop) {
-    const url = URL.createObjectURL(file);
-    try {
-        const im = await loadImage(url);
-        let sx = 0, sy = 0, sw = im.naturalWidth, sh = im.naturalHeight;
-        const cv = document.createElement('canvas');
-        cv.width = sw; cv.height = sh;
-        const g = cv.getContext('2d');
-        g.drawImage(im, 0, 0);
-        if (crop) {
-            const d = g.getImageData(0, 0, sw, sh).data;
-            let x0 = sw, y0 = sh, x1 = -1, y1 = -1;
-            for (let y = 0; y < sh; y++) {
-                for (let x = 0; x < sw; x++) {
-                    if (d[(y * sw + x) * 4 + 3] > 8) {
-                        if (x < x0) x0 = x; if (x > x1) x1 = x;
-                        if (y < y0) y0 = y; if (y > y1) y1 = y;
-                    }
-                }
-            }
-            if (x1 >= 0) { sx = x0; sy = y0; sw = x1 - x0 + 1; sh = y1 - y0 + 1; }
-        }
-        const MAX = 384;
-        const k = Math.min(1, MAX / Math.max(sw, sh));
-        const out = document.createElement('canvas');
-        out.width = Math.max(1, Math.round(sw * k));
-        out.height = Math.max(1, Math.round(sh * k));
-        const og = out.getContext('2d');
-        og.imageSmoothingEnabled = k < 1;
-        og.drawImage(cv, sx, sy, sw, sh, 0, 0, out.width, out.height);
-        const dataUrl = out.toDataURL('image/png');
-        return { base64: dataUrl.split(',')[1], dataUrl, w: out.width, h: out.height };
-    } finally {
-        URL.revokeObjectURL(url);
-    }
+    return finishPng(await fileCanvas(file), crop, null);
+}
+
+function finishPng({ cv, g, w, h }, crop, box) {
+    let sx = 0, sy = 0, sw = w, sh = h;
+    const b = box || (crop ? opaqueBox(g, w, h) : null);
+    if (b) ({ sx, sy, sw, sh } = b);
+    const MAX = 384;
+    const k = Math.min(1, MAX / Math.max(sw, sh));
+    const out = document.createElement('canvas');
+    out.width = Math.max(1, Math.round(sw * k));
+    out.height = Math.max(1, Math.round(sh * k));
+    const og = out.getContext('2d');
+    og.imageSmoothingEnabled = k < 1;
+    og.drawImage(cv, sx, sy, sw, sh, 0, 0, out.width, out.height);
+    const dataUrl = out.toDataURL('image/png');
+    return { base64: dataUrl.split(',')[1], dataUrl, w: out.width, h: out.height };
 }
 
 async function uploadFile(name, base64) {
@@ -456,6 +581,18 @@ async function deleteFile(path) {
     } catch (e) {
         console.warn('[Tavvy] could not delete file', path, e);
     }
+}
+
+/** Which action a picture list belongs to (lists are compared by identity). */
+function roleKeyOf(look, list) {
+    for (const k in look.roles || {}) if (look.roles[k] === list) return k;
+    return null;
+}
+
+/** {{user}} → your name. */
+function fillUser(text) {
+    const me = ctx().name1 || '나';
+    return String(text || '').replace(/\{\{user\}\}/gi, me).trim();
 }
 
 function petFiles(pet) {
@@ -725,6 +862,13 @@ class Actor {
         this.glass = null;           // reflection / breath on the screen while pressed against it
         this.meHeart = false;        // 무심 (내편): a ♥ this time
         this.idleTried = false;      // already rolled for "dozing off while you're away" this quiet spell
+        this.special = null;         // special days to celebrate when it comes out (birthday…)
+        this.sayEl = null;           // speech bubble over its head
+        this.lastTalk = -1e9;        // ms — last ordinary line
+        this.aside = false;          // walking away with its back turned (등 돌리기)
+        this.climbJump = false;      // the big hop up onto a message (말풍선 오르기)
+        this.cheering = false;       // dancing because closeness went up (축하)
+        this.animList = null; this.animT0 = 0;   // frames: which picture list is playing, since when
         this.build();
     }
 
@@ -851,6 +995,7 @@ class Actor {
     /** After eating (and any nap / dance): closeness went up → a little party; full → doze off; a reply waiting → go look. */
     mealDone() {
         if (this.levelPending()) return this.startCheer();          // comes back here after the dance
+        this.talk('meal');
         if (this.reunionMeal) { this.reunionMeal = false; if (this.afterReunionMeal()) return; }
         if (this.fullNow) { this.fullNow = false; fx(this, '♪', 'tavvy-fx-small'); return this.setState('doze'); }
         const el = this.afterMeal; this.afterMeal = null;
@@ -888,6 +1033,8 @@ class Actor {
         showCheer(this, from, to);
         this.after = 'idle';
         this.setState('dance');
+        this.cheering = true;
+        this.talk('level');
     }
 
     /** Stop and react to you (the person in front of the screen). */
@@ -1066,6 +1213,7 @@ class Actor {
         if (Math.abs(tx - this.x) <= 10) return false;
         this.dir = away; this.tx = tx; this.edge = false;
         this.setState('walk');
+        this.aside = true;                              // walking off with its back to it (등 돌리기 picture)
         return true;
     }
 
@@ -1078,6 +1226,10 @@ class Actor {
         const greets = k !== 'musim' && !plan.skip;             // 무심 never greets; lots of food soon after → straight to it
         if (greets) q.push({ k: 'scan', d: 0.7 });
         if (greets || plan.teary) q.push({ k: 'found', d: 0.4 });
+        // a special day: first of all coloured ✦, a dance, and what it wants to say
+        const sp = this.special; this.special = null;
+        if (sp?.length) q.unshift({ k: 'party', d: 1.9, days: sp }, ...sp.map(x => ({ k: 'line', d: 2.9, text: x.text })));
+        else if (!(plan.away >= REVISIT_DAYS * 86400e3 && this.talk('reunion'))) this.talk('wake');
         if (plan.teary) q.push({ k: 'teary', d: 1.6 });          // so glad it is teary
         if (greets) {
             const g = { aegyo: [['wave', 0.7], ['bounce', 0.8]], saechim: [['flick', 1.0]], neugut: [['yawn', 1.1], ['wave', 0.7]], simsul: [['grumpy', 1.0]] }[k] || [];
@@ -1173,6 +1325,7 @@ class Actor {
         if (!lean && !this.air) { this.air = true; this.vy = 300; this.vx = 0; this.next = 'idle'; }
         if (rapid) return fx(this, '💢');   // 연타 싫어! (closeness is not lost)
         patPet(this.rec);
+        this.talk('pat');
         if (lean) {
             this.leanD = px == null || Math.abs(px - this.x) < this.w * 0.12 ? (Math.random() < 0.5 ? -1 : 1) : px > this.x ? 1 : -1;
             this.setState('lean');
@@ -1199,6 +1352,7 @@ class Actor {
 
     land(impact) {
         this.air = false;
+        this.climbJump = false;
         this.leftPlat = null;
         this.vy = 0; this.vx = 0;
         this.body.style.transformOrigin = '';
@@ -1233,6 +1387,7 @@ class Actor {
     setState(s) {
         if (this.big && s !== this.state) this.endBig();
         this.state = s; this.t = 0;
+        this.aside = false; this.cheering = false;
         this.sqT = 1;
         if (s === 'idle') { this.until = rand(...this.p.idle); this.tiltT = 0; }
         if (s === 'doze') { this.until = rand(...this.p.dozeLen) * (this.isFull() ? 1.4 : 1); this.fxT = 0.6; }
@@ -1305,6 +1460,7 @@ class Actor {
         }
         // while a reply is being written, sometimes glance at the chat (more often when curious)
         if (gen.active && Math.random() < (this.fidgety() ? 0.45 : 0.3)) return this.startLook('peek', (stage.left + stage.right) / 2);
+        if (!gen.active) this.talk('play');                         // playing alone: a line now and then
         if (r < dz + (full ? 0.45 : 0.62)) {
             const [L, R] = this.range();
             if (this.plat && Math.random() < EDGE_CHANCE) {
@@ -1371,6 +1527,7 @@ class Actor {
         this.after = 'idle';
         this.sq = 1.08;
         this.setState('jump');
+        this.climbJump = true;
     }
 
     /** Its ledge disappeared (deleted / swiped / chat reloaded) → falls. */
@@ -1442,6 +1599,7 @@ class Actor {
     startWait() {
         this.waiting = true;
         this.tried = new WeakSet();
+        this.talk('wait');
         if (this.free()) this.setState('wait');
     }
 
@@ -1502,6 +1660,7 @@ class Actor {
         this.onGone = done;
         this.waiting = false;
         if (this.state === 'off') { this.vanish(); bumpBed(); return; }
+        this.talk('sleep');
         this.plat = null;      // waves where it is, then goes into the bed (doesn't ride a ledge away)
         this.air = false;
         this.setState(resist ? 'resist' : 'wave');
@@ -1512,6 +1671,7 @@ class Actor {
         if (this.gone) return;
         this.gone = true;
         this.el.remove();
+        if (this.sayEl) { const el = this.sayEl; this.sayEl = null; clearTimeout(this.sayTimer); setTimeout(() => el.remove(), 1400); }   // "잘 자…" stays a moment
         for (const sp of sparkles.filter(x => x.a === this)) sp.remove(false);   // eaten already (record) — just the show stops
         const i = actors.indexOf(this);
         if (i >= 0) actors.splice(i, 1);
@@ -1570,7 +1730,7 @@ class Actor {
                 }
             }
             if (!landed && this.y <= 0) { const impact = -this.vy; this.y = 0; this.land(impact); }
-            pose = this.state === 'fall' ? this.role('fall', 'surprise') : this.role('jump', 'idle');
+            pose = this.state === 'fall' ? this.rp('fall') : this.state === 'appear' ? this.rp('appear') : this.climbJump ? this.rp('climb') : this.rp('jump');
         } else if (!this.trackPlat()) {
             // its ledge went away this frame (falling or gone off the top)
             if (this.state === 'off') return;
@@ -1579,6 +1739,7 @@ class Actor {
                 case 'idle':
                 case 'appear':
                     breath = 1;
+                    if (this.state === 'idle' && this.isFull()) pose = this.rp('full');
                     if (this.state === 'idle' && (this.food > 0 || this.mealPending)) { this.decide(); break; }   // food coming → stop and eat
                     if (this.state === 'idle' && this.t > 0.3 && this.wantsFollow()) { this.startFollow(); break; }   // 관심: your hand
                     if (this.t > this.until) this.decide();
@@ -1598,6 +1759,7 @@ class Actor {
                     } else if (k === 'simsul') {                         // waits… 💢
                         this.tiltT = d * 6;
                         if (this.fxT === 0 && this.t > 1.0) { this.fxT = 1; fx(this, '💢'); }
+                        if (this.fxT === 1) pose = this.rp('angry');
                     } else {
                         this.tiltT = d * 6;
                         if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '?', 'tavvy-fx-small'); }
@@ -1645,6 +1807,7 @@ class Actor {
                 case 'resist': {                       // 단짝: doesn't want to go to bed yet (도리도리)
                     const k = this.rec.personality?.base, d = this.side ? this.dir : 1;
                     this.sqT = 0.92;
+                    pose = k === 'simsul' ? this.rp('angry') : k === 'saechim' ? this.rp('flick') : k === 'musim' ? this.role('idle') : this.rp('fluster');
                     if (k === 'saechim') this.tiltT = this.t < 0.15 ? 0 : -d * 10;              // 홱
                     else if (k === 'musim') this.tiltT = Math.sin(this.t * 10) * 4;
                     else this.tiltT = Math.sin(this.t * 16) * 9;
@@ -1713,7 +1876,7 @@ class Actor {
                         const soft = (this.rec.look.squish ?? 0.5) * 2;
                         if (soft > 0) this.sq = Math.min(this.sq, 1 - 0.05 * soft);
                     }
-                    pose = this.role('walk');
+                    pose = this.aside ? this.rp('aside') : this.role('walk');
                     break;
                 }
                 case 'doze':
@@ -1727,6 +1890,7 @@ class Actor {
                 case 'crouch':                         // gathering itself for a big hop
                     this.sqT = 0.8;
                     breath = 0;
+                    pose = this.rp('climb');
                     if (this.t > 0.35) this.launch();
                     break;
                 case 'perch':                          // sitting on a message
@@ -1744,10 +1908,12 @@ class Actor {
                     const k = this.look?.kind, d = this.look?.d || 1;
                     breath = 1;
                     pose = this.role('look', 'idle');
-                    if (k === 'glance') { this.tiltT = this.t < 0.6 ? d * 6 : -d * 9; }           // look… then turn away
-                    else if (k === 'flick') { this.tiltT = this.t < 0.15 ? 0 : -d * 9; }
-                    else if (k === 'up' || k === 'peek') { this.tiltT = d * 4; }
+                    if (k === 'glance') { this.tiltT = this.t < 0.6 ? d * 6 : -d * 9; if (this.t >= 0.6) pose = this.rp('flick'); }   // look… then turn away
+                    else if (k === 'flick') { this.tiltT = this.t < 0.15 ? 0 : -d * 9; if (this.t >= 0.15) pose = this.rp('flick'); }
+                    else if (k === 'up') { this.tiltT = d * 4; }
+                    else if (k === 'peek' || k === '?') { this.tiltT = d * 4; pose = this.rp('curious'); }
                     else if (k === '♥') { this.tiltT = 0; pose = this.role('happy', 'idle'); }
+                    else if (k === '💢' || k === '흥') { this.tiltT = d * 4; pose = this.rp('angry'); }
                     else this.tiltT = d * 4;
                     if (this.t > this.until) {
                         this.look = null;
@@ -1821,7 +1987,7 @@ class Actor {
                     }
                     break;
                 case 'dance': {                        // feast finished: a happy little dance
-                    pose = this.role('dance', 'happy', 'idle');
+                    pose = this.cheering ? this.rp('cheer') : this.role('dance', 'happy', 'idle');
                     const beat = Math.floor(this.t * 2.2);
                     bob = Math.abs(Math.sin(this.t * Math.PI * 2.2)) * 7 * this.k;
                     this.tiltT = (beat % 2 ? 1 : -1) * 10;
@@ -1857,6 +2023,7 @@ class Actor {
                         if (this.fxT === 1 && this.t > 0.45) { this.fxT = 2; fx(this, '♥'); }
                     } else if (k === 'saechim') {                        // looks… turns away (close: looks back, small ♥)
                         this.tiltT = this.t < 0.6 ? d * 5 : close && this.t > 1.2 ? d * 4 : -d * 9;
+                        if (this.t >= 0.6 && !(close && this.t > 1.2)) pose = this.rp('flick');
                         if (close && this.fxT === 0 && this.t > 1.3) { this.fxT = 1; fx(this, '♥', 'tavvy-fx-small'); }
                     } else if (k === 'neugut') {                         // looks, ♪ (then dozes off)
                         this.tiltT = d * 3;
@@ -1866,6 +2033,7 @@ class Actor {
                         if (close && this.fxT === 1 && this.t > 0.9) { this.fxT = 2; fx(this, '♥'); }
                         this.tiltT = this.fxT === 2 ? 0 : -d * 4;
                         if (this.fxT === 2) pose = this.role('happy', 'idle');
+                        else if (this.fxT === 1) pose = this.rp('angry');
                     } else {                                             // 무심: "…" (then backs off)
                         this.tiltT = 0;
                         if (this.fxT === 0 && this.t > 0.1) { this.fxT = 1; fx(this, '…'); }
@@ -1881,6 +2049,17 @@ class Actor {
                     const first = !this.gfx; this.gfx = true;
                     pose = this.role('look', 'idle');
                     switch (g.k) {
+                        case 'party':                                                                   // 특별한 날: ✦ + 춤
+                            pose = this.rp('cheer');
+                            if (first) { markCelebrated(this.rec, g.days); burstStars(this); }
+                            bob = Math.abs(Math.sin(this.t * Math.PI * 2.2)) * 7 * this.k;
+                            this.tiltT = (Math.floor(this.t * 2.2) % 2 ? 1 : -1) * 10;
+                            if (first || ((this.t + dt) % 0.95) < dt) fx(this, '♪');
+                            break;
+                        case 'line':                                                                    // 축하 말
+                            this.tiltT = 0; pose = this.role('happy', 'idle');
+                            if (first) { this.speak(g.text, 2800, 60); fx(this, '♥', 'tavvy-fx-small'); }
+                            break;
                         case 'scan': this.tiltT = Math.sin(this.t * 8) * 7; break;                       // 두리번
                         case 'found': this.tiltT = 0; if (first) { fx(this, '!'); this.sq = 0.9; } break;
                         case 'teary':                                                                   // 울먹
@@ -1893,9 +2072,9 @@ class Actor {
                             bob = Math.abs(Math.sin(this.t * Math.PI * 2.5)) * 6 * this.k;
                             if (first) fx(this, '♥');
                             break;
-                        case 'flick': this.tiltT = this.t < 0.15 ? d * 4 : -d * 9; break;              // 밥 못 본 척 고개 홱
+                        case 'flick': this.tiltT = this.t < 0.15 ? d * 4 : -d * 9; if (this.t >= 0.15) pose = this.rp('flick'); break;   // 밥 못 본 척 고개 홱
                         case 'yawn': this.tiltT = -d * 3; pose = this.role('idle'); if (first) fx(this, '하암'); break;
-                        case 'grumpy': this.tiltT = -d * 4; if (first) fx(this, '💢'); break;          // 왜 이제 와
+                        case 'grumpy': this.tiltT = -d * 4; pose = this.rp('angry'); if (first) fx(this, '💢'); break;   // 왜 이제 와
                         default: break;
                     }
                     if (this.t > g.d) { this.gi++; this.t = 0; this.gfx = false; }
@@ -1906,6 +2085,7 @@ class Actor {
                     const [L, R] = this.range();
                     this.x = clamp(this.x + this.dir * (45 / this.until) * dt, L, Math.max(L, R));
                     this.spin = 360 * this.dir * f;
+                    pose = this.rp('roll');
                     if (f >= 1) { this.spin = 0; this.body.style.transformOrigin = ''; this.setState('idle'); }
                     break;
                 }
@@ -1954,11 +2134,77 @@ class Actor {
         const top = stage.floorY - this.y - this.h + this.basePx - bob;
         this.el.style.transform = `translate3d(${(left - stage.ox).toFixed(1)}px, ${(top - stage.oy).toFixed(1)}px, 0)`;
         this.body.style.transform = `rotate(${(this.tilt + waddle + this.spin).toFixed(2)}deg) scale(${(sx * this.scale).toFixed(3)}, ${(sy * this.scale).toFixed(3)})`;
-        const list = pose && pose.length ? pose : this.rec.look.roles.idle;
-        const src = imgUrl(list[this.frame % list.length]);
+        const look = this.rec.look;
+        const list = pose && pose.length ? pose : look.roles.idle;
+        const rk = roleKeyOf(look, list);
+        const opt = (rk && look.roleOpts?.[rk]) || {};
+        if (list !== this.animList) { this.animList = list; this.animT0 = performance.now(); }
+        let i = 0;
+        if (list.length > 1) {
+            if (STEP_ROLES[rk]) i = this.frame;                                   // walking: one per step / eating: one per bite
+            else i = Math.floor((performance.now() - this.animT0) / 1000 * (FRAME_FPS[opt.speed] || FRAME_FPS.normal));
+        }
+        const src = imgUrl(list[i % list.length]);
         if (src !== this.curSrc) { this.img.src = src; this.curSrc = src; }
-        const flip = this.side && ((this.rec.look.facing === 'right') ? this.dir < 0 : this.dir > 0);
+        const f = opt.facing || look.facing;                                      // each picture may face its own way
+        const flip = (f === 'left' || f === 'right') && (f === 'right' ? this.dir < 0 : this.dir > 0);
         this.img.classList.toggle('tavvy-flip', flip);
+        if (this.sayEl) this.placeSay();
+    }
+
+    /** A picture for this action, or what stands in for it (ROLE_DEFS fallbacks, ending at 기본). */
+    rp(key) {
+        const roles = this.rec.look.roles || {};
+        for (let k = key, n = 0; k && n < 8; k = ROLE_DEFS[k]?.fb, n++) if (roles[k]?.length) return roles[k];
+        return roles.idle;
+    }
+
+    /* ---------- speech bubble over its head ---------- */
+
+    /** Say a line from this moment's list (if it has any, and it's in the mood). */
+    talk(moment, force = false) {
+        const rec = this.rec;
+        const freq = TALK_FREQ[rec.talkFreq] ? rec.talkFreq : 'some';
+        if (freq === 'off') return false;
+        const list = (rec.lines?.[moment] || []).filter(x => typeof x === 'string' && x.trim());
+        if (!list.length) return false;
+        const always = force || TALK_ALWAYS.includes(moment);
+        const now = performance.now();
+        if (!always) {
+            if (now - (this.lastTalk || -1e9) < TALK_GAP * 1000) return false;
+            if (Math.random() >= (moment === 'play' ? TALK_PLAY[freq] : TALK_CHANCE[freq])) return false;
+        }
+        this.lastTalk = now;
+        this.speak(list[Math.floor(Math.random() * list.length)]);
+        return true;
+    }
+
+    speak(text, ms = SAY_MS, max = LINE_MAX) {
+        const line = fillUser(text).slice(0, max);
+        if (!line) return;
+        if (!this.sayEl) {
+            this.sayEl = document.createElement('div');
+            this.sayEl.className = 'tavvy-say';
+            ensureLayer().appendChild(this.sayEl);
+        }
+        this.sayEl.textContent = line;
+        this.sayW = this.sayEl.offsetWidth;
+        this.sayH = this.sayEl.offsetHeight;
+        clearTimeout(this.sayTimer);
+        this.sayTimer = setTimeout(() => this.unsay(), ms);
+        this.placeSay();
+    }
+
+    placeSay() {
+        const el = this.sayEl, w = this.sayW || 0, h = this.sayH || 0;
+        const x = clamp(this.x - w / 2, 4, Math.max(4, stage.vw - w - 4));
+        const y = clamp(this.foot() - this.h * this.scale - h - 10, 4, Math.max(4, stage.vh - h - 4));
+        el.style.transform = `translate3d(${(x - stage.ox).toFixed(1)}px, ${(y - stage.oy).toFixed(1)}px, 0)`;
+    }
+
+    unsay() {
+        clearTimeout(this.sayTimer);
+        if (this.sayEl) { this.sayEl.remove(); this.sayEl = null; }
     }
 }
 
@@ -2452,9 +2698,16 @@ function placeBubble() {
     bubble.style.transform = `translate3d(${x - stage.ox}px, ${y - stage.oy}px, 0)`;
 }
 
-/** Entering a room after REVISIT_DAYS or more: the one that waited longest says so. */
+/** Entering a room: a special day (today, or missed within a week) → "할 말이 있어!";
+ *  otherwise, after REVISIT_DAYS or more away, the one that waited longest says so. */
 function revisitBubble() {
     if (actors.length) return;
+    const talky = residents().filter(p => pendingDays(p).length);
+    if (talky.length) {
+        showBubble(residents().length > 1 ? `${talky.map(p => p.name).join(', ')}: 할 말이 있어!` : '할 말이 있어!', 12000);
+        bubble?.classList.add('tavvy-bubble-special');
+        return;
+    }
     const now = Date.now();
     let best = null, bestAway = 0;
     for (const p of residents()) {
@@ -2467,6 +2720,54 @@ function revisitBubble() {
     const n = Math.floor(bestAway / 86400e3);
     const line = (REVISIT_LINES[best.personality?.base] || REVISIT_LINES.aegyo)(n);
     showBubble(residents().length > 1 ? `${best.name}: ${line}` : line);
+}
+
+/* ---------- special days (birthdays, anniversaries, the day we met) ---------- */
+
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/** "MM-DD" in a given year as a day key (Feb 29 → Feb 28 in other years). */
+function occurrence(md, year) {
+    let [m, d] = String(md).split('-').map(Number);
+    const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    if (m === 2 && d === 29 && !leap) d = 28;
+    return `${year}-${pad2(m)}-${pad2(d)}`;
+}
+
+/** This pet's special days that are today — or were missed in the last few days — and not celebrated yet. */
+function pendingDays(rec) {
+    const today = dayKey();
+    const y = Number(today.slice(0, 4));
+    const list = [];
+    if (rec.metOn !== false) {
+        const met = dayKey(rec.createdAt || Date.now());
+        list.push({ id: 'met', kind: 'met', md: met.slice(5), since: met });
+    }
+    for (const d of rec.dates || []) {
+        if (d && DATE_KINDS[d.kind] && /^\d\d-\d\d$/.test(d.md || '')) list.push({ id: d.id, kind: d.kind, md: d.md, msg: d.msg });
+    }
+    const out = [];
+    for (const it of list) {
+        let occ = occurrence(it.md, y);
+        if (occ > today) occ = occurrence(it.md, y - 1);
+        const late = daysBetween(occ, today);
+        if (late < 0 || late >= LATE_DAYS) continue;
+        if (it.since && occ <= it.since) continue;                 // not the very day we met
+        if (rec.celebrated?.[it.id] === occ) continue;             // once a day
+        const n = it.kind === 'met' ? Number(occ.slice(0, 4)) - Number(it.since.slice(0, 4)) : 0;
+        const lines = SPECIAL_LINES[it.kind];
+        let text = String(it.msg || '').trim() || (lines[rec.personality?.base] || lines.aegyo).replace('{n}', n);
+        if (late > 0) text = '늦었지만… ' + text;
+        out.push({ id: it.id, occ, late, text });
+    }
+    return out;
+}
+
+function markCelebrated(rec, days) {
+    if (!rec.celebrated || typeof rec.celebrated !== 'object') rec.celebrated = {};
+    for (const d of days) rec.celebrated[d.id] = d.occ;
+    saveNow();
+    renderPanel();
 }
 
 /* ---------- closeness went up: banner + coloured ✦ ---------- */
@@ -2487,6 +2788,12 @@ function showCheer(a, from, to) {
     el.style.left = (x - stage.ox) + 'px';
     el.style.top = (y - stage.oy) + 'px';
     setTimeout(() => el.remove(), 4200);
+    burstStars(a);
+}
+
+/** Coloured ✦ bursting out around the pet (closeness up, special days). */
+function burstStars(a) {
+    const top = stage.floorY - a.y - a.h;
     for (let i = 0; i < 14; i++) {
         const s = document.createElement('div');
         s.className = 'tavvy-burst';
@@ -2645,6 +2952,8 @@ async function wakeAll() {
                 long: away >= REVISIT_DAYS * 86400e3 && n < MEAL_TIERS[1].min,             // long apart, little food → a longer hello
                 teary: away >= TEARY_DAYS * 86400e3 && closenessOf(rec) >= TEARY_CLOSE,
             };
+            const sp = pendingDays(rec);
+            a.special = sp.length ? sp : null;       // a special day → a little party before anything else
             prevVisit.set(rec.id, now);              // waking again during this visit = "just saw you"
             try { await a.load(); } catch (e) { console.warn('[Tavvy] could not load pet image', e); continue; }
             actors.push(a);
@@ -2843,7 +3152,7 @@ function recheckRoom() {
 const $id = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const THEMES = { theme: '테마 따르기', cream: '크림·분홍', white: '하얀 깔끔' };
+const THEMES = { theme: '테마 따르기', cream: '크림·분홍', white: '하얀 깔끔', night: '밤하늘' };
 
 /** The extension settings drawer is only a door to the window now. */
 function panelHtml() {
@@ -2912,7 +3221,7 @@ function findBed() {
 
 /** A short message at the bottom of whatever the window shows. */
 function say(text) {
-    const m = win?.body.querySelector('.tw-msg');
+    const m = win?.body.querySelector('.tw-pane:not([hidden]) .tw-msg') || win?.body.querySelector('.tw-msg');
     if (m) m.textContent = text;
 }
 
@@ -2991,7 +3300,7 @@ function lookById(key) {
         const l = (root?.looks || []).find(x => x.id === key.slice(4));
         return l ? {
             key, name: l.name, src: imgUrl(l.roles?.idle?.[0]), facing: l.facing || 'front', squish: l.squish ?? 0.5,
-            make: () => ({ kind: l.kind || 'single', facing: l.facing || 'front', roles: structuredClone(l.roles), baseline: l.baseline || 0, size: { ...DEFAULT_SIZE }, squish: l.squish ?? 0.5 }),
+            make: () => ({ kind: l.kind || 'single', facing: l.facing || 'front', roles: structuredClone(l.roles), roleOpts: structuredClone(l.roleOpts || {}), baseline: l.baseline || 0, size: { ...DEFAULT_SIZE }, squish: l.squish ?? 0.5 }),
         } : null;
     }
     return null;
@@ -3143,7 +3452,8 @@ function ensureWin() {
     el.hidden = true;
     el.innerHTML = '<div class="tavvy-win" role="dialog" aria-modal="true"><div class="tavvy-win-head"></div><div class="tavvy-win-body"></div></div>';
     document.body.appendChild(el);
-    win = { el, box: el.firstElementChild, head: el.querySelector('.tavvy-win-head'), body: el.querySelector('.tavvy-win-body'), open: false, view: 'home', id: null, tab: 'journal', form: null };
+    win = { el, box: el.firstElementChild, head: el.querySelector('.tavvy-win-head'), body: el.querySelector('.tavvy-win-body'), open: false, view: 'home', id: null, tab: 'journal', form: null,
+        talkBase: null, roleEdit: null, rolesOpen: new Set(), prevTimer: 0, fit: '' };
     el.addEventListener('pointerdown', (e) => { if (e.target === el) closeWin(); });
     el.addEventListener('click', onWinClick);
     el.addEventListener('input', onWinInput);
@@ -3153,6 +3463,19 @@ function ensureWin() {
     window.addEventListener('resize', refit);
     window.visualViewport?.addEventListener('resize', refit);
     window.visualViewport?.addEventListener('scroll', refit);
+    el.addEventListener('focusin', refitSoon);
+    el.addEventListener('focusout', refitSoon);
+    el.addEventListener('toggle', (e) => {                          // folded groups in the 그림 tab stay as you left them
+        const g = e.target?.dataset?.group;
+        if (g) { if (e.target.open) win.rolesOpen.add(g); else win.rolesOpen.delete(g); }
+    }, true);
+    // while open: if the visible screen changed without telling us (keyboard), fit again
+    setInterval(() => {
+        if (!win?.open || document.hidden) return;
+        const vv = window.visualViewport;
+        const now = vv ? `${Math.round(vv.width)}|${Math.round(vv.height)}|${Math.round(vv.offsetLeft)}|${Math.round(vv.offsetTop)}` : `${window.innerWidth}|${window.innerHeight}|0|0`;
+        if (now !== win.fit) fitWin();
+    }, 250);
     return win;
 }
 
@@ -3165,12 +3488,33 @@ function fitWin() {
     const w = vv ? vv.width : window.innerWidth;
     const h = vv ? vv.height : window.innerHeight;
     const x = vv ? vv.offsetLeft : 0, y = vv ? vv.offsetTop : 0;
+    win.fit = `${Math.round(w)}|${Math.round(h)}|${Math.round(x)}|${Math.round(y)}`;
+    // phone keyboard up: the part you can see got much shorter → the window sits at its top and fills it
+    const kb = !!vv && window.innerHeight - h > 120;
+    el.classList.toggle('tavvy-kb', kb);
     el.style.width = `${Math.round(w)}px`;
     el.style.height = `${Math.round(h)}px`;
     el.style.transform = 'none';
     const r = el.getBoundingClientRect();
     const dx = x - r.left, dy = y - r.top;
     if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) el.style.transform = `translate(${Math.round(dx)}px, ${Math.round(dy)}px)`;
+    if (kb) keepFocusVisible();
+}
+
+/** The box you are typing in stays in view (scrolls inside the window, not the page). */
+function keepFocusVisible() {
+    const a = document.activeElement;
+    if (!a || !win.body.contains(a) || !a.matches('input, textarea, select')) return;
+    const b = win.body.getBoundingClientRect(), r = a.getBoundingClientRect();
+    if (r.bottom > b.bottom - 8) win.body.scrollTop += r.bottom - b.bottom + 16;
+    else if (r.top < b.top + 8) win.body.scrollTop -= b.top - r.top + 16;
+}
+
+/** The keyboard slides in and out over a moment, and phones don't always say when it's done → look again. */
+function refitSoon() {
+    if (!win?.open) return;
+    fitWin();
+    for (const ms of [80, 250, 500, 900]) setTimeout(() => { if (win?.open) fitWin(); }, ms);
 }
 
 function applyTheme() {
@@ -3199,6 +3543,9 @@ function show(view, opts = {}) {
     win.id = opts.id ?? null;
     win.tab = opts.tab || 'journal';
     win.form = null;
+    win.talkBase = null;
+    win.roleEdit = null;
+    stopPreview();
     const back = view !== 'home';
     const p = view === 'pet' ? root?.pets.find(x => x.id === win.id) : null;
     if (view === 'pet' && !p) return show('home');
@@ -3212,7 +3559,7 @@ ${view === 'home' ? '<div class="tw-icon" data-act="settings" title="설정"><i 
     else if (view === 'new') win.body.innerHTML = newHtml();
     else if (view === 'settings') win.body.innerHTML = settingsHtml();
     win.body.scrollTop = 0;
-    if (view === 'pet') { fillEdit(p); showTab(win.tab); }
+    if (view === 'pet') { fillEdit(p); fillTalk(p); showTab(win.tab); }
     if (view === 'new') fillNew();
     if (view === 'settings') fillSettings();
     refreshWin();
@@ -3233,7 +3580,7 @@ async function leave(fn) {
 
 function closeWin() {
     if (!win?.open) return;
-    leave(() => { win.el.hidden = true; win.open = false; win.form = null; });
+    leave(() => { win.el.hidden = true; win.open = false; win.form = null; win.talkBase = null; stopPreview(); });
 }
 
 /* --- home --- */
@@ -3279,9 +3626,13 @@ function petHtml(p) {
   <div class="tw-tab" data-tab="journal">기록</div>
   <div class="tw-tab" data-tab="acts">행동</div>
   <div class="tw-tab" data-tab="edit">꾸미기</div>
+  <div class="tw-tab" data-tab="roles">그림</div>
+  <div class="tw-tab" data-tab="talk">대사</div>
 </div>
 <div class="tw-pane" data-pane="journal" data-live="journal"></div>
 <div class="tw-pane" data-pane="acts" data-live="acts"></div>
+<div class="tw-pane" data-pane="roles"></div>
+<div class="tw-pane" data-pane="talk">${talkHtml(p)}</div>
 <div class="tw-pane tw-form" data-pane="edit">
   <label class="tw-label">이름 <input data-f="name" maxlength="20"></label>
   <label class="tw-label">성격 <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
@@ -3297,8 +3648,8 @@ function petHtml(p) {
   <div class="tw-btn tw-btn-main tw-wide" data-act="save">저장</div>
   <div class="tw-msg"></div>
   <div class="tw-danger">
-    <div class="tw-btn tw-btn-danger" data-act="delete"><i class="fa-solid fa-trash"></i> 이 펫 지우기</div>
-    <div class="tw-sub">기록은 사라지지만, 외형은 "내가 올린 외형"에 남아요.</div>
+    <div class="tw-btn tw-btn-danger" data-act="delete"><i class="fa-solid fa-hand"></i> 작별하기</div>
+    <div class="tw-sub">함께한 기록은 사라지고 되돌릴 수 없어요. 외형은 "내가 올린 외형"에 남아요.</div>
   </div>
 </div>`;
 }
@@ -3320,6 +3671,7 @@ function showTab(tab) {
     win.tab = tab;
     win.body.querySelectorAll('.tw-tab').forEach(t => t.classList.toggle('tw-on', t.dataset.tab === tab));
     win.body.querySelectorAll('.tw-pane').forEach(pn => { pn.hidden = pn.dataset.pane !== tab; });
+    if (tab === 'roles') drawRoles(); else stopPreview();
     refreshWin();
 }
 
@@ -3375,6 +3727,12 @@ function settingsHtml() {
     </select>
   </label>
 
+  <div class="tw-cap">대사</div>
+  <label class="tw-label tw-profrow">AI로 대사 만들 때 쓸 연결
+    <select data-s="talkProfile"></select>
+  </label>
+  <div class="tw-sub tw-profrow">대사 탭의 "AI로 빈 칸 채우기"를 누를 때만 써요. 실리태번 연결 프로필(Connection Manager)에서 골라요.</div>
+
   <div class="tw-cap">깨우기 버튼</div>
   <div class="tw-row">
     <div class="tw-btn" data-act="bedreset">위치 처음으로</div>
@@ -3401,6 +3759,24 @@ function fillSettings() {
     box.querySelector('[data-s="badge"]').checked = s.badge !== false;
     box.querySelector('[data-s="heartMode"]').value = s.heartMode || 'both';
     box.querySelectorAll('[data-theme-pick]').forEach(t => t.classList.toggle('tw-on', t.dataset.themePick === (THEMES[s.winTheme] ? s.winTheme : 'theme')));
+    // connection profiles (only when SillyTavern's Connection Manager is there)
+    const profiles = connectionProfiles();
+    box.querySelectorAll('.tw-profrow').forEach(n => { n.hidden = !profiles; });
+    if (profiles) {
+        const sel = box.querySelector('[data-s="talkProfile"]');
+        sel.innerHTML = '<option value="">지금 연결 그대로</option>' + profiles.map(p => `<option value="${esc(p.id)}">${esc(p.name || p.id)}</option>`).join('');
+        sel.value = profiles.some(p => p.id === s.talkProfile) ? s.talkProfile : '';
+    }
+}
+
+/** Connection Manager profiles that can be used for a request, or null if it isn't available. */
+function connectionProfiles() {
+    try {
+        const svc = ctx().ConnectionManagerRequestService;
+        if (!svc || typeof svc.getSupportedProfiles !== 'function' || typeof svc.sendRequest !== 'function') return null;
+        const list = svc.getSupportedProfiles();
+        return Array.isArray(list) ? list.filter(p => p && p.id) : null;
+    } catch { return null; }
 }
 
 function looksLiveHtml() {
@@ -3474,6 +3850,7 @@ function formDirty() {
     const val = (k) => box.querySelector(`[data-f="${k}"]`)?.value ?? '';
     if (f.kind === 'new') return !!val('name').trim() || !!f.look;
     if (f.kind !== 'edit') return false;
+    if (talkDirty()) return true;
     const b = f.base;
     return f.look !== b.look || !!f.file
         || val('name') !== b.name || val('pers') !== b.pers || val('facing') !== b.facing
@@ -3528,7 +3905,7 @@ async function uploadLook(name, facing, squish) {
     const img = f.prep || await preparePng(f.file, win.body.querySelector('[data-f="crop"]').checked);
     const id = 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const path = await uploadFile(`tavvy_look_${id}.png`, img.base64);
-    return { id, name, kind: 'single', facing, squish, roles: { idle: [path] }, baseline: 0, createdAt: Date.now() };
+    return { id, name, kind: 'single', facing, squish, roles: { idle: [path] }, roleOpts: {}, baseline: 0, createdAt: Date.now() };
 }
 
 function formValues() {
@@ -3561,18 +3938,21 @@ async function saveEdit() {
         let look = null;
         if (f.look === 'upload') {
             added = await uploadLook(v.name, v.facing, v.squish);
-            look = { kind: 'single', roles: structuredClone(added.roles), baseline: 0 };
+            look = { kind: 'single', roles: structuredClone(added.roles), roleOpts: {}, baseline: 0 };
         } else if (f.look !== f.base.look) {
             look = lookById(f.look)?.make() || null;
         }
         if (added) root.looks.push(added);
+        const oldFiles = look ? petFiles(p) : [];
         p.name = v.name;
         p.personality = { ...(p.personality || {}), base: v.pers };
-        if (look) { p.look.roles = look.roles; p.look.kind = look.kind; p.look.baseline = look.baseline; }
+        if (look) { p.look.roles = look.roles; p.look.roleOpts = look.roleOpts || {}; p.look.kind = look.kind; p.look.baseline = look.baseline; }
         p.look.facing = v.facing;
         p.look.squish = v.squish;
         const ok = await saveNow();
         if (!ok) saveSoon();
+        // pictures only this pet had (e.g. added to a built-in look) and nothing uses any more
+        if (ok) for (const file of oldFiles) { if (!fileInUse(file)) deleteFile(file); }
         for (const a of actors) if (a.rec === p) { a.p = PERSONALITIES[v.pers]; if (look) a.reloadLook(); }
         refreshBed();
         renderPanel();
@@ -3603,7 +3983,7 @@ async function createPet() {
         let look;
         if (f.look === 'upload') {
             added = await uploadLook(v.name, v.facing, v.squish);
-            look = { kind: 'single', facing: v.facing, roles: structuredClone(added.roles), baseline: 0, size: { ...DEFAULT_SIZE }, squish: v.squish };
+            look = { kind: 'single', facing: v.facing, roles: structuredClone(added.roles), roleOpts: {}, baseline: 0, size: { ...DEFAULT_SIZE }, squish: v.squish };
         } else {
             look = lookById(f.look)?.make();
             if (!look) return say('외형을 다시 골라 주세요.');
@@ -3638,7 +4018,7 @@ async function deletePet(id) {
     const i = root.pets.findIndex(p => p.id === id);
     if (i < 0) return;
     const pet = root.pets[i];
-    if (!(await confirmBox(`${josa(pet.name, '을', '를')} 정말 지울까요? 기록은 사라지고, 외형은 "내가 올린 외형"에 남아요.`))) return;
+    if (!(await confirmBox(`${josa(pet.name, '과', '와')} 작별할까요? 함께한 기록도 모두 사라져요. 되돌릴 수 없어요.`))) return;
     for (const a of [...actors]) if (a.rec === pet) { a.onGone = null; a.vanish(); }
     root.pets.splice(i, 1);
     const ok = await saveNow();
@@ -3648,7 +4028,7 @@ async function deletePet(id) {
     refreshBed();
     renderPanel();
     if (win?.open) { win.form = null; show('home'); }
-    say(`${josa(pet.name, '을', '를')} 지웠어요.`);
+    say(`${josa(pet.name, '과', '와')} 작별했어요. 외형은 "내가 올린 외형"에 남아 있어요.`);
 }
 
 async function deleteLook(id) {
@@ -3695,6 +4075,19 @@ function onWinClick(e) {
     }
     if (act === 'bedfind') return findBed();
     if (act === 'restore') return restoreBackup(win.body.querySelector('[data-live="backups"]').value);
+    if (act === 'savetalk') return saveTalk();
+    if (act === 'aifill') return aiFill();
+    if (act === 'adddate') return addDateRow();
+    if (act === 'rolesback') { win.roleEdit = null; return drawRoles(); }
+    if (act === 'addframe') return win.body.querySelector('[data-f="rolefile"]')?.click();
+    const dd = t.closest('[data-deldate]');
+    if (dd) return dd.closest('.tw-date')?.remove();
+    const df = t.closest('[data-delframe]');
+    if (df) return delRoleFrame(Number(df.dataset.delframe));
+    const mf = t.closest('[data-moveframe]');
+    if (mf) return moveRoleFrame(Number(mf.dataset.moveframe));
+    const role = t.closest('[data-role]');
+    if (role) return openRole(role.dataset.role);
     const pet = t.closest('[data-pet]');
     if (pet) return show('pet', { id: pet.dataset.pet });
     const tab = t.closest('[data-tab]');
@@ -3714,12 +4107,416 @@ function onWinInput(e) {
     const f = t.dataset?.f;
     if (f === 'squish') return showSquish();
     if (f === 'file' && e.type === 'change') return onFilePicked(t);
+    if (f === 'rolefile' && e.type === 'change') return addRoleFrames(t);
+    if (t.dataset?.ro && e.type === 'change') return setRoleOpt(t.dataset.ro, t.value);
     if (f === 'crop' && e.type === 'change' && win.form?.file) return onFilePicked(win.body.querySelector('[data-f="file"]'));
     const s = t.dataset?.s;
     if (s && e.type === 'change') {
         if (s === 'stageMode') return setSetting(s, t.value === 'floor' ? 'floor' : 'chat');
         if (s === 'heartMode') return setSetting(s, ['both', 'hearts', 'name', 'hide'].includes(t.value) ? t.value : 'both');
+        if (s === 'talkProfile') return setSetting(s, String(t.value || ''));
         return setSetting(s, t.checked);
+    }
+}
+
+/* ---------- 그림 tab: a picture (or several) for each action ---------- */
+
+const curPet = () => (win?.view === 'pet' ? root?.pets.find(x => x.id === win.id) : null);
+
+/** The picture that shows when this action has none (follows the fallbacks to one that exists). */
+function standIn(p, key) {
+    const roles = p.look?.roles || {};
+    for (let k = ROLE_DEFS[key]?.fb, n = 0; k && n < 8; k = ROLE_DEFS[k]?.fb, n++) if (roles[k]?.length) return k;
+    return 'idle';
+}
+
+function speedText(p, key) {
+    const list = p.look.roles[key] || [];
+    if (list.length < 2) return `${list.length}장`;
+    if (STEP_ROLES[key]) return `${list.length}장 · ${key === 'walk' ? '걸음마다' : '한 입마다'}`;
+    return `${list.length}장 · ${SPEED_NAMES[p.look.roleOpts?.[key]?.speed] || '보통'}`;
+}
+
+function slotHtml(p, r) {
+    const list = p.look.roles[r.key] || [];
+    const pics = list.length
+        ? `<div class="tw-slot-imgs">${list.slice(0, 3).map(f => `<img src="${esc(imgUrl(f))}" alt="">`).join('')}</div>`
+        : '<div class="tw-slot-imgs tw-slot-empty"><i class="fa-solid fa-plus"></i> 그림 넣기</div>';
+    const sub = list.length ? speedText(p, r.key) : `없음 → ${ROLE_DEFS[standIn(p, r.key)]?.name || '기본'}`;
+    return `<div class="tw-slot${list.length ? '' : ' tw-slot-none'}" data-role="${r.key}">${pics}<b>${esc(r.name)}</b><span class="tw-sub">${esc(sub)}</span></div>`;
+}
+
+function lookNote(p) {
+    const key = lookKeyOf(p);
+    if (key.startsWith('lib:')) {
+        const l = root.looks.find(x => x.id === key.slice(4));
+        return `여기 넣은 그림은 "${esc(l?.name || '')}" 외형에 같이 저장돼요. 이 외형을 쓰는 다른 펫과, 이 외형으로 새로 만드는 펫에도 들어가요.`;
+    }
+    if (key.startsWith('builtin:')) return '기본 펫 외형이라, 여기 넣은 그림은 이 펫에게만 들어가요.';
+    return '여기 넣은 그림은 이 펫에게 들어가요.';
+}
+
+function rolesHtml(p) {
+    const groups = ROLE_GROUPS.map((g, i) => {
+        const grid = `<div class="tw-slots">${g.roles.map(r => slotHtml(p, r)).join('')}</div>`;
+        if (i === 0) return `<div class="tw-cap">${esc(g.name)}</div>${grid}`;
+        const have = g.roles.filter(r => p.look.roles[r.key]?.length).length;
+        return `<details class="tw-fold" data-group="${g.key}"${win.rolesOpen.has(g.key) ? ' open' : ''}><summary>${esc(g.name)} <span class="tw-sub">${have ? `${have}칸 채움` : ''}</span></summary>${grid}</details>`;
+    }).join('');
+    return `<div class="tw-sub">그림이 없는 칸은 기본 그림 + 움직임으로 대신해요. 칸을 누르면 그림을 넣거나 빼요.</div>
+${groups}
+<div class="tw-sub" style="margin-top:10px">${lookNote(p)}</div>
+<div class="tw-msg"></div>`;
+}
+
+function roleEditHtml(p, key) {
+    const r = ROLE_DEFS[key];
+    const list = p.look.roles[key] || [];
+    const opt = p.look.roleOpts?.[key] || {};
+    const canDel = key !== 'idle' || list.length > 1;
+    const frames = list.map((f, i) => `<div class="tw-frame"><img src="${esc(imgUrl(f))}" alt=""><span>${i + 1}</span>${canDel ? `<i class="fa-solid fa-xmark" data-delframe="${i}" title="빼기"></i>` : ''}${i ? `<em class="fa-solid fa-chevron-left" data-moveframe="${i}" title="앞으로"></em>` : ''}</div>`).join('');
+    const add = list.length < FRAMES_MAX ? '<div class="tw-frame tw-frame-add" data-act="addframe"><i class="fa-solid fa-plus"></i></div>' : '';
+    const petFacing = { front: '정면', right: '오른쪽', left: '왼쪽' }[p.look.facing] || '정면';
+    const speed = list.length < 2 ? ''
+        : STEP_ROLES[key] ? `<div class="tw-sub">여러 장이면 ${STEP_ROLES[key]}.</div>`
+        : `<label class="tw-label">빠르기 <select data-ro="speed">${Object.entries(SPEED_NAMES).map(([k, v]) => `<option value="${k}"${(opt.speed || 'normal') === k ? ' selected' : ''}>${v}</option>`).join('')}</select></label>`;
+    return `<div class="tw-btn tw-btn-small" data-act="rolesback"><i class="fa-solid fa-arrow-left"></i> 동작 목록</div>
+<div class="tw-roled-head">
+  <div class="tw-roled-prev"><img alt=""></div>
+  <div><b>${esc(r.name)}</b><div class="tw-sub">${list.length ? (r.note ? esc(r.note) : '') : `없으면 ${esc(ROLE_DEFS[standIn(p, key)]?.name || '기본')} 그림을 써요`}</div></div>
+</div>
+<div class="tw-cap">그림 ${list.length}/${FRAMES_MAX} <span class="tw-sub">· 여러 장이면 차례로 넘어가요</span></div>
+<div class="tw-frames">${frames}${add}</div>
+<input type="file" accept="image/png" multiple data-f="rolefile">
+<label class="tw-check"><input type="checkbox" data-f="rolecrop" checked> 투명 여백 자르기</label>
+<div class="tw-sub">여러 장을 한 번에 고르면 이름 순서대로 들어가고, 같은 크기면 같은 자리로 잘라서 움직임이 흔들리지 않아요.</div>
+${speed}
+<label class="tw-label">이 그림이 보는 쪽
+  <select data-ro="facing">
+    <option value=""${!opt.facing ? ' selected' : ''}>펫과 같게 (${petFacing})</option>
+    <option value="front"${opt.facing === 'front' ? ' selected' : ''}>정면</option>
+    <option value="right"${opt.facing === 'right' ? ' selected' : ''}>오른쪽을 봄</option>
+    <option value="left"${opt.facing === 'left' ? ' selected' : ''}>왼쪽을 봄</option>
+  </select>
+</label>
+<div class="tw-sub">정면 그림과 옆모습 그림을 섞어 써도 돼요. 옆모습이면 가는 쪽에 맞춰 뒤집어요.</div>
+<div class="tw-msg"></div>`;
+}
+
+function stopPreview() {
+    if (win?.prevTimer) { clearInterval(win.prevTimer); win.prevTimer = 0; }
+}
+
+/** Draw the 그림 tab (the list, or one action being edited). Keeps the scroll position. */
+function drawRoles() {
+    const p = curPet();
+    const pane = win?.body.querySelector('[data-pane="roles"]');
+    if (!p || !pane) return;
+    stopPreview();
+    const keep = win.body.scrollTop;
+    pane.innerHTML = win.roleEdit && ROLE_DEFS[win.roleEdit] ? roleEditHtml(p, win.roleEdit) : rolesHtml(p);
+    win.body.scrollTop = keep;
+    if (!win.roleEdit) return;
+    // a little live preview of the frames
+    const key = win.roleEdit;
+    const img = pane.querySelector('.tw-roled-prev img');
+    const list = p.look.roles[key]?.length ? p.look.roles[key] : p.look.roles[standIn(p, key)] || p.look.roles.idle;
+    const fps = STEP_ROLES[key] ? 4 : FRAME_FPS[p.look.roleOpts?.[key]?.speed] || FRAME_FPS.normal;
+    let i = 0;
+    img.src = imgUrl(list[0]);
+    if (list.length > 1) win.prevTimer = setInterval(() => { i = (i + 1) % list.length; img.src = imgUrl(list[i]); }, 1000 / fps);
+}
+
+function openRole(key) {
+    if (!ROLE_DEFS[key]) return;
+    win.roleEdit = key;
+    drawRoles();
+    win.body.querySelector('[data-pane="roles"]')?.scrollIntoView?.({ block: 'start' });
+}
+
+/**
+ * Change this pet's action pictures. The change also goes into its saved look (내가 올린 외형) and to the
+ * other pets wearing that look, so a new pet made from the look gets the same pictures.
+ * Files nothing uses any more are deleted after a successful save.
+ */
+async function changeRoles(p, fn) {
+    const key = lookKeyOf(p);
+    const L = key.startsWith('lib:') ? root.looks.find(x => x.id === key.slice(4)) : null;
+    const wearers = L ? root.pets.filter(x => lookKeyOf(x) === key) : [p];
+    const before = new Set([...wearers.flatMap(petFiles), ...(L ? lookFiles(L) : [])]);
+    p.look.roleOpts ??= {};
+    fn(p.look);
+    for (const k of Object.keys(p.look.roles)) if (!p.look.roles[k]?.length) delete p.look.roles[k];
+    for (const k of Object.keys(p.look.roleOpts)) if (!Object.keys(p.look.roleOpts[k] || {}).length) delete p.look.roleOpts[k];
+    p.look.kind = Object.values(p.look.roles).some(l => l.length > 1) ? 'frames' : 'single';
+    for (const x of wearers) {
+        if (x === p) continue;
+        x.look.roles = structuredClone(p.look.roles); x.look.roleOpts = structuredClone(p.look.roleOpts); x.look.kind = p.look.kind;
+    }
+    if (L) { L.roles = structuredClone(p.look.roles); L.roleOpts = structuredClone(p.look.roleOpts); L.kind = p.look.kind; }
+    const ok = await saveNow();
+    if (!ok) saveSoon();
+    if (ok) for (const f of before) { if (!fileInUse(f)) deleteFile(f); }
+    for (const a of actors) if (wearers.includes(a.rec)) a.reloadLook();
+    renderPanel();
+    drawRoles();
+    return ok;
+}
+
+async function addRoleFrames(input) {
+    const p = curPet(), key = win.roleEdit;
+    const files = [...(input.files || [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    input.value = '';
+    if (!p || !key || !files.length) return;
+    if (readOnly) return say(readOnlyReason);
+    if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 해 주세요.');
+    if (busy) return;
+    if (files.some(f => f.size > 8 * 1024 * 1024)) return say('그림이 너무 커요 (한 장에 8MB 이하).');
+    const space = FRAMES_MAX - (p.look.roles[key]?.length || 0);
+    const use = files.slice(0, Math.max(0, space));
+    if (!use.length) return say(`한 동작에는 그림을 ${FRAMES_MAX}장까지 넣을 수 있어요.`);
+    busy = true;
+    const uploaded = [];
+    try {
+        say('그림 올리는 중…');
+        const crop = win.body.querySelector('[data-f="rolecrop"]')?.checked !== false;
+        const imgs = await prepareFrames(use, crop);
+        for (const im of imgs) {
+            const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+            uploaded.push(await uploadFile(`tavvy_role_${id}.png`, im.base64));
+        }
+        if (curPet() !== p || win.roleEdit !== key) throw new Error('창이 바뀌었어요');
+        const ok = await changeRoles(p, (look) => { look.roles[key] = [...(look.roles[key] || []), ...uploaded]; });
+        say((ok ? `${uploaded.length}장 넣었어요.` : '넣었지만 저장이 늦어지고 있어요.') + (files.length > use.length ? ` (${FRAMES_MAX}장이 넘어서 ${files.length - use.length}장은 뺐어요)` : ''));
+    } catch (e) {
+        console.error('[Tavvy] role pictures failed', e);
+        for (const f of uploaded) if (!fileInUse(f)) deleteFile(f);
+        say('그림을 넣지 못했어요: ' + (e.message || e));
+    } finally {
+        busy = false;
+    }
+}
+
+async function delRoleFrame(i) {
+    const p = curPet(), key = win.roleEdit;
+    if (!p || !key || busy) return;
+    if (readOnly) return say(readOnlyReason);
+    const list = p.look.roles[key] || [];
+    if (!list[i] || (key === 'idle' && list.length < 2)) return;
+    busy = true;
+    try {
+        await changeRoles(p, (look) => { look.roles[key] = list.filter((_, j) => j !== i); });
+        say('그림을 뺐어요.');
+    } finally { busy = false; }
+}
+
+async function moveRoleFrame(i) {
+    const p = curPet(), key = win.roleEdit;
+    if (!p || !key || busy || readOnly) return;
+    const list = [...(p.look.roles[key] || [])];
+    if (i < 1 || i >= list.length) return;
+    [list[i - 1], list[i]] = [list[i], list[i - 1]];
+    busy = true;
+    try { await changeRoles(p, (look) => { look.roles[key] = list; }); } finally { busy = false; }
+}
+
+async function setRoleOpt(name, value) {
+    const p = curPet(), key = win.roleEdit;
+    if (!p || !key || busy) return;
+    if (readOnly) return say(readOnlyReason);
+    busy = true;
+    try {
+        await changeRoles(p, (look) => {
+            const o = { ...(look.roleOpts[key] || {}) };
+            if (name === 'speed') { if (FRAME_FPS[value] && value !== 'normal') o.speed = value; else delete o.speed; }
+            if (name === 'facing') { if (['front', 'left', 'right'].includes(value)) o.facing = value; else delete o.facing; }
+            look.roleOpts[key] = o;
+        });
+        say('바꿨어요.');
+    } finally { busy = false; }
+}
+
+/* ---------- 대사 tab: lines for little moments + special days ---------- */
+
+function dateRowHtml(d) {
+    const [m, day] = String(d.md || '01-01').split('-').map(Number);
+    return `<div class="tw-date" data-date="${esc(d.id)}">
+  <select data-dk>${Object.entries(DATE_KINDS).map(([k, v]) => `<option value="${k}"${d.kind === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
+  <select data-dm>${Array.from({ length: 12 }, (_, i) => `<option value="${i + 1}"${m === i + 1 ? ' selected' : ''}>${i + 1}월</option>`).join('')}</select>
+  <select data-dd>${Array.from({ length: 31 }, (_, i) => `<option value="${i + 1}"${day === i + 1 ? ' selected' : ''}>${i + 1}일</option>`).join('')}</select>
+  <div class="tw-icon tw-icon-small" data-deldate title="지우기"><i class="fa-solid fa-xmark"></i></div>
+  <input data-dmsg maxlength="${LINE_MAX}" placeholder="축하 말 (비우면 성격에 맞는 기본 말)" value="${esc(d.msg || '')}">
+</div>`;
+}
+
+function talkHtml(p) {
+    const met = dayKey(p.createdAt || Date.now()).slice(5).split('-').map(Number);
+    return `<div class="tw-form">
+  <label class="tw-label">말하는 빈도
+    <select data-t="freq">${Object.entries(TALK_FREQ).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+  </label>
+  <div class="tw-sub">순간마다 한 줄에 하나씩 적어요. 여러 줄이면 그때그때 하나를 골라 펫 머리 위 말풍선으로 말해요. <b>{{user}}</b>는 내 이름으로 바뀌어요. 한 줄은 ${LINE_MAX}자까지예요.</div>
+  ${TALK_MOMENTS.map(m => `<label class="tw-label">${esc(m.name)}<textarea data-line="${m.key}" rows="2" placeholder="예) ${esc(m.ex)}"></textarea></label>`).join('')}
+  <div class="tw-btn tw-wide" data-act="aifill"><i class="fa-solid fa-wand-magic-sparkles"></i> AI로 빈 칸 채우기</div>
+  <div class="tw-sub">누를 때만 한 번 만들어요. AI에게는 펫 이름과 성격만 보내요. 마음에 안 드는 줄은 저장하기 전에 고치거나 지우면 돼요.</div>
+
+  <div class="tw-cap">기념일</div>
+  <label class="tw-check"><input type="checkbox" data-t="met"> 만난 날(${met[0]}월 ${met[1]}일)도 매년 축하하기</label>
+  <div class="tw-dates"></div>
+  <div class="tw-btn tw-btn-small" data-act="adddate"><i class="fa-solid fa-plus"></i> 날짜 넣기</div>
+  <div class="tw-sub">매년 그날 침대 옆에 "할 말이 있어!"가 떠요. 깨우면 색깔 ✦ 속에서 춤추고 축하 말을 해요. 그날 못 만나면 7일 안에 "늦었지만…" 하고 해 줘요.</div>
+
+  <div class="tw-btn tw-btn-main tw-wide" data-act="savetalk">저장</div>
+  <div class="tw-msg"></div>
+</div>`;
+}
+
+function fillTalk(p) {
+    const box = win.body.querySelector('[data-pane="talk"]');
+    if (!box) return;
+    box.querySelector('[data-t="freq"]').value = TALK_FREQ[p.talkFreq] ? p.talkFreq : 'some';
+    box.querySelector('[data-t="met"]').checked = p.metOn !== false;
+    for (const m of TALK_MOMENTS) box.querySelector(`[data-line="${m.key}"]`).value = (p.lines?.[m.key] || []).join('\n');
+    box.querySelector('.tw-dates').innerHTML = (p.dates || []).map(dateRowHtml).join('');
+    win.talkBase = JSON.stringify(readTalk());
+}
+
+const splitLines = (text) => String(text || '').split('\n').map(x => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
+
+/** What the 대사 tab says right now (as it would be saved). */
+function readTalk() {
+    const box = win?.body.querySelector('[data-pane="talk"]');
+    if (!box) return null;
+    const lines = {};
+    for (const m of TALK_MOMENTS) {
+        const l = splitLines(box.querySelector(`[data-line="${m.key}"]`)?.value).map(x => x.slice(0, LINE_MAX)).slice(0, LINES_MAX);
+        if (l.length) lines[m.key] = l;
+    }
+    const dates = [...box.querySelectorAll('.tw-date')].map(row => {
+        const m = Number(row.querySelector('[data-dm]').value) || 1;
+        const maxDay = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1];
+        const d = clamp(Number(row.querySelector('[data-dd]').value) || 1, 1, maxDay);
+        const kind = DATE_KINDS[row.querySelector('[data-dk]').value] ? row.querySelector('[data-dk]').value : 'anniv';
+        return { id: row.dataset.date, kind, md: `${pad2(m)}-${pad2(d)}`, msg: row.querySelector('[data-dmsg]').value.trim().slice(0, LINE_MAX) };
+    });
+    const freq = box.querySelector('[data-t="freq"]').value;
+    return { freq: TALK_FREQ[freq] ? freq : 'some', met: !!box.querySelector('[data-t="met"]').checked, lines, dates };
+}
+
+function talkDirty() {
+    if (win?.view !== 'pet' || !win.talkBase) return false;
+    return JSON.stringify(readTalk()) !== win.talkBase;
+}
+
+async function saveTalk() {
+    const p = curPet();
+    if (!p || busy) return;
+    if (readOnly) return say(readOnlyReason);
+    if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 눌러 주세요.');
+    if (!talkDirty()) return say('바뀐 게 없어요.');
+    const box = win.body.querySelector('[data-pane="talk"]');
+    const long = TALK_MOMENTS.some(m => splitLines(box.querySelector(`[data-line="${m.key}"]`).value).some(x => x.length > LINE_MAX));
+    const v = readTalk();
+    p.talkFreq = v.freq;
+    p.metOn = v.met;
+    p.lines = v.lines;
+    p.dates = v.dates;
+    if (p.celebrated) for (const id of Object.keys(p.celebrated)) if (id !== 'met' && !v.dates.some(d => d.id === id)) delete p.celebrated[id];
+    busy = true;
+    try {
+        const ok = await saveNow();
+        if (!ok) saveSoon();
+        fillTalk(p);
+        renderPanel();
+        say((ok ? '저장했어요.' : '바꿨지만 저장이 늦어지고 있어요. 잠시 뒤 다시 저장돼요.') + (long ? ` (${LINE_MAX}자가 넘는 줄은 잘랐어요)` : ''));
+    } finally { busy = false; }
+}
+
+function addDateRow() {
+    const box = win.body.querySelector('[data-pane="talk"] .tw-dates');
+    if (!box) return;
+    const t = new Date();
+    box.insertAdjacentHTML('beforeend', dateRowHtml({ id: 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind: 'me', md: `${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`, msg: '' }));
+}
+
+/* ---------- AI: fill in the empty moments (only when the button is pressed) ---------- */
+
+const TALK_PROMPT_MOMENTS = {
+    wake: '깨워서 침대에서 나왔을 때', sleep: '재워서 침대로 들어갈 때', pat: '쓰다듬어 줄 때',
+    meal: '밥(채팅 메시지)을 다 먹었을 때', play: '혼자 놀고 있을 때', wait: '상대의 답을 기다릴 때',
+    level: '사람과 한 단계 더 친해졌을 때', reunion: '며칠 만에 다시 만났을 때',
+};
+
+/** Ask the chosen connection (or the current one). Returns the text of the answer. */
+async function askAI(system, user) {
+    const c = ctx();
+    const id = root?.settings?.talkProfile;
+    if (id) {
+        const prof = connectionProfiles()?.find(p => p.id === id);
+        if (prof) {
+            const r = await c.ConnectionManagerRequestService.sendRequest(id, [{ role: 'system', content: system }, { role: 'user', content: user }], 800);
+            return { text: typeof r === 'string' ? r : String(r?.content ?? ''), fellBack: false };
+        }
+    }
+    if (typeof c.generateRaw !== 'function') throw new Error('이 실리태번 버전에서는 AI 대사 만들기를 쓸 수 없어요');
+    const text = await c.generateRaw({ prompt: user, systemPrompt: system, responseLength: 800 });
+    return { text: String(text ?? ''), fellBack: !!id };
+}
+
+function looseJson(text) {
+    const t = String(text || '').replace(/```(?:json)?/gi, '');
+    const a = t.indexOf('{'), b = t.lastIndexOf('}');
+    if (a < 0 || b <= a) return null;
+    try { return JSON.parse(t.slice(a, b + 1)); } catch { return null; }
+}
+
+async function aiFill() {
+    const p = curPet();
+    if (!p || busy) return;
+    const box = win.body.querySelector('[data-pane="talk"]');
+    const empty = TALK_MOMENTS.filter(m => !box.querySelector(`[data-line="${m.key}"]`).value.trim());
+    if (!empty.length) return say('빈 칸이 없어요. 새로 만들고 싶은 칸을 비운 뒤 눌러 주세요.');
+    const btn = box.querySelector('[data-act="aifill"]');
+    const label = btn.innerHTML;
+    busy = true;
+    btn.classList.add('tw-busy');
+    btn.textContent = '만드는 중…';
+    say('');
+    try {
+        const k = p.personality?.base;
+        const system = 'You write very short speech lines for a tiny pet that lives on a chat app screen. Answer with JSON only, no other text.';
+        const user = [
+            `펫 이름: ${p.name}`,
+            `성격: ${persName(p)} — ${PERS_DESC[k] || ''}`,
+            '이 펫은 채팅 앱 화면에 사는 작은 동반자예요. 아래 순간마다 펫이 머리 위 말풍선으로 할 짧은 한국어 대사를 3개씩 써 주세요.',
+            '- 한 줄은 25자 안쪽, 반말, 성격이 잘 드러나게',
+            '- 이모지는 가끔만',
+            '- 화면 앞의 사람을 부를 때는 {{user}}라고 쓰기',
+            '순간:',
+            ...empty.map(m => `${m.key}: ${TALK_PROMPT_MOMENTS[m.key]}`),
+            `JSON으로만 답하기. 예: {"${empty[0].key}": ["…", "…", "…"]}`,
+        ].join('\n');
+        const { text, fellBack } = await askAI(system, user);
+        if (curPet() !== p) return;
+        const data = looseJson(text);
+        let n = 0;
+        for (const m of empty) {
+            const raw = data?.[m.key];
+            const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [];
+            const lines = arr.map(x => String(x).replace(/\s+/g, ' ').trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, ''))
+                .filter(Boolean).map(x => x.slice(0, LINE_MAX)).slice(0, 3);
+            const ta = box.querySelector(`[data-line="${m.key}"]`);
+            if (lines.length && !ta.value.trim()) { ta.value = lines.join('\n'); n++; }
+        }
+        say(n ? `${n}칸을 채웠어요. 마음에 들면 저장을 눌러 주세요.${fellBack ? ' (고른 연결을 찾지 못해서 지금 연결로 만들었어요)' : ''}`
+            : 'AI 답을 알아보지 못했어요. 한 번 더 눌러 보세요.');
+    } catch (e) {
+        console.error('[Tavvy] AI lines failed', e);
+        say('대사를 만들지 못했어요: ' + (e?.cause?.message || e?.message || e));
+    } finally {
+        busy = false;
+        btn.classList.remove('tw-busy');
+        btn.innerHTML = label;
     }
 }
 
