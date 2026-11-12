@@ -9,6 +9,10 @@
 // Stage 5: closeness — growing closer by eating and being patted, hearts, looking at you,
 //          the reunion when woken (by personality), "it's been N days" by the bed,
 //          a little party when closeness goes up, and a journal per pet.
+// Stage 6-1: a pet info window (journal + edit), and new things it learns as you grow closer —
+//          peeking at the input box, following your hand, leaning into a pat, a wiggling bed,
+//          liking your messages, not wanting to go to bed, dozing off while you're away,
+//          pressing against the screen, softer reactions, and little gifts.
 
 import { saveSettings, saveSettingsDebounced, getRequestHeaders, eventSource, event_types } from '../../../../script.js';
 
@@ -123,6 +127,42 @@ const REVISIT_LINES = {
     simsul:  (n) => `${n}일이나 어디 갔었어 💢`,
     musim:   (n) => `…${n}일.`,
 };
+
+// unlocked behaviours (stage 6-1). lv = closeness level needed (1 관심 · 2 친구 · 3 단짝 · 4 내편).
+// only / not = personality. Never saved — worked out from the level every time.
+const UNLOCKS = [
+    { key: 'peekInput', lv: 1, name: '입력창 기웃' },
+    { key: 'follow',    lv: 1, name: '손 따라 보기' },
+    { key: 'lean',      lv: 1, name: '쓰다듬기에 기대기' },
+    { key: 'bedWiggle', lv: 2, name: '침대 들썩' },
+    { key: 'myBubble',  lv: 2, name: '내 말풍선 좋아하기' },
+    { key: 'resist',    lv: 3, name: '배웅 투정' },
+    { key: 'dozeWait',  lv: 3, name: '기다리다 졸기' },
+    { key: 'press',     lv: 4, name: '화면에 붙기' },
+    { key: 'soft',      lv: 4, name: '마음이 풀린 반응', not: 'aegyo' },
+    { key: 'gift',      lv: 4, name: '선물 주기', only: 'aegyo' },
+];
+const PEEKIN_CHANCE = 0.6;      // starting to write → peeks at the input box
+const PEEKIN_AGAIN = 0.3;       // still writing → now and then again
+const PEEKIN_GAP = [8, 14];     // s between peeks while writing
+const TYPING_GAP = 4;           // s without typing → the next keystroke is "starting to write"
+const FOLLOW_NEAR = 2.2;        // × pet height (at least 110px) — how close your hand / finger must come
+const FOLLOW_CHANCE = 0.5;      // hand comes near → looks at it
+const FOLLOW_REST = [6, 12];    // s after looking before it does it again
+const FOLLOW_STEP = 0.3;        // takes a step or two toward it (심술; 애교 0.5; 새침·느긋·무심 only look)
+const LEAN_CHANCE = 0.7;        // a pat → leans into it (otherwise the little hop)
+const WIGGLE_GAP = [4, 9];      // s — the bed wiggles while food piles up
+const MY_BUBBLE = 0.65;         // climbing up by itself → picks one of your messages
+const RESIST_CHANCE = 0.6;      // put to bed → digs its feet in for a second
+const IDLE_DOZE = 90;           // s with nothing from you → climbs onto your last message and nods off
+const IDLE_DOZE_CHANCE = 0.75;
+const PRESS_CHANCE = 0.4;       // reacting to you → presses against the screen
+const PRESS_SCALE = 1.5, PRESS_HOLD = 2.4;
+const PRESS_HOLD_BY = { aegyo: 1.4, saechim: 0.6, neugut: 1.5, simsul: 1, musim: 0.9 };
+const BONK_CHANCE = 0.2;        // hits the glass too hard → dizzy, cries a little
+const TEAR_COLOR = '#6fc3ff', TEAR_ANGLE = 30;   // degrees (0 = sideways)
+const GIFT_CHANCE = 0.25;       // 애교 only, when reacting to you
+const GIFTS = ['🌼', '🍀', '🍬', '⭐', '🎁'];
 
 /* =====================================================================
  * Storage (format version + safety rails)
@@ -498,6 +538,30 @@ function levelLabel(rec, k = levelOf(rec)) {
     return `${L.hearts} ${L.name}`;
 }
 
+/** The unlockable behaviours that exist for this pet's personality. */
+function unlocksFor(rec) {
+    const k = rec?.personality?.base;
+    return UNLOCKS.filter(u => (!u.only || u.only === k) && (!u.not || u.not !== k));
+}
+
+/** Has this pet (actor or record) learned behaviour `key`? */
+function can(who, key) {
+    const rec = who?.rec || who;
+    const u = unlocksFor(rec).find(x => x.key === key);
+    return !!u && levelOf(rec) >= u.lv;
+}
+
+/* ---------- you: typing, idle time, where your hand is ---------- */
+const typing = { last: -1e9, session: 0 };
+const hand = { x: 0, y: 0, t: -1e9 };
+let lastAct = performance.now();
+
+/** You did something (typed, sent, scrolled, touched a pet, tapped the bed). */
+function noteUserAct() {
+    lastAct = performance.now();
+    for (const a of actors) a.idleTried = false;
+}
+
 /** Pat (tap): one point a day (the day starts at 6 a.m.). */
 function patPet(rec) {
     const day = dayKey();
@@ -630,6 +694,17 @@ class Actor {
         this.reunionMeal = false;    // this meal is the one right after waking (personality touches after it)
         this.taps = [];              // recent tap times (연타)
         this.lastMe = -1e9;          // last "react to you" (ms)
+        this.peekInNext = 0;         // ms — no peeking at the input box again before this (while still writing)
+        this.peekInSession = -1;     // 무심 peeks only once per bit of writing
+        this.followNext = 0;         // ms — no looking at your hand again before this
+        this.followedOnce = false;   // 무심 looks at your hand only the first time
+        this.fstep = false;          // will take a step or two toward your hand
+        this.leanD = 1;              // which way it leans into a pat
+        this.pk = null;              // { d } — peeking at the input box
+        this.big = null;             // { kind: 'press' | 'gift', … } — growing toward you
+        this.glass = null;           // reflection / breath on the screen while pressed against it
+        this.meHeart = false;        // 무심 (내편): a ♥ this time
+        this.idleTried = false;      // already rolled for "dozing off while you're away" this quiet spell
         this.build();
     }
 
@@ -656,6 +731,18 @@ class Actor {
         for (const list of Object.values(this.rec.look.roles)) for (const p of list) if (p !== first) loadImage(imgUrl(p)).catch(() => {});
         this.resize();
         ensureLayer().appendChild(this.el);
+    }
+
+    /** The picture was changed in the info window: measure the new one, keep everything else. */
+    async reloadLook() {
+        try {
+            const im = await loadImage(imgUrl(this.rec.look.roles.idle[0]));
+            if (this.gone) return;
+            this.natW = im.naturalWidth; this.natH = im.naturalHeight;
+            this.curSrc = '';
+            this.frame = 0;
+            this.fitStage();
+        } catch (e) { console.warn('[Tavvy] could not load the new picture', e); }
     }
 
     resize() {
@@ -695,7 +782,7 @@ class Actor {
 
     /** Free to react to things (not held, flying, hidden, leaving…). */
     free() {
-        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear', 'greet', 'sniff', 'eat', 'nod', 'dance', 'roll'].includes(this.state);
+        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear', 'greet', 'sniff', 'eat', 'nod', 'dance', 'roll', 'resist', 'press', 'gift', 'sleepy'].includes(this.state);
     }
 
     /** Can a sparkle reaching it be eaten right now? (dozing → piled beside it; held / flying → waits nearby) */
@@ -788,14 +875,167 @@ class Actor {
         const mid = (stage.left + stage.right) / 2;
         if (this.side && Math.abs(mid - this.x) > 8) this.dir = mid >= this.x ? 1 : -1;
         this.lastMe = performance.now();
+        if (can(this, 'press') && Math.random() < PRESS_CHANCE) return this.startPress();   // 내편: up against the screen
+        if (can(this, 'gift') && Math.random() < GIFT_CHANCE) return this.startGift();      // 내편 애교: a little present
+        this.meHeart = Math.random() < 0.55;
         this.setState('me');
     }
 
     endMe() {
         const k = this.rec.personality?.base;
         if (k === 'neugut') return this.setState('doze');                     // ♪ … and nods off
-        if (k === 'musim' && this.stepAside((stage.left + stage.right) / 2)) return;   // "…" and backs off a few steps
+        if (k === 'musim' && !can(this, 'soft') && this.stepAside((stage.left + stage.right) / 2)) return;   // "…" and backs off a few steps
         this.setState('idle');
+    }
+
+    /* ---------- 내편: pressing against the screen / a gift ---------- */
+
+    startPress() {
+        const k = this.rec.personality?.base;
+        const bonk = Math.random() < BONK_CHANCE;
+        this.setState('press');
+        this.big = { kind: 'press', bonk, hold: bonk ? 1.7 : PRESS_HOLD * (PRESS_HOLD_BY[k] || 1), hit: false, n: 0, cryT: 0 };
+        const g = document.createElement('div');
+        g.className = 'tavvy-glass';
+        this.body.appendChild(g);
+        this.glass = g;
+    }
+
+    startGift() {
+        this.setState('gift');
+        this.big = { kind: 'gift', shown: false, item: GIFTS[Math.floor(Math.random() * GIFTS.length)] };
+    }
+
+    /**
+     * One frame of pressing against the screen: grows toward you and a little down → bump on the
+     * glass (wide and flat) → shine + breath on the glass → slowly back to normal size.
+     * Sometimes (bonk) it hits too hard: stars, then a little cry while it shrinks back.
+     */
+    pressStep(dt, b) {
+        const k = this.rec.personality?.base, d = this.side ? this.dir : 1;
+        const GROW = 0.35, t = this.t;
+        let pose = this.role('press', 'happy', 'idle'), bob = 0;
+        if (t < GROW) {
+            const f = t / GROW, e = 1 - (1 - f) * (1 - f);
+            this.scale = 1 + (PRESS_SCALE - 1) * e;
+            bob = -6 * e * this.k;                                   // a little down
+            this.tiltT = 0;
+            return { pose: this.role('look', 'idle'), bob };
+        }
+        bob = -6 * this.k;
+        if (t < GROW + b.hold) {
+            const s = t - GROW;
+            this.scale = PRESS_SCALE;
+            this.sqT = 0.87;                                         // squashed against the glass
+            if (!b.hit) {
+                b.hit = true;
+                this.sq = b.bonk ? 0.6 : 0.78;
+                this.glass?.classList.add('tavvy-glass-on');
+                fx(this, b.bonk ? '쿵' : '톡', b.bonk ? '' : 'tavvy-fx-small');
+            }
+            if (b.bonk) {
+                if (s < 0.8) {                                       // dizzy ★
+                    this.tiltT = Math.sin(s * 9) * 8;
+                    pose = this.role('surprise', 'idle');
+                    if (b.n === 0 && s > 0.1) { b.n = 1; fx(this, '★', 'tavvy-fx-star'); }
+                    if (b.n === 1 && s > 0.45) { b.n = 2; fx(this, '★', 'tavvy-fx-star'); }
+                } else {                                             // ouch… 촥촥
+                    this.tiltT = 0;
+                    pose = this.role('cry', 'surprise', 'idle');
+                    b.cryT -= dt;
+                    if (b.cryT <= 0) { b.cryT = 0.5; tearBurst(this); }
+                }
+                return { pose, bob };
+            }
+            const every = (gap, i, fn) => { if (s > 0.15 + b.n * gap && b.n < i) { b.n++; fn(b.n); } };
+            if (k === 'aegyo') {                                     // 톡톡 ♥, the longest
+                pose = this.role('press', 'happy', 'idle');
+                this.tiltT = Math.sin(s * 3) * 3;
+                every(0.55, 99, (n) => fx(this, n % 2 ? '톡' : '♥', n % 2 ? 'tavvy-fx-small' : ''));
+            } else if (k === 'saechim') {                            // a moment… 홱 + small ♥
+                this.tiltT = s > b.hold * 0.55 ? -d * 9 : 0;
+                if (b.n === 0 && s > b.hold * 0.75) { b.n = 1; fx(this, '♥', 'tavvy-fx-small'); }
+            } else if (k === 'neugut') {                             // falls asleep stuck there
+                pose = this.role('sleep', 'idle');
+                this.tiltT = d * 4;
+                every(1.2, 99, () => fx(this, 'Z', 'tavvy-fx-z'));
+            } else if (k === 'simsul') {                             // 톡톡 쿵쿵 — then ♥, no 💢
+                this.tiltT = 0;
+                if (s < b.hold * 0.7) every(0.45, 99, (n) => fx(this, n % 2 ? '톡' : '쿵', 'tavvy-fx-small'));
+                else if (b.n < 100) { b.n = 100; fx(this, '♥'); }
+            } else {                                                 // 무심: "…" — and its first ♥
+                this.tiltT = 0;
+                if (b.n === 0 && s > 0.2) { b.n = 1; fx(this, '…'); }
+                if (b.n === 1 && s > b.hold * 0.7) { b.n = 2; fx(this, '♥'); }
+            }
+            return { pose, bob };
+        }
+        // slowly back to normal size (crying all the way after a bonk)
+        this.sqT = 1;
+        this.tiltT = 0;
+        this.glass?.classList.remove('tavvy-glass-on');
+        if (b.bonk) {
+            pose = this.role('cry', 'surprise', 'idle');
+            b.cryT -= dt;
+            if (b.cryT <= 0) { b.cryT = 0.5; tearBurst(this); }
+        }
+        this.scale += (1 - this.scale) * (1 - Math.exp(-dt * (b.bonk ? 1.8 : 3.5)));
+        if (this.scale - 1 < 0.015) { this.scale = 1; this.setState('idle'); }
+        return { pose, bob: bob * (this.scale - 1) / (PRESS_SCALE - 1) };
+    }
+
+    /** Leaving the press / gift: back to normal size, glass gone. */
+    endBig() {
+        this.big = null;
+        if (this.glass) { this.glass.remove(); this.glass = null; }
+        if (this.scale > 1) this.scale = 1;
+    }
+
+    /* ---------- 관심: the input box, your hand, a pat ---------- */
+
+    /** You started writing (or are still at it): a peek at the input box. */
+    startPeekIn() {
+        const k = this.rec.personality?.base;
+        const r = $id('send_textarea')?.getBoundingClientRect();
+        const x = r && r.width > 0 ? (r.left + r.right) / 2 : (stage.left + stage.right) / 2;
+        const d = Math.abs(x - this.x) < 30 ? (this.side ? this.dir : 1) : x > this.x ? 1 : -1;
+        if (this.side) this.dir = d;
+        if (k === 'saechim') { this.after = 'idle'; return this.startLook('glance', this.x + d * 40); }   // 힐끔 → 홱
+        if (k === 'musim') { this.after = 'idle'; return this.startLook('…', this.x + d * 40); }        // one look, "…"
+        if (this.state === 'doze') { fx(this, '!', 'tavvy-fx-small'); this.sq = 0.9; }                 // 느긋: wakes from a doze
+        this.pk = { d };
+        this.setState('peekin');
+    }
+
+    /** Your hand (mouse / finger) came near: worth a look? */
+    wantsFollow() {
+        if (!can(this, 'follow')) return false;
+        const now = performance.now();
+        if (now - hand.t > 250 || now < this.followNext) return false;
+        const cy = this.foot() - this.h / 2;
+        const near = Math.max(110, this.h * FOLLOW_NEAR);
+        if (Math.hypot(hand.x - this.x, hand.y - cy) > near) return false;
+        if (Math.abs(hand.x - this.x) < this.w / 2 && hand.y > this.foot() - this.h && hand.y < this.foot()) return false;   // on the pet itself (a pat)
+        if (this.rec.personality?.base === 'musim' && this.followedOnce) return false;          // 무심: only the first time
+        this.followNext = now + 3000;
+        return Math.random() < FOLLOW_CHANCE;
+    }
+
+    startFollow() {
+        const k = this.rec.personality?.base;
+        this.followedOnce = true;
+        this.fstep = Math.random() < (k === 'aegyo' ? 0.5 : k === 'simsul' ? FOLLOW_STEP : 0);   // 새침·느긋·무심 only look
+        this.setState('follow');
+    }
+
+    /* ---------- 단짝: dozing off while you're away ---------- */
+
+    /** Nothing from you for a while: up onto your last message, and nod off there. */
+    startSleepy() {
+        const p = plats.find(q => q.user);          // plats are listed newest first
+        if (p && this.plat === p.el) return this.setState('sleepy');
+        if (p && this.climbTo(p, 'sleepy')) return;
+        this.setState('sleepy');
     }
 
     /** A few steps away from x. false if there is no room. */
@@ -848,7 +1088,7 @@ class Actor {
         let down = null, timer = 0;
         const pick = (e) => {
             clearTimeout(timer);
-            if (!down || this.held || this.state === 'tuck' || this.state === 'wave') return;
+            if (!down || this.held || ['tuck', 'wave', 'resist'].includes(this.state)) return;
             const left = this.x - this.w / 2;
             const top = stage.floorY - this.y - this.h;
             this.grab.x = clamp(down.x - left, 0, this.w);
@@ -865,6 +1105,7 @@ class Actor {
         this.el.addEventListener('pointerdown', (e) => {
             if (e.button !== undefined && e.button !== 0) return;
             e.preventDefault(); e.stopPropagation();
+            noteUserAct();
             if (down) return;                                   // one finger at a time — a second finger is ignored
             if (this.held) { this.release(); return; }          // held with no finger on it = stuck → a tap frees it
             try { this.el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
@@ -890,7 +1131,7 @@ class Actor {
             down = null;
             try { this.el.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
             if (wasPicked && this.held) this.release();
-            else if (!wasPicked && e.type === 'pointerup') this.tap();
+            else if (!wasPicked && e.type === 'pointerup') this.tap(e.clientX);
         };
         this.el.addEventListener('pointerup', end);
         this.el.addEventListener('pointercancel', end);
@@ -898,20 +1139,28 @@ class Actor {
     }
 
     /** Tap = a pat: a little hop and a reaction. Counts once a day toward closeness. */
-    tap() {
-        if (this.state === 'tuck' || this.state === 'wave' || this.held) return;
+    tap(px) {
+        if (['tuck', 'wave', 'resist', 'press', 'gift'].includes(this.state) || this.held) return;
         const now = performance.now();
         this.taps = this.taps.filter(t => now - t < RAPID_WINDOW * 1000);
         this.taps.push(now);
-        if (!this.air) { this.air = true; this.vy = 300; this.vx = 0; this.next = 'idle'; }
-        if (this.p.fussy && this.taps.length >= RAPID_TAPS) return fx(this, '💢');   // 연타 싫어! (closeness is not lost)
-        patPet(this.rec);
         const k = this.rec.personality?.base;
         const close = closenessOf(this.rec) >= CLOSE;
-        fx(this, this.p.tap);
+        const soft = can(this, 'soft');
+        const rapid = this.p.fussy && this.taps.length >= RAPID_TAPS;
+        // 관심: leans into the pat instead of the little hop (심술 that isn't close yet still backs off)
+        const lean = !rapid && can(this, 'lean') && this.free() && !this.air && !(k === 'simsul' && !close) && Math.random() < LEAN_CHANCE;
+        if (!lean && !this.air) { this.air = true; this.vy = 300; this.vx = 0; this.next = 'idle'; }
+        if (rapid) return fx(this, '💢');   // 연타 싫어! (closeness is not lost)
+        patPet(this.rec);
+        if (lean) {
+            this.leanD = px == null || Math.abs(px - this.x) < this.w * 0.12 ? (Math.random() < 0.5 ? -1 : 1) : px > this.x ? 1 : -1;
+            this.setState('lean');
+        }
+        fx(this, k === 'simsul' && soft ? '♥' : this.p.tap);                                // 내편 심술: no 💢, just ♥
         const later = (fn) => setTimeout(() => { if (!this.gone && !this.held) fn(); }, 650);
         if (k === 'saechim' && close) later(() => fx(this, '♥', 'tavvy-fx-small'));      // 친하면 작은 ♥
-        if (k === 'simsul') {
+        if (k === 'simsul' && !soft) {
             if (close) later(() => fx(this, '♥'));                                          // 💢 … then softens
             else later(() => { if (this.free() && !this.air) this.stepAside(this.x + (Math.random() < 0.5 ? -1 : 1)); });   // not close yet → moves away
         }
@@ -962,6 +1211,7 @@ class Actor {
     }
 
     setState(s) {
+        if (this.big && s !== this.state) this.endBig();
         this.state = s; this.t = 0;
         this.sqT = 1;
         if (s === 'idle') { this.until = rand(...this.p.idle); this.tiltT = 0; }
@@ -988,8 +1238,17 @@ class Actor {
         if (s === 'me') {
             this.fxT = 0;
             const close = closenessOf(this.rec) >= CLOSE;
-            this.until = { aegyo: 1.0, saechim: close ? 1.9 : 1.1, neugut: 1.4, simsul: close ? 1.5 : 1.0, musim: 0.8 }[this.rec.personality?.base] || 1.2;
+            this.until = can(this, 'soft')
+                ? { saechim: 1.2, neugut: 1.5, simsul: 1.1, musim: 1.1 }[this.rec.personality?.base] || 1.0
+                : { aegyo: 1.0, saechim: close ? 1.9 : 1.1, neugut: 1.4, simsul: close ? 1.5 : 1.0, musim: 0.8 }[this.rec.personality?.base] || 1.2;
         }
+        const k = this.rec.personality?.base;
+        if (s === 'peekin') { this.fxT = 0; this.until = { aegyo: 1.5, neugut: 1.8, simsul: 1.7 }[k] || 1.4; }
+        if (s === 'follow') { this.fxT = 0; this.fstepped = false; this.until = { saechim: 1.3, simsul: 1.6, musim: 0.9 }[k] || 3; }
+        if (s === 'lean') { this.until = k === 'neugut' ? 1.8 : 1.2; }
+        if (s === 'resist') { this.fxT = 0; this.until = 1.0; this.tiltT = 0; }
+        if (s === 'sleepy') { this.fxT = 0.8; }
+        if (s === 'press' || s === 'gift') { this.fxT = 0; this.tiltT = 0; }
     }
 
     /** Walk somewhere on what it stands on (floor or ledge). toEdge = walk to the very end of a ledge. */
@@ -1050,8 +1309,13 @@ class Actor {
     }
 
     pickClimb() {
-        const list = this.reachable();
+        let list = this.reachable();
         if (!list.length) return null;
+        // 친구: likes your messages
+        if (can(this, 'myBubble') && Math.random() < MY_BUBBLE) {
+            const mine = list.filter(p => p.user);
+            if (mine.length) list = mine;
+        }
         // 무심쟁이 likes the highest one; the rest pick one at random
         if (this.rec.personality?.base === 'musim') return list.reduce((a, b) => (b.top < a.top ? b : a));
         return list[Math.floor(Math.random() * list.length)];
@@ -1211,13 +1475,16 @@ class Actor {
     }
 
     goToBed(done) {
+        if (['resist', 'wave', 'tuck'].includes(this.state)) return;   // already on its way (keeps the first callback)
+        // 단짝: doesn't want to go yet — digs its feet in for a second
+        const resist = can(this, 'resist') && !this.held && !this.air && this.state !== 'off' && Math.random() < RESIST_CHANCE;
         if (this.held) { this.held = false; this.el.classList.remove('tavvy-held'); this.body.style.transformOrigin = ''; }
         this.onGone = done;
         this.waiting = false;
         if (this.state === 'off') { this.vanish(); bumpBed(); return; }
         this.plat = null;      // waves where it is, then goes into the bed (doesn't ride a ledge away)
         this.air = false;
-        this.setState('wave');
+        this.setState(resist ? 'resist' : 'wave');
         this.tiltT = 0;
     }
 
@@ -1293,8 +1560,115 @@ class Actor {
                 case 'appear':
                     breath = 1;
                     if (this.state === 'idle' && (this.food > 0 || this.mealPending)) { this.decide(); break; }   // food coming → stop and eat
+                    if (this.state === 'idle' && this.t > 0.3 && this.wantsFollow()) { this.startFollow(); break; }   // 관심: your hand
                     if (this.t > this.until) this.decide();
                     break;
+                case 'peekin': {                       // 관심: you are writing — a peek at the input box
+                    const k = this.rec.personality?.base, d = this.pk?.d || 1;
+                    breath = 1;
+                    pose = this.role('look', 'idle');
+                    if (k === 'aegyo') {                                 // 폴짝폴짝, can't wait
+                        pose = this.role('happy', 'idle');
+                        bob = Math.abs(Math.sin(this.t * Math.PI * 3)) * 7 * this.k;
+                        this.tiltT = d * 6;
+                        if (this.fxT === 0 && this.t > 0.15) { this.fxT = 1; fx(this, '♪'); }
+                    } else if (k === 'neugut') {                         // just woke up, a slow look
+                        this.tiltT = d * Math.min(6, this.t * 5);
+                        if (this.fxT === 0 && this.t > 0.8) { this.fxT = 1; fx(this, '?', 'tavvy-fx-small'); }
+                    } else if (k === 'simsul') {                         // waits… 💢
+                        this.tiltT = d * 6;
+                        if (this.fxT === 0 && this.t > 1.0) { this.fxT = 1; fx(this, '💢'); }
+                    } else {
+                        this.tiltT = d * 6;
+                        if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '?', 'tavvy-fx-small'); }
+                    }
+                    if (this.t > this.until) { this.pk = null; this.setState('idle'); }
+                    break;
+                }
+                case 'follow': {                       // 관심: looking at your hand / finger
+                    const k = this.rec.personality?.base;
+                    const d = hand.x >= this.x ? 1 : -1;
+                    const now = performance.now();
+                    breath = 1;
+                    pose = this.role('look', 'idle');
+                    if (this.side && k !== 'neugut' && Math.abs(hand.x - this.x) > 12) this.dir = d;
+                    if (k === 'saechim') this.tiltT = this.t < 0.6 ? d * 6 : -d * 9;           // 힐끔 → 홱
+                    else if (k === 'neugut') this.tiltT = d * Math.min(5, this.t * 3);          // only the head, slowly
+                    else if (k === 'simsul') { this.tiltT = d * 5; if (this.fxT === 0 && this.t > 1.0) { this.fxT = 1; fx(this, '💢'); } }
+                    else if (k === 'aegyo') { pose = this.role('happy', 'idle'); this.tiltT = d * 5; bob = Math.abs(Math.sin(this.t * Math.PI * 2.5)) * 4 * this.k; }
+                    else this.tiltT = d * 4;
+                    const gone = now - hand.t > 1500 || Math.hypot(hand.x - this.x, hand.y - (this.foot() - this.h / 2)) > Math.max(110, this.h * FOLLOW_NEAR) * 1.5;
+                    if (this.fstep && !this.fstepped && this.t > 0.5 && !gone) {          // a step or two toward it
+                        this.fstepped = true;
+                        const [L, R] = this.range();
+                        const tx = clamp(this.x + d * rand(25, 50), L, Math.max(L, R));
+                        if (Math.abs(tx - this.x) > 8 && Math.abs(hand.x - this.x) > 20) {
+                            this.followNext = now + (k === 'aegyo' ? 600 : 2500);
+                            this.tx = tx; this.edge = false; this.dir = d;
+                            this.setState('walk');
+                            break;
+                        }
+                    }
+                    if (this.t > this.until || (gone && this.t > 0.8)) {
+                        this.followNext = now + rand(...FOLLOW_REST) * 1000;
+                        this.setState('idle');
+                    }
+                    break;
+                }
+                case 'lean':                           // 관심: leaning into a pat
+                    breath = 1;
+                    this.tiltT = this.leanD * 12;
+                    this.sqT = 0.95;
+                    pose = this.rec.personality?.base === 'aegyo' ? this.role('happy', 'idle') : this.role('idle');
+                    if (this.t > this.until) this.setState('idle');
+                    break;
+                case 'resist': {                       // 단짝: doesn't want to go to bed yet (도리도리)
+                    const k = this.rec.personality?.base, d = this.side ? this.dir : 1;
+                    this.sqT = 0.92;
+                    if (k === 'saechim') this.tiltT = this.t < 0.15 ? 0 : -d * 10;              // 홱
+                    else if (k === 'musim') this.tiltT = Math.sin(this.t * 10) * 4;
+                    else this.tiltT = Math.sin(this.t * 16) * 9;
+                    if (this.fxT === 0 && this.t > 0.05) {
+                        this.fxT = 1;
+                        fx(this, { aegyo: '💦', neugut: '💦', simsul: '💢', musim: '…' }[k] || '!', k === 'aegyo' || k === 'neugut' ? 'tavvy-fx-small' : '');
+                    }
+                    if (k === 'aegyo' && this.fxT === 1 && this.t > 0.55) { this.fxT = 2; fx(this, '♥'); }
+                    if (this.t > this.until) { this.tiltT = 0; this.setState('wave'); }
+                    break;
+                }
+                case 'sleepy':                         // 단짝: you've been away a while — nodding off on your message
+                    breath = 0.6;
+                    this.sqT = 0.94;
+                    pose = this.role('nod', 'sleep', 'idle');
+                    this.tiltT = (this.side ? this.dir : 1) * (7 + Math.max(0, Math.sin(this.t * 2.6)) * 8);
+                    this.fxT -= dt;
+                    if (this.fxT <= 0) { this.fxT = 1.6; fx(this, 'Z', 'tavvy-fx-z'); }
+                    break;
+                case 'press': {                        // 내편: up against the screen
+                    const b = this.big;
+                    if (!b) { this.setState('idle'); break; }
+                    const r = this.pressStep(dt, b);
+                    pose = r.pose; bob = r.bob;
+                    break;
+                }
+                case 'gift': {                         // 내편 애교: here, for you
+                    const b = this.big;
+                    if (!b) { this.setState('idle'); break; }
+                    breath = 1;
+                    if (this.t < 0.7) {                                  // 꼼지락 (getting it out)
+                        this.tiltT = Math.sin(this.t * 22) * 5; this.sqT = 0.93;
+                    } else if (this.t < 2.4) {
+                        if (!b.shown) { b.shown = true; showGift(this, b.item); fx(this, '♥'); }
+                        pose = this.role('gift', 'happy', 'idle');
+                        this.tiltT = 0;
+                        this.scale += (1.18 - this.scale) * Math.min(1, dt * 6);   // leans out toward you
+                    } else {
+                        this.scale += (1 - this.scale) * Math.min(1, dt * 6);
+                        pose = this.role('happy', 'idle');
+                        if (this.t > 2.9) { this.scale = 1; this.setState('idle'); }
+                    }
+                    break;
+                }
                 case 'walk': {
                     if (this.food > 0) { this.edge = false; this.setState('eat'); break; }
                     const d = this.tx - this.x;
@@ -1440,7 +1814,23 @@ class Actor {
                     breath = 1;
                     const k = this.rec.personality?.base, close = closenessOf(this.rec) >= CLOSE, d = this.side ? this.dir : 1;
                     pose = this.role('look', 'idle');
-                    if (k === 'aegyo') {                                 // ♥♥ 통통
+                    if (k !== 'aegyo' && can(this, 'soft')) {           // 내편: one layer softer
+                        if (k === 'saechim') {                           // no turning away — a small ♥ right away
+                            this.tiltT = d * 4;
+                            if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '♥', 'tavvy-fx-small'); }
+                        } else if (k === 'simsul') {                     // no 💢 — just ♥
+                            this.tiltT = 0; pose = this.role('happy', 'idle');
+                            if (this.fxT === 0 && this.t > 0.1) { this.fxT = 1; fx(this, '♥'); }
+                        } else if (k === 'musim') {                      // stays, sometimes a ♥
+                            this.tiltT = d * 3;
+                            if (this.fxT === 0 && this.t > 0.1) { this.fxT = 1; fx(this, '…'); }
+                            if (this.meHeart && this.fxT === 1 && this.t > 0.6) { this.fxT = 2; fx(this, '♥', 'tavvy-fx-small'); }
+                        } else {                                         // 느긋: ♪, a small ♥, then a happy doze
+                            this.tiltT = d * 3;
+                            if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '♪'); }
+                            if (this.fxT === 1 && this.t > 0.75) { this.fxT = 2; fx(this, '♥', 'tavvy-fx-small'); }
+                        }
+                    } else if (k === 'aegyo') {                                 // ♥♥ 통통
                         pose = this.role('happy', 'idle'); this.tiltT = 0;
                         bob = Math.abs(Math.sin(this.t * Math.PI * 2.5)) * 6 * this.k;
                         if (this.fxT === 0 && this.t > 0.05) { this.fxT = 1; fx(this, '♥'); }
@@ -1571,6 +1961,7 @@ function tick(t) {
         remeasureT = 0; measure();
         // missed "generation ended" signal (stopped / error) → stop waiting
         if (gen.active && document.body.dataset.generating !== 'true' && t - gen.t0 > 3000) onGenEnd();
+        checkIdle();
     }
     else {
         const ox = stage.ox, oy = stage.oy;
@@ -1614,7 +2005,7 @@ function bumpCheck() {
  * Food (stage 4) — counting, the bowl, sparkles, backups
  * ===================================================================== */
 
-const EATABLE = ['idle', 'walk', 'eat', 'look', 'wait', 'watch', 'perch', 'edge', 'me'];
+const EATABLE = ['idle', 'walk', 'eat', 'look', 'wait', 'watch', 'perch', 'edge', 'me', 'peekin', 'follow', 'lean'];
 
 /** "2026-11-12" — the day starts at 6 a.m. */
 function dayKey(t = Date.now()) {
@@ -1736,7 +2127,7 @@ class Sparkle {
     /** Where it goes while the pet can't eat: piled beside a dozing pet, or floating nearby. */
     restSpot() {
         const a = this.a;
-        if (a.state === 'doze') return { x: a.x + this.off.side * a.w * (0.55 + this.off.y * 0.4), y: a.foot() - 6 - this.off.y * 6, pile: true };
+        if (a.state === 'doze' || a.state === 'sleepy') return { x: a.x + this.off.side * a.w * (0.55 + this.off.y * 0.4), y: a.foot() - 6 - this.off.y * 6, pile: true };
         return { x: a.x + this.off.x * a.w, y: a.foot() - a.h - 14 - this.off.y * 18, pile: false };
     }
 
@@ -2066,14 +2457,16 @@ function showCheer(a, from, to) {
     const el = document.createElement('div');
     el.className = 'tavvy-cheer';
     const mode = root?.settings?.heartMode || 'both';
-    el.innerHTML = '<b>친밀도 상승!</b>' + (mode === 'hide' ? '' : `<span>${esc(levelLabel(a.rec, from))} → ${esc(levelLabel(a.rec, to))}</span>`);
+    const fresh = unlocksFor(a.rec).filter(u => u.lv > from && u.lv <= to);
+    el.innerHTML = '<b>친밀도 상승!</b>' + (mode === 'hide' ? '' : `<span>${esc(levelLabel(a.rec, from))} → ${esc(levelLabel(a.rec, to))}</span>`)
+        + (fresh.length ? `<span class="tavvy-cheer-new">새로운 행동을 할 수 있게 되었어요!</span><small>${fresh.map(u => esc(u.name)).join(' · ')}</small>` : '');
     ensureLayer().appendChild(el);
     const w = el.offsetWidth, h = el.offsetHeight;
     const x = clamp(a.x - w / 2, 4, Math.max(4, stage.vw - w - 4));
     const y = clamp(top - h - 22, 4, Math.max(4, stage.vh - h - 4));
     el.style.left = (x - stage.ox) + 'px';
     el.style.top = (y - stage.oy) + 'px';
-    setTimeout(() => el.remove(), 3200);
+    setTimeout(() => el.remove(), 4200);
     for (let i = 0; i < 14; i++) {
         const s = document.createElement('div');
         s.className = 'tavvy-burst';
@@ -2087,6 +2480,104 @@ function showCheer(a, from, to) {
         s.style.animationDelay = `${(i % 3) * 0.08}s`;
         ensureLayer().appendChild(s);
         setTimeout(() => s.remove(), 1600);
+    }
+}
+
+/** Tears flying out from both sides of the head (cartoon style), once. */
+function tearBurst(a) {
+    const s = a.scale || 1;
+    const top = a.foot() - a.h * s;
+    let cx = a.x, hy = top + a.h * s * 0.28;
+    if (a.side) cx = a.x + a.dir * a.w * s * 0.12;          // side view: the head is toward where it looks
+    const ang = TEAR_ANGLE * Math.PI / 180;
+    for (const side of [-1, 1]) {
+        for (let i = 0; i < 2; i++) {
+            const t = document.createElement('div');
+            t.className = 'tavvy-tear';
+            t.style.background = TEAR_COLOR;
+            t.style.left = (cx + side * a.w * s * 0.28 - stage.ox) + 'px';
+            t.style.top = (hy - stage.oy) + 'px';
+            const dist = rand(26, 40) * s;
+            t.style.setProperty('--dx', `${side * Math.cos(ang) * dist}px`);
+            t.style.setProperty('--dy', `${-Math.sin(ang) * dist}px`);
+            t.style.setProperty('--r', `${side * 35}deg`);
+            t.style.animationDelay = `${i * 0.12}s`;
+            ensureLayer().appendChild(t);
+            setTimeout(() => t.remove(), 1100);
+        }
+    }
+}
+
+/** 내편 애교: holds a little present out toward you (it grows as it comes closer). */
+function showGift(a, item) {
+    const el = document.createElement('div');
+    el.className = 'tavvy-gift';
+    el.textContent = item;
+    el.style.left = (a.x + (a.side ? a.dir * a.w * 0.25 : 0) - stage.ox) + 'px';
+    el.style.top = (a.foot() - a.h * 0.45 - stage.oy) + 'px';
+    ensureLayer().appendChild(el);
+    setTimeout(() => el.remove(), 2000);
+}
+
+/* ---------- 친구: the bed wiggles while food piles up ---------- */
+let wiggleAt = 0;
+
+function bedWiggle() {
+    if (!bed || bed.hidden || actors.length || document.hidden) return;
+    const now = performance.now();
+    if (now < wiggleAt) return;
+    if (!residents().some(p => bowlCount(p) > 0 && can(p, 'bedWiggle'))) return;
+    wiggleAt = now + rand(...WIGGLE_GAP) * 1000;
+    const icon = bed.querySelector('.tavvy-bed-icon');
+    icon.classList.remove('tavvy-wiggle');
+    void icon.offsetWidth;
+    icon.classList.add('tavvy-wiggle');
+}
+
+/* ---------- you: writing, your hand, being away a while ---------- */
+
+/** A keystroke in the input box. */
+function onTyping() {
+    noteUserAct();
+    wakeSleepy();
+    if (!actors.length) return;
+    const now = performance.now();
+    const start = now - typing.last > TYPING_GAP * 1000;
+    if (start) typing.session++;
+    typing.last = now;
+    for (const a of actors) {
+        if (!can(a, 'peekInput') || a.held || a.air || a.waiting) continue;
+        if (!start && now < a.peekInNext) continue;
+        a.peekInNext = now + rand(...PEEKIN_GAP) * 1000;
+        const k = a.rec.personality?.base;
+        const okState = ['idle', 'walk', 'perch'].includes(a.state) || (a.state === 'doze' && k === 'neugut');
+        if (!okState || Math.random() >= (start ? PEEKIN_CHANCE : PEEKIN_AGAIN)) continue;
+        if (k === 'musim') { if (a.peekInSession === typing.session) continue; a.peekInSession = typing.session; }
+        a.startPeekIn();
+    }
+}
+
+/** You wrote or sent something: anyone nodding off on your message wakes up — "!" */
+function wakeSleepy() {
+    for (const a of actors) {
+        if (a.state !== 'sleepy') continue;
+        fx(a, '!');
+        a.sq = 0.88;
+        a.setState('idle');
+    }
+}
+
+/** Nothing from you for IDLE_DOZE seconds (checked a few times a second while awake). */
+function checkIdle() {
+    if (gen.active || !actors.length) return;
+    if (performance.now() - lastAct < IDLE_DOZE * 1000) return;
+    for (const a of actors) {
+        // one roll per quiet spell; a pet busy right then (eating, held…) gets its roll a little later
+        if (a.idleTried || !can(a, 'dozeWait') || !a.free() || a.waiting || !['idle', 'walk', 'perch', 'doze'].includes(a.state)) continue;
+        a.idleTried = true;
+        if (Math.random() >= IDLE_DOZE_CHANCE) continue;
+        measurePlats();
+        a.startSleepy();
     }
 }
 
@@ -2165,6 +2656,7 @@ function sleepInstant() {
 }
 
 function toggleWake() {
+    noteUserAct();
     if (actors.length) sleepAll();
     else wakeAll();
 }
@@ -2474,12 +2966,8 @@ function bindPanel() {
     $id('tavvy-list').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-del]');
         if (btn) return deletePet(btn.dataset.del);
-        const jb = e.target.closest('[data-journal]');
-        if (jb) {
-            const id = jb.dataset.journal;
-            if (openJournals.has(id)) openJournals.delete(id); else openJournals.add(id);
-            renderPanel();
-        }
+        const ib = e.target.closest('[data-info]');
+        if (ib) openInfo(ib.dataset.info);
     });
     $id('tavvy-list').addEventListener('input', (e) => {
         if (e.target.matches?.('[data-size]')) onSizeInput(e.target, false);
@@ -2571,7 +3059,6 @@ function onSizeInput(input, done) {
 }
 
 /* ---------- journal (기록장) — what happened, never changes behaviour ---------- */
-const openJournals = new Set();   // pet ids whose journal is unfolded (runtime only)
 
 /** Days between two day keys ("2026-11-12"). */
 function daysBetween(a, b) {
@@ -2617,7 +3104,285 @@ function journalHtml(p) {
   ${rows.map(([k, v]) => `<div><span>${k}</span><b>${esc(v)}</b></div>`).join('')}
   <div class="tavvy-journal-sec">기념 순간</div>
   ${moments.map(m => `<div><span>${esc(m.day)}</span><b>${esc(m.name)}</b></div>`).join('')}
+  <div class="tavvy-journal-sec">할 수 있는 행동</div>
+  ${abilitiesHtml(p)}
 </div>`;
+}
+
+/** Behaviours learned so far by name; the rest stay "???". */
+function abilitiesHtml(p) {
+    const lv = levelOf(p);
+    const hide = (root?.settings?.heartMode || 'both') === 'hide';
+    return unlocksFor(p).map(u => {
+        const open = lv >= u.lv;
+        return `<div class="${open ? '' : 'tavvy-locked'}"><span>${hide ? '' : LEVELS[u.lv].hearts}</span><b>${open ? esc(u.name) : '???'}</b></div>`;
+    }).join('');
+}
+
+/* =====================================================================
+ * Pet info window (기록장 | 수정) — opened from the wand menu or the pet list
+ * ===================================================================== */
+
+let info = null;   // { el, id, tab, file, base: {…} } while open
+
+function infoBase(p) {
+    return { name: p.name, pers: p.personality?.base || 'aegyo', facing: p.look?.facing || 'front', squish: String(p.look?.squish ?? 0.5) };
+}
+
+function ensureInfoEl() {
+    let el = $id('tavvy-info');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'tavvy-info';
+    el.className = 'tavvy-modal';
+    el.hidden = true;
+    el.innerHTML = '<div class="tavvy-modal-box tavvy-settings" role="dialog" aria-modal="true"></div>';
+    document.body.appendChild(el);
+    el.addEventListener('pointerdown', (e) => { if (e.target === el) closeInfo(); });
+    el.addEventListener('click', onInfoClick);
+    el.addEventListener('input', onInfoInput);
+    el.addEventListener('change', onInfoInput);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && info) closeInfo(); });
+    return el;
+}
+
+/** From the wand menu: one pet in this room → its window; several → pick one first. */
+function openInfoFromMenu() {
+    const here = residents();
+    if (here.length === 1) return openInfo(here[0].id);
+    const el = ensureInfoEl();
+    const box = el.querySelector('.tavvy-modal-box');
+    info = { el, id: null, chooser: true };
+    box.innerHTML = `<div class="tavvy-info-head"><div class="tavvy-info-title"><b>펫 정보</b><span>${here.length ? '어떤 펫을 볼까요?' : (room ? '이 방에는 아직 펫이 없어요.' : '열려 있는 채팅방이 없어요.')}</span></div><div class="tavvy-x fa-solid fa-xmark" data-close title="닫기"></div></div>
+  <div class="tavvy-choose">${here.map(p => `<div class="tavvy-choice" data-pick="${esc(p.id)}"><img src="${esc(imgUrl(p.look?.roles?.idle?.[0]))}" alt=""><b>${esc(p.name)}</b></div>`).join('')}</div>
+  ${here.length ? '' : '<div class="tavvy-note">확장 설정의 Tavvy에서 새 펫을 만들 수 있어요.</div>'}`;
+    el.hidden = false;
+}
+
+function openInfo(id, tab = 'journal') {
+    const p = root?.pets.find(x => x.id === id);
+    if (!p) return;
+    const el = ensureInfoEl();
+    info = { el, id, tab, file: null, prep: null, base: infoBase(p) };
+    const box = el.querySelector('.tavvy-modal-box');
+    const pers = Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
+    box.innerHTML = `
+  <div class="tavvy-info-head">
+    <img class="tavvy-info-img" alt="">
+    <div class="tavvy-info-title"><b class="tavvy-info-name"></b><span class="tavvy-info-sub"></span></div>
+    <div class="tavvy-x fa-solid fa-xmark" data-close title="닫기"></div>
+  </div>
+  <div class="tavvy-tabs">
+    <div class="tavvy-tab" data-tab="journal">기록장</div>
+    <div class="tavvy-tab" data-tab="edit">수정</div>
+  </div>
+  <div class="tavvy-pane" data-pane="journal"></div>
+  <div class="tavvy-pane tavvy-form" data-pane="edit">
+    <label>이름 <input class="text_pole" data-f="name" maxlength="20"></label>
+    <label>성격 <select class="text_pole" data-f="pers">${pers}</select></label>
+    <div class="tavvy-note">성격을 바꾸면 행동은 바로 바뀌어요. 친밀도와 기록은 그대로예요.</div>
+    <label>그림이 보는 쪽
+      <select class="text_pole" data-f="facing">
+        <option value="front">정면</option>
+        <option value="right">오른쪽을 봄</option>
+        <option value="left">왼쪽을 봄</option>
+      </select>
+    </label>
+    <div class="tavvy-note">그림 한 장이 어느 쪽을 보는지예요. 반대쪽은 자동으로 뒤집어서 써요.</div>
+    <label><span>말랑 정도 <span class="tavvy-squish-val"></span></span>
+      <input type="range" data-f="squish" min="0" max="1" step="0.1">
+    </label>
+    <div class="tavvy-sub">그림 바꾸기</div>
+    <input type="file" accept="image/png" data-f="file">
+    <div class="tavvy-filerow">
+      <div class="menu_button" data-act="pick">그림 고르기</div>
+      <span class="tavvy-note tavvy-info-filename">바꾸지 않아요</span>
+    </div>
+    <div class="tavvy-info-prevrow" hidden><img class="tavvy-info-prev" alt=""><label class="checkbox_label"><input type="checkbox" data-f="crop" checked> 투명 여백 자르기</label></div>
+    <div class="tavvy-note">투명 배경 PNG 한 장이에요. 저장하면 지금 그림 대신 이 그림을 써요.</div>
+    <div class="tavvy-filerow tavvy-info-save">
+      <div class="menu_button" data-act="save">저장</div>
+      <span class="tavvy-note tavvy-info-msg"></span>
+    </div>
+  </div>`;
+    fillInfoForm(p);
+    el.hidden = false;
+    showInfoTab(tab);
+    refreshInfo();
+}
+
+function fillInfoForm(p) {
+    const box = info.el;
+    const b = info.base = infoBase(p);
+    box.querySelector('[data-f="name"]').value = b.name;
+    box.querySelector('[data-f="pers"]').value = b.pers;
+    box.querySelector('[data-f="facing"]').value = b.facing;
+    box.querySelector('[data-f="squish"]').value = b.squish;
+    box.querySelector('[data-f="file"]').value = '';
+    info.file = null; info.prep = null;
+    box.querySelector('.tavvy-info-filename').textContent = '바꾸지 않아요';
+    box.querySelector('.tavvy-info-prevrow').hidden = true;
+    showSquish();
+}
+
+function showSquish() {
+    const v = Number(info.el.querySelector('[data-f="squish"]').value);
+    info.el.querySelector('.tavvy-squish-val').textContent = v <= 0 ? '(안 말랑)' : `(${Math.round(v * 100)}%)`;
+}
+
+function showInfoTab(tab) {
+    info.tab = tab;
+    info.el.querySelectorAll('.tavvy-tab').forEach(t => t.classList.toggle('tavvy-tab-on', t.dataset.tab === tab));
+    info.el.querySelectorAll('.tavvy-pane').forEach(pn => { pn.hidden = pn.dataset.pane !== tab; });
+    refreshInfo();
+}
+
+/** Header and journal follow the pet live (it may be eating while the window is open). */
+function refreshInfo() {
+    if (!info || info.chooser || info.el.hidden) return;
+    const p = root?.pets.find(x => x.id === info.id);
+    if (!p) { info.el.hidden = true; info = null; return; }
+    const img = info.el.querySelector('.tavvy-info-img');
+    const src = imgUrl(p.look?.roles?.idle?.[0]);
+    if (img.getAttribute('src') !== src) img.src = src;
+    info.el.querySelector('.tavvy-info-name').textContent = p.name;
+    const lv = levelLabel(p);
+    info.el.querySelector('.tavvy-info-sub').textContent = `${PERSONALITIES[p.personality?.base]?.name || '?'}${lv ? ' · ' + lv : ''} · ${homeLabel(p)}`;
+    if (info.tab === 'journal') {
+        const pane = info.el.querySelector('[data-pane="journal"]');
+        const html = journalHtml(p);
+        if (pane.dataset.html !== html) { pane.innerHTML = html; pane.dataset.html = html; }
+    }
+}
+
+function infoDirty() {
+    if (!info || info.chooser) return false;
+    const box = info.el, b = info.base;
+    return !!info.file
+        || box.querySelector('[data-f="name"]').value !== b.name
+        || box.querySelector('[data-f="pers"]').value !== b.pers
+        || box.querySelector('[data-f="facing"]').value !== b.facing
+        || String(Number(box.querySelector('[data-f="squish"]').value)) !== String(Number(b.squish));
+}
+
+let closingInfo = false;
+async function closeInfo() {
+    if (!info || closingInfo) return;
+    if (infoDirty()) {
+        closingInfo = true;
+        try { if (!(await confirmBox('저장 안 한 내용이 있어요. 닫을까요?'))) return; } finally { closingInfo = false; }
+    }
+    if (!info) return;
+    info.el.hidden = true;
+    info = null;
+}
+
+function infoMsg(text) {
+    const m = info?.el.querySelector('.tavvy-info-msg');
+    if (m) m.textContent = text;
+}
+
+function onInfoClick(e) {
+    if (!info) return;
+    if (e.target.closest('[data-close]')) return closeInfo();
+    const pick = e.target.closest('[data-pick]');
+    if (pick) return openInfo(pick.dataset.pick);
+    const tab = e.target.closest('[data-tab]');
+    if (tab) return showInfoTab(tab.dataset.tab);
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'pick') info.el.querySelector('[data-f="file"]').click();   // SillyTavern hides file inputs → our button
+    if (act === 'save') saveInfo();
+}
+
+async function onInfoInput(e) {
+    if (!info) return;
+    const f = e.target.dataset?.f;
+    if (f === 'squish') showSquish();
+    if (f === 'file' || (f === 'crop' && info.file)) {
+        if (e.type !== 'change') return;
+        if (f === 'file') info.file = e.target.files?.[0] || null;
+        const row = info.el.querySelector('.tavvy-info-prevrow');
+        info.el.querySelector('.tavvy-info-filename').textContent = info.file ? info.file.name : '바꾸지 않아요';
+        info.prep = null;
+        if (!info.file) { row.hidden = true; return; }
+        const file = info.file;
+        try {
+            const out = await preparePng(file, info.el.querySelector('[data-f="crop"]').checked);
+            if (!info || info.file !== file) return;
+            info.prep = out;
+            info.el.querySelector('.tavvy-info-prev').src = out.dataUrl;
+            row.hidden = false;
+        } catch {
+            if (info?.file === file) { infoMsg('그림을 읽지 못했어요. 다른 PNG를 골라 주세요.'); row.hidden = true; }
+        }
+    }
+}
+
+/** Only image files of our own (never the built-in pets' pictures). */
+function imageFiles(p) {
+    const out = [];
+    for (const list of Object.values(p.look?.roles || {})) for (const f of list || []) if (f && !f.startsWith('builtin:')) out.push(f);
+    return out;
+}
+
+let savingInfo = false;
+async function saveInfo() {
+    if (!info || info.chooser || savingInfo) return;
+    if (readOnly) return infoMsg(readOnlyReason);
+    if (!ready) return infoMsg('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 눌러 주세요.');
+    const p = root.pets.find(x => x.id === info.id);
+    if (!p) return;
+    const box = info.el;
+    const name = box.querySelector('[data-f="name"]').value.trim();
+    if (!name) return infoMsg('이름을 적어 주세요.');
+    if (!infoDirty()) return infoMsg('바뀐 게 없어요.');
+    const pers = PERSONALITIES[box.querySelector('[data-f="pers"]').value] ? box.querySelector('[data-f="pers"]').value : p.personality.base;
+    const facing = ['front', 'left', 'right'].includes(box.querySelector('[data-f="facing"]').value) ? box.querySelector('[data-f="facing"]').value : 'front';
+    const squish = clamp(Number(box.querySelector('[data-f="squish"]').value) || 0, 0, 1);
+    savingInfo = true;
+    let newPath = null;
+    try {
+        if (info.file) {
+            if (info.file.size > 8 * 1024 * 1024) return infoMsg('그림이 너무 커요 (8MB 이하).');
+            infoMsg('그림 올리는 중…');
+            const img = info.prep || await preparePng(info.file, box.querySelector('[data-f="crop"]').checked);
+            newPath = await uploadFile(`tavvy_${p.id}_idle_${Date.now().toString(36)}.png`, img.base64);
+        }
+        const oldFiles = newPath ? imageFiles(p) : [];
+        p.name = name;
+        p.personality = { ...(p.personality || {}), base: pers };
+        p.look.facing = facing;
+        p.look.squish = Math.round(squish * 10) / 10;
+        if (newPath) { p.look.roles = { idle: [newPath] }; p.look.kind = 'single'; p.look.baseline = 0; }
+        const ok = await saveNow();
+        if (ok) for (const f of oldFiles) deleteFile(f);      // old picture only after the record is safely saved
+        else saveSoon();
+        for (const a of actors) if (a.rec === p) { a.p = PERSONALITIES[pers]; if (newPath) a.reloadLook(); }
+        refreshBed();
+        renderPanel();
+        if (info?.id === p.id) { fillInfoForm(p); refreshInfo(); }
+        infoMsg(ok ? '저장했어요.' : '바꿨지만 저장이 늦어지고 있어요. 잠시 뒤 다시 저장돼요.');
+    } catch (e) {
+        console.error('[Tavvy] edit failed', e);
+        if (newPath) deleteFile(newPath);
+        infoMsg('저장하지 못했어요: ' + (e.message || e));
+    } finally {
+        savingInfo = false;
+    }
+}
+
+/* ---------- the wand menu (✨ left of the input box) ---------- */
+function addWandItem() {
+    if ($id('tavvy-wand')) return true;
+    const menu = $id('extensionsMenu');
+    if (!menu) return false;
+    const item = document.createElement('div');
+    item.id = 'tavvy-wand';
+    item.className = 'list-group-item flex-container flexGap5';
+    item.innerHTML = '<div class="fa-solid fa-paw extensionsMenuExtensionButton"></div><span>펫 정보</span>';
+    item.addEventListener('click', openInfoFromMenu);
+    menu.appendChild(item);
+    return true;
 }
 
 function renderPanel() {
@@ -2655,28 +3420,30 @@ function renderPanel() {
             const dev = device();
             const size = petSize(p);
             const lv = levelLabel(p);
-            const open = openJournals.has(p.id);
             return `<div class="tavvy-row">
   <img src="${esc(icon)}" alt="">
   <div class="tavvy-row-main"><b>${esc(p.name)}</b><span>${pers} · ${homeLabel(p)}${lv ? ' · ' + esc(lv) : ''}</span></div>
-  <div class="menu_button tavvy-jbtn" data-journal="${esc(p.id)}">${open ? '기록장 닫기' : '기록장'}</div>
+  <div class="menu_button tavvy-jbtn" data-info="${esc(p.id)}">정보</div>
   <div class="menu_button tavvy-del" data-del="${esc(p.id)}" title="삭제">삭제</div>
   <label class="tavvy-size">
     <span>크기(${dev === 'phone' ? '폰' : 'PC'})</span>
     <input type="number" class="text_pole" inputmode="numeric" min="${SIZE_MIN}" max="${SIZE_MAX}" step="1" value="${size}" data-size="${esc(p.id)}">
     <span class="tavvy-size-val" data-sizeval="${esc(p.id)}">${sizeLabel(p, size)}</span>
   </label>
-  ${open ? journalHtml(p) : ''}
 </div>`;
         }).join('');
-        // don't rebuild while a size box is being typed in (the list refreshes on its own every so often)
-        if (html !== list.dataset.html && !list.contains(document.activeElement)) {
+        // don't rebuild while a size box is being typed in (the list refreshes on its own every so often).
+        // Only the size box: SillyTavern makes every .menu_button focusable, so a pressed button keeps focus.
+        const ae = document.activeElement;
+        const typingSize = !!ae && list.contains(ae) && !!ae.matches?.('[data-size]');
+        if (html !== list.dataset.html && !typingSize) {
             list.innerHTML = html;
             list.dataset.html = html;
         }
     }
     const btn = $id('tavvy-create');
     btn.classList.toggle('disabled', !room || readOnly);
+    refreshInfo();
 }
 
 /** Korean particle: josa('보리','이','가') → '보리가', josa('콩떡','이','가') → '콩떡이'. */
@@ -2794,16 +3561,26 @@ function onReady() {
     on('GENERATION_STOPPED', () => onGenEnd());
     on('MESSAGE_RECEIVED', (id, type) => { if (ready) onReplyReceived(id, type); });
     on('USER_MESSAGE_RENDERED', (id) => { if (ready) onMySend(id); });
-    on('MESSAGE_SENT', (id) => { onCounted(id, true); });
+    on('MESSAGE_SENT', (id) => { noteUserAct(); wakeSleepy(); onCounted(id, true); });
     // messages added / removed / reloaded → ledges moved
     const ledgesMoved = () => { if (actors.length) requestAnimationFrame(measurePlats); };
     ['MESSAGE_DELETED', 'MORE_MESSAGES_LOADED', 'MESSAGE_SWIPED', 'CHARACTER_MESSAGE_RENDERED', 'MESSAGE_UPDATED'].forEach(n => on(n, ledgesMoved));
     // the chat scrolling (capture: the chat box scrolls by itself, not the window)
     let st = 0;
     document.addEventListener('scroll', () => {
-        if (!actors.length || st) return;
+        if (!actors.length) return;
+        noteUserAct();
+        if (st) return;
         st = requestAnimationFrame(() => { st = 0; measurePlats(); });
     }, { capture: true, passive: true });
+    // you: writing in the input box, where your hand / finger is
+    document.addEventListener('input', (e) => { if (e.target?.id === 'send_textarea') onTyping(); }, true);
+    const seeHand = (e) => { if (!actors.length) return; hand.x = e.clientX; hand.y = e.clientY; hand.t = performance.now(); };
+    document.addEventListener('pointermove', seeHand, { capture: true, passive: true });
+    document.addEventListener('pointerdown', seeHand, { capture: true, passive: true });
+    setInterval(bedWiggle, 500);
+    // "펫 정보" in the wand menu (the menu may be built a little after us)
+    if (!addWandItem()) { let n = 0; const w = setInterval(() => { if (addWandItem() || ++n > 30) clearInterval(w); }, 1000); }
     // Safety net for versions where APP_READY already fired before we loaded.
     setTimeout(() => { if (!ready && document.getElementById('send_form')) onReady(); }, 4000);
 
