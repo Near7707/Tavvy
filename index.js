@@ -13,6 +13,7 @@
 //          peeking at the input box, following your hand, leaning into a pat, a wiggling bed,
 //          liking your messages, not wanting to go to bed, dozing off while you're away,
 //          pressing against the screen, softer reactions, and little gifts.
+// 0.6.0: one Tavvy window (pet list, journal, behaviours, looks, settings) + saved looks.
 
 import { saveSettings, saveSettingsDebounced, getRequestHeaders, eventSource, event_types } from '../../../../script.js';
 
@@ -182,12 +183,13 @@ function defaultSettings() {
         lineLedges: true,                      // flat / document chat style: borders between messages are ledges
         badge: true,                           // number of waiting messages on the bed
         heartMode: 'both',                     // closeness shown as 'both' (♥♥ 친구) / 'hearts' / 'name' / 'hide'
+        winTheme: 'theme',                     // the Tavvy window: 'theme' (follow SillyTavern) / 'cream' / 'white'
         backup: { lastDay: null, files: [] },  // daily backups: [{ day, path, pets }]
     };
 }
 
 function newRoot() {
-    return { formatVersion: FORMAT_VERSION, settings: defaultSettings(), pets: [] };
+    return { formatVersion: FORMAT_VERSION, settings: defaultSettings(), pets: [], looks: [] };
 }
 
 function newPetRecord({ id, name, personality, look }) {
@@ -231,6 +233,24 @@ function migrate(r) {
         fillDefaults(p, blank);
         p.look ??= {};
         fillDefaults(p.look, { kind: 'single', facing: 'front', roles: {}, baseline: 0, size: DEFAULT_SIZE, squish: 0.5 });
+    }
+    // saved looks (내가 올린 외형): pictures uploaded once can be picked again for new pets.
+    // Pictures pets already wear go in on their own (once — they are found by their file).
+    if (!Array.isArray(r.looks)) r.looks = [];
+    for (const p of r.pets) {
+        const first = p?.look?.roles?.idle?.[0];
+        if (!first || first.startsWith('builtin:')) continue;
+        if (r.looks.some(l => l?.roles?.idle?.[0] === first)) continue;
+        r.looks.push({
+            id: 'l' + Math.random().toString(36).slice(2, 10),
+            name: String(p.name || '내 그림'),
+            kind: p.look.kind || 'single',
+            facing: p.look.facing || 'front',
+            squish: p.look.squish ?? 0.5,
+            roles: structuredClone(p.look.roles),
+            baseline: p.look.baseline || 0,
+            createdAt: p.createdAt || Date.now(),
+        });
     }
     // future: if (r.formatVersion < 2) { ...; r.formatVersion = 2; }
 }
@@ -2815,13 +2835,18 @@ function recheckRoom() {
  * Settings panel
  * ===================================================================== */
 
+/* =====================================================================
+ * The Tavvy window — pets, journal, looks and settings in one place.
+ * Opened from the wand menu ("펫 정보") or the button in the extension settings.
+ * ===================================================================== */
+
 const $id = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+const THEMES = { theme: '테마 따르기', cream: '크림·분홍', white: '하얀 깔끔' };
+
+/** The extension settings drawer is only a door to the window now. */
 function panelHtml() {
-    const pers = Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
-    const pets = Object.entries(BUILTIN).map(([k, v]) =>
-        `<label class="tavvy-pick"><input type="radio" name="tavvy-look" value="${k}"><img src="${BASE}assets/pets/${k}/idle.png" alt=""><span>${v.name}</span></label>`).join('');
     return `
 <div class="tavvy-settings">
   <div class="inline-drawer">
@@ -2831,150 +2856,19 @@ function panelHtml() {
     </div>
     <div class="inline-drawer-content">
       <div id="tavvy-warn" class="tavvy-warn" hidden></div>
-
-      <div class="tavvy-sec">이 방</div>
       <div id="tavvy-room" class="tavvy-note"></div>
-
-      <div class="tavvy-sec">펫 목록</div>
-      <div id="tavvy-list"></div>
-
-      <div class="tavvy-sec">새 펫 만들기 <small>(지금 열려 있는 채팅방이 집이 돼요)</small></div>
-      <div class="tavvy-form">
-        <label>이름 <input id="tavvy-name" class="text_pole" maxlength="20" placeholder="이름"></label>
-        <div class="tavvy-looks">
-          ${pets}
-          <label class="tavvy-pick"><input type="radio" name="tavvy-look" value="mine"><img id="tavvy-mine-prev" alt=""><span>내 그림</span></label>
-        </div>
-        <div id="tavvy-mine" class="tavvy-mine" hidden>
-          <input id="tavvy-file" type="file" accept="image/png">
-          <div class="tavvy-filerow"><div id="tavvy-filebtn" class="menu_button">그림 고르기</div><span id="tavvy-filename" class="tavvy-note">아직 안 골랐어요</span></div>
-          <label class="checkbox_label"><input id="tavvy-crop" type="checkbox" checked> 투명 여백 자르기</label>
-          <label>그림 방향
-            <select id="tavvy-facing" class="text_pole">
-              <option value="front">정면</option>
-              <option value="right">옆모습 (오른쪽을 봄)</option>
-              <option value="left">옆모습 (왼쪽을 봄)</option>
-            </select>
-          </label>
-          <div class="tavvy-note">투명 배경 PNG 한 장이면 돼요.</div>
-        </div>
-        <label>성격 <select id="tavvy-pers" class="text_pole">${pers}</select></label>
-        <div id="tavvy-create" class="menu_button">만들기</div>
-        <div id="tavvy-msg" class="tavvy-note"></div>
-      </div>
-
-      <div class="tavvy-sec">설정</div>
-      <label class="checkbox_label"><input id="tavvy-autowake" type="checkbox"> 방에 들어올 때 자동으로 깨우기</label>
-      <label>무대
-        <select id="tavvy-stage" class="text_pole">
-          <option value="chat">채팅창 전체 (말풍선 위에도 올라가요)</option>
-          <option value="floor">바닥만 (입력창 위에서만 지내요)</option>
-        </select>
-      </label>
-      <label class="checkbox_label"><input id="tavvy-lines" type="checkbox"> 줄 모양 채팅에서 메시지 사이 경계선도 발판으로 쓰기</label>
-      <label class="checkbox_label"><input id="tavvy-badge" type="checkbox"> 재워 둔 동안 침대에 쌓인 밥 수 보기</label>
-      <label>친밀도 표시
-        <select id="tavvy-hearts" class="text_pole">
-          <option value="both">하트 + 이름 (♥♥ 친구)</option>
-          <option value="hearts">하트만</option>
-          <option value="name">이름만</option>
-          <option value="hide">숨기기</option>
-        </select>
-      </label>
-      <div id="tavvy-bedreset" class="menu_button">깨우기 버튼 위치 처음으로</div>
-      <div id="tavvy-bedfind" class="menu_button">깨우기 버튼 찾기 (화면 가운데로)</div>
-      <div id="tavvy-diag" class="tavvy-note tavvy-diag"></div>
-
-      <div class="tavvy-sec">백업 <small>(하루 한 번 자동, 최근 ${BACKUP_KEEP}개)</small></div>
-      <div class="tavvy-filerow">
-        <select id="tavvy-backups" class="text_pole"></select>
-        <div id="tavvy-restore" class="menu_button">이 백업으로 되돌리기</div>
-      </div>
-      <div class="tavvy-note">되돌리면 모든 펫의 기록(먹은 양 등)이 그날 기록으로 바뀌어요. 그 뒤에 지운 펫의 내 그림은 돌아오지 않아요.</div>
+      <div id="tavvy-open" class="menu_button"><i class="fa-solid fa-paw"></i> Tavvy 열기</div>
+      <div class="tavvy-note">펫 목록, 기록장, 새 펫 만들기, 설정이 모두 이 창 안에 있어요. 입력창 왼쪽 ✨ 마법봉 메뉴의 "펫 정보"로도 열 수 있어요.</div>
     </div>
   </div>
 </div>`;
 }
 
-let mineFile = null;
-
 function bindPanel() {
     const host = $id('extensions_settings2') || $id('extensions_settings');
     if (!host) return;
     host.insertAdjacentHTML('beforeend', panelHtml());
-
-    const looks = document.querySelectorAll('input[name="tavvy-look"]');
-    looks.forEach(r => r.addEventListener('change', () => {
-        $id('tavvy-mine').hidden = r.value !== 'mine' || !r.checked;
-        const nameEl = $id('tavvy-name');
-        if (r.checked && BUILTIN[r.value] && (!nameEl.value || Object.values(BUILTIN).some(b => b.name === nameEl.value))) {
-            nameEl.value = BUILTIN[r.value].name;
-        }
-    }));
-    // SillyTavern hides every file input (input[type=file] { display:none }) → our own button opens it
-    $id('tavvy-filebtn').addEventListener('click', () => $id('tavvy-file').click());
-    $id('tavvy-file').addEventListener('change', async (e) => {
-        mineFile = e.target.files?.[0] || null;
-        const prev = $id('tavvy-mine-prev');
-        $id('tavvy-filename').textContent = mineFile ? mineFile.name : '아직 안 골랐어요';
-        if (!mineFile) { prev.removeAttribute('src'); return; }
-        try {
-            const out = await preparePng(mineFile, $id('tavvy-crop').checked);
-            prev.src = out.dataUrl;
-        } catch { prev.removeAttribute('src'); }
-    });
-    $id('tavvy-create').addEventListener('click', createPetFromForm);
-    $id('tavvy-autowake').addEventListener('change', (e) => {
-        if (!root) return;
-        root.settings.autoWake = e.target.checked;
-        saveSoon();
-    });
-    $id('tavvy-stage').addEventListener('change', (e) => {
-        if (!root) return;
-        root.settings.stageMode = e.target.value === 'floor' ? 'floor' : 'chat';
-        saveSoon();
-        measure();
-        renderPanel();
-    });
-    $id('tavvy-lines').addEventListener('change', (e) => {
-        if (!root) return;
-        root.settings.lineLedges = e.target.checked;
-        saveSoon();
-        measure();
-    });
-    $id('tavvy-bedreset').addEventListener('click', () => {
-        if (!root) return;
-        root.settings.bedPos = { phone: null, pc: null };
-        saveSoon();
-        placeBed();
-        say('깨우기 버튼을 처음 자리로 옮겼어요.');
-    });
-    $id('tavvy-bedfind').addEventListener('click', findBed);
-    $id('tavvy-badge').addEventListener('change', (e) => {
-        if (!root) return;
-        root.settings.badge = e.target.checked;
-        saveSoon();
-        refreshBed();
-    });
-    $id('tavvy-hearts').addEventListener('change', (e) => {
-        if (!root) return;
-        root.settings.heartMode = ['both', 'hearts', 'name', 'hide'].includes(e.target.value) ? e.target.value : 'both';
-        saveSoon();
-        renderPanel();
-    });
-    $id('tavvy-restore').addEventListener('click', () => restoreBackup($id('tavvy-backups').value));
-    $id('tavvy-list').addEventListener('click', (e) => {
-        const btn = e.target.closest('[data-del]');
-        if (btn) return deletePet(btn.dataset.del);
-        const ib = e.target.closest('[data-info]');
-        if (ib) openInfo(ib.dataset.info);
-    });
-    $id('tavvy-list').addEventListener('input', (e) => {
-        if (e.target.matches?.('[data-size]')) onSizeInput(e.target, false);
-    });
-    $id('tavvy-list').addEventListener('change', (e) => {
-        if (e.target.matches?.('[data-size]')) onSizeInput(e.target, true);
-    });
+    $id('tavvy-open').addEventListener('click', () => openWin('home'));
 }
 
 /** Diagnostic: bring the bed to the middle of the screen and report what the page sees. */
@@ -3010,14 +2904,15 @@ function findBed() {
         const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
         const desc = top ? (top.id ? '#' + top.id : top.tagName.toLowerCase() + (top.className && typeof top.className === 'string' ? '.' + top.className.split(' ')[0] : '')) : '없음';
         lines.push(`그 자리 맨 위: ${desc}`);
-        lines.push('설정 창을 닫고 화면 가운데에 🛏️ 가 보이는지 확인해 주세요.');
+        lines.push('창을 닫고 화면 가운데에 🛏️ 가 보이는지 확인해 주세요.');
     }
     const d = $id('tavvy-diag');
     if (d) d.textContent = lines.join('\n');
 }
 
+/** A short message at the bottom of whatever the window shows. */
 function say(text) {
-    const m = $id('tavvy-msg');
+    const m = win?.body.querySelector('.tw-msg');
     if (m) m.textContent = text;
 }
 
@@ -3058,7 +2953,85 @@ function onSizeInput(input, done) {
     if (done) { input.value = v; saveSoon(); }
 }
 
-/* ---------- journal (기록장) — what happened, never changes behaviour ---------- */
+/* ---------- saved looks (내가 올린 외형) — a picture uploaded once can be picked again ---------- */
+
+function lookFiles(l) {
+    const out = [];
+    for (const list of Object.values(l?.roles || {})) for (const f of list || []) if (f && !f.startsWith('builtin:')) out.push(f);
+    return out;
+}
+
+/** Is this server file still used by a pet (other than `except`) or kept in the look library? */
+function fileInUse(path, except = null) {
+    return (root?.pets || []).some(p => p !== except && petFiles(p).includes(path))
+        || (root?.looks || []).some(l => lookFiles(l).includes(path));
+}
+
+/** Pets wearing this saved look. */
+function lookUsers(l) {
+    const files = lookFiles(l);
+    return (root?.pets || []).filter(p => petFiles(p).some(f => files.includes(f)));
+}
+
+/** "builtin:bori" / "lib:<id>" / "other" — what a pet is wearing now. */
+function lookKeyOf(p) {
+    const first = p.look?.roles?.idle?.[0] || '';
+    if (first.startsWith('builtin:')) return 'builtin:' + first.slice(8).split('/')[0];
+    const l = (root?.looks || []).find(x => x.roles?.idle?.[0] === first);
+    return l ? 'lib:' + l.id : 'other';
+}
+
+function lookById(key) {
+    if (!key) return null;
+    if (key.startsWith('builtin:')) {
+        const k = key.slice(8);
+        return BUILTIN[k] ? { key, name: BUILTIN[k].name, src: `${BASE}assets/pets/${k}/idle.png`, facing: BUILTIN[k].facing, squish: 0.5, make: () => builtinLook(k) } : null;
+    }
+    if (key.startsWith('lib:')) {
+        const l = (root?.looks || []).find(x => x.id === key.slice(4));
+        return l ? {
+            key, name: l.name, src: imgUrl(l.roles?.idle?.[0]), facing: l.facing || 'front', squish: l.squish ?? 0.5,
+            make: () => ({ kind: l.kind || 'single', facing: l.facing || 'front', roles: structuredClone(l.roles), baseline: l.baseline || 0, size: { ...DEFAULT_SIZE }, squish: l.squish ?? 0.5 }),
+        } : null;
+    }
+    return null;
+}
+
+/** Tiles: built-in pets, then my saved looks, then "새로 올리기". */
+function lookGridHtml(selected, current = null) {
+    const tile = (key, src, name, extra = '') =>
+        `<div class="tw-look${selected === key ? ' tw-on' : ''}" data-look="${esc(key)}"><div class="tw-look-img">${src ? `<img src="${esc(src)}" alt="">` : ''}${current === key ? '<em>지금</em>' : ''}</div><span>${esc(name)}</span>${extra}</div>`;
+    const builtins = Object.entries(BUILTIN).map(([k, v]) => tile('builtin:' + k, `${BASE}assets/pets/${k}/idle.png`, v.name)).join('');
+    const mine = (root?.looks || []).map(l => tile('lib:' + l.id, imgUrl(l.roles?.idle?.[0]), l.name)).join('');
+    return `<div class="tw-cap">기본 펫</div><div class="tw-looks">${builtins}</div>
+<div class="tw-cap">내가 올린 외형</div><div class="tw-looks">${mine}<div class="tw-look tw-look-add${selected === 'upload' ? ' tw-on' : ''}" data-look="upload"><div class="tw-look-img"><i class="fa-solid fa-plus"></i></div><span>새로 올리기</span></div></div>`;
+}
+
+/** The upload box (new picture → also kept in the look library). */
+function uploadHtml() {
+    return `<div class="tw-upload" hidden>
+  <input type="file" accept="image/png" data-f="file">
+  <div class="tw-row"><div class="tw-btn" data-act="pickfile"><i class="fa-solid fa-image"></i> 그림 고르기</div><span class="tw-sub tw-filename">아직 안 골랐어요</span></div>
+  <div class="tw-row tw-prevrow" hidden><img class="tw-prev" alt=""><label class="tw-check"><input type="checkbox" data-f="crop" checked> 투명 여백 자르기</label></div>
+  <div class="tw-sub">투명 배경 PNG 한 장이면 돼요. 한 번 올리면 "내가 올린 외형"에 남아서 다음에 고르기만 하면 돼요.</div>
+</div>`;
+}
+
+function facingHtml() {
+    return `<label class="tw-label">그림이 보는 쪽
+  <select data-f="facing">
+    <option value="front">정면</option>
+    <option value="right">오른쪽을 봄</option>
+    <option value="left">왼쪽을 봄</option>
+  </select>
+</label>
+<div class="tw-sub">그림 한 장이 어느 쪽을 보는지예요. 반대쪽은 자동으로 뒤집어서 써요.</div>
+<label class="tw-label"><span>말랑 정도 <span class="tw-squish-val"></span></span>
+  <input type="range" data-f="squish" min="0" max="1" step="0.1">
+</label>`;
+}
+
+/* ---------- journal pieces ---------- */
 
 /** Days between two day keys ("2026-11-12"). */
 function daysBetween(a, b) {
@@ -3074,300 +3047,679 @@ function addDays(key, n) {
 
 const MOMENT_NAMES = { firstFeast: '첫 잔칫상', firstFull: '첫 배부름', moved: '이사한 날' };
 
-function journalHtml(p) {
+function togetherDays(p) {
+    return daysBetween(dayKey(p.createdAt || Date.now()), dayKey()) + 1;
+}
+
+function journalMoments(p) {
     const today = dayKey();
     const met = dayKey(p.createdAt || Date.now());
-    const together = daysBetween(met, today) + 1;
-    const e = p.eaten || {}, j = p.journal || {};
-    const label = levelLabel(p);
-    const moments = [{ day: met, name: '만난 날' }];
-    for (const m of j.moments || []) {
+    const moments = [{ day: met, name: '처음 만난 날' }];
+    for (const m of p.journal?.moments || []) {
         const r = /^level(\d)$/.exec(m?.kind || '');
         if (r) moments.push({ day: m.day, name: `${josa(LEVELS[Number(r[1])]?.name || '?', '이', '가')} 된 날` });
         else if (MOMENT_NAMES[m?.kind]) moments.push({ day: m.day, name: MOMENT_NAMES[m.kind] });
     }
-    if (together >= 100) moments.push({ day: addDays(met, 99), name: '만난 지 100일' });
+    if (togetherDays(p) >= 100) moments.push({ day: addDays(met, 99), name: '만난 지 100일' });
     for (let y = 1; y < 100; y++) {                                   // every year on the day we met
         const ann = met.replace(/^\d+/, (v) => String(Number(v) + y));
         if (ann > today) break;
         moments.push({ day: ann, name: `만난 지 ${y}년` });
     }
     moments.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
-    const rows = [
-        label ? ['친밀도', label] : null,
-        ['함께한 지', `${together}일째`],
-        ['대화한 날', `${j.talkDays || 0}일`],
-        ['주고받은 메시지', `나 ${e.me || 0} · 상대 ${e.them || 0} · 합계 ${(e.me || 0) + (e.them || 0)}`],
-        ['먹은 토큰', `약 ${(e.tokens || 0).toLocaleString()}`],
-    ].filter(Boolean);
-    return `<div class="tavvy-journal">
-  ${rows.map(([k, v]) => `<div><span>${k}</span><b>${esc(v)}</b></div>`).join('')}
-  <div class="tavvy-journal-sec">기념 순간</div>
-  ${moments.map(m => `<div><span>${esc(m.day)}</span><b>${esc(m.name)}</b></div>`).join('')}
-  <div class="tavvy-journal-sec">할 수 있는 행동</div>
-  ${abilitiesHtml(p)}
+    return moments;
+}
+
+/** Words only, no numbers ("숫자 레벨 대신 보는 재미"). */
+function nextStep(p) {
+    const k = levelOf(p);
+    if (k >= LEVELS.length - 1) return { pct: 100, text: '가장 친한 사이예요' };
+    const a = LEVELS[k].min, b = LEVELS[k + 1].min;
+    const r = clamp((petPoints(p) - a) / (b - a), 0, 1);
+    const nm = LEVELS[k + 1].name;
+    const text = r < 0.34 ? `${nm}까지 천천히 가는 중` : r < 0.67 ? `${nm}까지 조금 더` : `${nm}까지 거의 다 왔어요`;
+    return { pct: Math.max(4, Math.round(r * 100)), text };
+}
+
+function persName(p) {
+    return PERSONALITIES[p.personality?.base]?.name || '?';
+}
+
+function heroHtml(p) {
+    const mode = root?.settings?.heartMode || 'both';
+    const L = LEVELS[levelOf(p)];
+    const step = nextStep(p);
+    const hearts = mode === 'hide' ? '' : `<div class="tw-hearts">${mode !== 'name' ? `<span class="tw-heart">${L.hearts}</span>` : ''}${mode !== 'hearts' ? ` <span>${L.name}</span>` : ''}</div>
+<div class="tw-bar"><i style="width:${step.pct}%"></i></div><div class="tw-sub tw-center">${esc(step.text)}</div>`;
+    return `<div class="tw-hero">
+  <div class="tw-hero-img"><img src="${esc(imgUrl(p.look?.roles?.idle?.[0]))}" alt=""></div>
+  <div class="tw-hero-name">${esc(p.name)} <span class="tw-chip">${esc(persName(p))}</span></div>
+  <div class="tw-sub tw-center">${esc(homeLabel(p))}</div>
+  ${hearts}
 </div>`;
 }
 
-/** Behaviours learned so far by name; the rest stay "???". */
-function abilitiesHtml(p) {
+function journalHtml(p) {
+    const e = p.eaten || {}, j = p.journal || {};
+    const tile = (label, value, sub = '') => `<div class="tw-tile"><span>${label}</span><b>${esc(value)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</div>`;
+    const tok = e.tokens || 0;
+    const tokText = tok >= 10000 ? `약 ${(Math.round(tok / 1000) / 10).toLocaleString()}만` : `약 ${tok.toLocaleString()}`;
+    return `<div class="tw-tiles">
+  ${tile('함께한 지', `${togetherDays(p)}일째`)}
+  ${tile('대화한 날', `${j.talkDays || 0}일`)}
+  ${tile('주고받은 메시지', `${(e.me || 0) + (e.them || 0)}`, `나 ${e.me || 0} · 상대 ${e.them || 0}`)}
+  ${tile('먹은 토큰', tokText)}
+</div>
+<div class="tw-cap">기념 순간</div>
+<div class="tw-moments">${journalMoments(p).map(m => `<div><span>${esc(m.day)}</span><b>${esc(m.name)}</b></div>`).join('')}</div>`;
+}
+
+/** Behaviours by closeness step: learned ones by name, the rest "???". */
+function actsHtml(p) {
     const lv = levelOf(p);
     const hide = (root?.settings?.heartMode || 'both') === 'hide';
-    return unlocksFor(p).map(u => {
-        const open = lv >= u.lv;
-        return `<div class="${open ? '' : 'tavvy-locked'}"><span>${hide ? '' : LEVELS[u.lv].hearts}</span><b>${open ? esc(u.name) : '???'}</b></div>`;
+    const list = unlocksFor(p);
+    const groups = [1, 2, 3, 4].map(k => {
+        const items = list.filter(u => u.lv === k);
+        if (!items.length) return '';
+        const open = lv >= k;
+        const head = hide ? '' : `<div class="tw-cap">${esc(levelLabel(p, k))}${open ? '' : ' <span class="tw-sub">· 아직이에요</span>'}</div>`;
+        return head + `<div class="tw-acts">${items.map(u => open
+            ? `<span class="tw-act tw-act-on">${esc(u.name)}</span>`
+            : '<span class="tw-act"><i class="fa-solid fa-lock"></i> ???</span>').join('')}</div>`;
     }).join('');
+    return `${groups}<div class="tw-sub" style="margin-top:10px">친해질수록 새 행동이 하나씩 열려요. 열린 행동도 늘 하는 건 아니고 가끔 해요.</div>`;
 }
 
-/* =====================================================================
- * Pet info window (기록장 | 수정) — opened from the wand menu or the pet list
- * ===================================================================== */
+/* ---------- window ---------- */
 
-let info = null;   // { el, id, tab, file, base: {…} } while open
+let win = null;   // { el, box, head, body, view, id, tab, form } while open
 
-function infoBase(p) {
-    return { name: p.name, pers: p.personality?.base || 'aegyo', facing: p.look?.facing || 'front', squish: String(p.look?.squish ?? 0.5) };
-}
-
-function ensureInfoEl() {
-    let el = $id('tavvy-info');
-    if (el) return el;
-    el = document.createElement('div');
-    el.id = 'tavvy-info';
+function ensureWin() {
+    if (win) return win;
+    const el = document.createElement('div');
+    el.id = 'tavvy-win';
     el.className = 'tavvy-modal';
     el.hidden = true;
-    el.innerHTML = '<div class="tavvy-modal-box tavvy-settings" role="dialog" aria-modal="true"></div>';
+    el.innerHTML = '<div class="tavvy-win" role="dialog" aria-modal="true"><div class="tavvy-win-head"></div><div class="tavvy-win-body"></div></div>';
     document.body.appendChild(el);
-    el.addEventListener('pointerdown', (e) => { if (e.target === el) closeInfo(); });
-    el.addEventListener('click', onInfoClick);
-    el.addEventListener('input', onInfoInput);
-    el.addEventListener('change', onInfoInput);
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && info) closeInfo(); });
-    return el;
+    win = { el, box: el.firstElementChild, head: el.querySelector('.tavvy-win-head'), body: el.querySelector('.tavvy-win-body'), open: false, view: 'home', id: null, tab: 'journal', form: null };
+    el.addEventListener('pointerdown', (e) => { if (e.target === el) closeWin(); });
+    el.addEventListener('click', onWinClick);
+    el.addEventListener('input', onWinInput);
+    el.addEventListener('change', onWinInput);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && win?.open) closeWin(); });
+    const refit = () => { if (win?.open) fitWin(); };
+    window.addEventListener('resize', refit);
+    window.visualViewport?.addEventListener('resize', refit);
+    window.visualViewport?.addEventListener('scroll', refit);
+    return win;
 }
 
-/** From the wand menu: one pet in this room → its window; several → pick one first. */
+/**
+ * Sit exactly on the part of the screen you can see. On some phones a "fixed" box is shifted or
+ * taller than the screen (the same thing the pets' layer corrects for), which pushed the X off screen.
+ */
+function fitWin() {
+    const el = win.el, vv = window.visualViewport;
+    const w = vv ? vv.width : window.innerWidth;
+    const h = vv ? vv.height : window.innerHeight;
+    const x = vv ? vv.offsetLeft : 0, y = vv ? vv.offsetTop : 0;
+    el.style.width = `${Math.round(w)}px`;
+    el.style.height = `${Math.round(h)}px`;
+    el.style.transform = 'none';
+    const r = el.getBoundingClientRect();
+    const dx = x - r.left, dy = y - r.top;
+    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) el.style.transform = `translate(${Math.round(dx)}px, ${Math.round(dy)}px)`;
+}
+
+function applyTheme() {
+    if (win) win.box.dataset.theme = THEMES[root?.settings?.winTheme] ? root.settings.winTheme : 'theme';
+}
+
+/** From the wand menu: one pet in this room → its page; otherwise the list. */
 function openInfoFromMenu() {
     const here = residents();
-    if (here.length === 1) return openInfo(here[0].id);
-    const el = ensureInfoEl();
-    const box = el.querySelector('.tavvy-modal-box');
-    info = { el, id: null, chooser: true };
-    box.innerHTML = `<div class="tavvy-info-head"><div class="tavvy-info-title"><b>펫 정보</b><span>${here.length ? '어떤 펫을 볼까요?' : (room ? '이 방에는 아직 펫이 없어요.' : '열려 있는 채팅방이 없어요.')}</span></div><div class="tavvy-x fa-solid fa-xmark" data-close title="닫기"></div></div>
-  <div class="tavvy-choose">${here.map(p => `<div class="tavvy-choice" data-pick="${esc(p.id)}"><img src="${esc(imgUrl(p.look?.roles?.idle?.[0]))}" alt=""><b>${esc(p.name)}</b></div>`).join('')}</div>
-  ${here.length ? '' : '<div class="tavvy-note">확장 설정의 Tavvy에서 새 펫을 만들 수 있어요.</div>'}`;
-    el.hidden = false;
+    if (here.length === 1) return openWin('pet', { id: here[0].id });
+    openWin('home');
 }
 
-function openInfo(id, tab = 'journal') {
-    const p = root?.pets.find(x => x.id === id);
-    if (!p) return;
-    const el = ensureInfoEl();
-    info = { el, id, tab, file: null, prep: null, base: infoBase(p) };
-    const box = el.querySelector('.tavvy-modal-box');
-    const pers = Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
-    box.innerHTML = `
-  <div class="tavvy-info-head">
-    <img class="tavvy-info-img" alt="">
-    <div class="tavvy-info-title"><b class="tavvy-info-name"></b><span class="tavvy-info-sub"></span></div>
-    <div class="tavvy-x fa-solid fa-xmark" data-close title="닫기"></div>
-  </div>
-  <div class="tavvy-tabs">
-    <div class="tavvy-tab" data-tab="journal">기록장</div>
-    <div class="tavvy-tab" data-tab="edit">수정</div>
-  </div>
-  <div class="tavvy-pane" data-pane="journal"></div>
-  <div class="tavvy-pane tavvy-form" data-pane="edit">
-    <label>이름 <input class="text_pole" data-f="name" maxlength="20"></label>
-    <label>성격 <select class="text_pole" data-f="pers">${pers}</select></label>
-    <div class="tavvy-note">성격을 바꾸면 행동은 바로 바뀌어요. 친밀도와 기록은 그대로예요.</div>
-    <label>그림이 보는 쪽
-      <select class="text_pole" data-f="facing">
-        <option value="front">정면</option>
-        <option value="right">오른쪽을 봄</option>
-        <option value="left">왼쪽을 봄</option>
-      </select>
-    </label>
-    <div class="tavvy-note">그림 한 장이 어느 쪽을 보는지예요. 반대쪽은 자동으로 뒤집어서 써요.</div>
-    <label><span>말랑 정도 <span class="tavvy-squish-val"></span></span>
-      <input type="range" data-f="squish" min="0" max="1" step="0.1">
-    </label>
-    <div class="tavvy-sub">그림 바꾸기</div>
-    <input type="file" accept="image/png" data-f="file">
-    <div class="tavvy-filerow">
-      <div class="menu_button" data-act="pick">그림 고르기</div>
-      <span class="tavvy-note tavvy-info-filename">바꾸지 않아요</span>
-    </div>
-    <div class="tavvy-info-prevrow" hidden><img class="tavvy-info-prev" alt=""><label class="checkbox_label"><input type="checkbox" data-f="crop" checked> 투명 여백 자르기</label></div>
-    <div class="tavvy-note">투명 배경 PNG 한 장이에요. 저장하면 지금 그림 대신 이 그림을 써요.</div>
-    <div class="tavvy-filerow tavvy-info-save">
-      <div class="menu_button" data-act="save">저장</div>
-      <span class="tavvy-note tavvy-info-msg"></span>
-    </div>
-  </div>`;
-    fillInfoForm(p);
-    el.hidden = false;
-    showInfoTab(tab);
-    refreshInfo();
+function openWin(view = 'home', opts = {}) {
+    ensureWin();
+    applyTheme();
+    win.el.hidden = false;
+    win.open = true;
+    fitWin();
+    show(view, opts);
 }
 
-function fillInfoForm(p) {
-    const box = info.el;
-    const b = info.base = infoBase(p);
+/** Switch what the window shows (no questions asked — use leave() when changes may be lost). */
+function show(view, opts = {}) {
+    win.view = view;
+    win.id = opts.id ?? null;
+    win.tab = opts.tab || 'journal';
+    win.form = null;
+    const back = view !== 'home';
+    const p = view === 'pet' ? root?.pets.find(x => x.id === win.id) : null;
+    if (view === 'pet' && !p) return show('home');
+    const title = { home: 'Tavvy', pet: p?.name || '', new: '새 펫 만들기', settings: '설정' }[view];
+    win.head.innerHTML = `${back ? '<div class="tw-icon" data-act="back" title="뒤로"><i class="fa-solid fa-arrow-left"></i></div>' : '<div class="tw-icon tw-paw"><i class="fa-solid fa-paw"></i></div>'}
+<b class="tw-title">${esc(title)}</b>
+${view === 'home' ? '<div class="tw-icon" data-act="settings" title="설정"><i class="fa-solid fa-gear"></i></div>' : ''}
+<div class="tw-icon" data-act="close" title="닫기"><i class="fa-solid fa-xmark"></i></div>`;
+    if (view === 'home') win.body.innerHTML = homeHtml();
+    else if (view === 'pet') win.body.innerHTML = petHtml(p);
+    else if (view === 'new') win.body.innerHTML = newHtml();
+    else if (view === 'settings') win.body.innerHTML = settingsHtml();
+    win.body.scrollTop = 0;
+    if (view === 'pet') { fillEdit(p); showTab(win.tab); }
+    if (view === 'new') fillNew();
+    if (view === 'settings') fillSettings();
+    refreshWin();
+}
+
+/** Leaving a page with unsaved edits asks once. Returns true if it's fine to go. */
+async function okToLeave() {
+    if (!formDirty()) return true;
+    return await confirmBox('저장 안 한 내용이 있어요. 그래도 나갈까요?');
+}
+
+let leaving = false;
+async function leave(fn) {
+    if (leaving) return;
+    leaving = true;
+    try { if (await okToLeave()) fn(); } finally { leaving = false; }
+}
+
+function closeWin() {
+    if (!win?.open) return;
+    leave(() => { win.el.hidden = true; win.open = false; win.form = null; });
+}
+
+/* --- home --- */
+
+function homeHtml() {
+    return `<div class="tw-sub tw-roomnote" data-live="room"></div>
+<div data-live="home"></div>
+<div class="tw-btn tw-btn-main tw-wide" data-act="new"><i class="fa-solid fa-plus"></i> 새 펫 만들기</div>
+<div class="tw-msg"></div>`;
+}
+
+function petCard(p, big) {
+    const lv = levelLabel(p);
+    const sub = big ? `${lv ? lv + ' · ' : ''}함께한 지 ${togetherDays(p)}일째` : `${homeLabel(p)}${lv ? ' · ' + lv : ''}`;
+    return `<div class="tw-card${big ? '' : ' tw-card-small'}" data-pet="${esc(p.id)}">
+  <div class="tw-av"><img src="${esc(imgUrl(p.look?.roles?.idle?.[0]))}" alt=""></div>
+  <div class="tw-card-main"><b>${esc(p.name)} <span class="tw-chip">${esc(persName(p))}</span></b><span>${esc(sub)}</span></div>
+  <i class="fa-solid fa-chevron-right tw-chev"></i>
+</div>`;
+}
+
+function homeLiveHtml() {
+    const here = residents();
+    const others = (root?.pets || []).filter(p => !here.includes(p));
+    let html = '';
+    if (here.length) html += `<div class="tw-cap">이 방에 사는 펫</div>${here.map(p => petCard(p, true)).join('')}`;
+    if (others.length) html += `<div class="tw-cap">다른 방의 펫</div>${others.map(p => petCard(p, false)).join('')}`;
+    if (!html) html = '<div class="tw-empty">아직 펫이 없어요.<br>채팅방을 열고 첫 펫을 만들어 보세요.</div>';
+    return html;
+}
+
+function roomNote() {
+    if (readOnly) return readOnlyReason;
+    if (!room) return '열려 있는 채팅방이 없어요.';
+    return residents().length ? '' : '이 방에는 아직 펫이 없어요.';
+}
+
+/* --- pet page --- */
+
+function petHtml(p) {
+    return `<div data-live="hero"></div>
+<div class="tw-tabs">
+  <div class="tw-tab" data-tab="journal">기록</div>
+  <div class="tw-tab" data-tab="acts">행동</div>
+  <div class="tw-tab" data-tab="edit">꾸미기</div>
+</div>
+<div class="tw-pane" data-pane="journal" data-live="journal"></div>
+<div class="tw-pane" data-pane="acts" data-live="acts"></div>
+<div class="tw-pane tw-form" data-pane="edit">
+  <label class="tw-label">이름 <input data-f="name" maxlength="20"></label>
+  <label class="tw-label">성격 <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
+  <div class="tw-sub">성격을 바꾸면 행동은 바로 바뀌어요. 친밀도와 기록은 그대로예요.</div>
+  <label class="tw-label">크기 (${device() === 'phone' ? '폰' : 'PC'})
+    <div class="tw-row"><input type="number" inputmode="numeric" min="${SIZE_MIN}" max="${SIZE_MAX}" step="1" value="${petSize(p)}" data-size="${esc(p.id)}" class="tw-num"><span class="tw-sub" data-sizeval="${esc(p.id)}">${sizeLabel(p, petSize(p))}</span></div>
+  </label>
+  <div class="tw-sub">크기는 적으면 바로 바뀌어요. 폰과 PC는 따로 기억해요.</div>
+  <div class="tw-cap">외형</div>
+  <div class="tw-lookgrid"></div>
+  ${uploadHtml()}
+  ${facingHtml()}
+  <div class="tw-btn tw-btn-main tw-wide" data-act="save">저장</div>
+  <div class="tw-msg"></div>
+  <div class="tw-danger">
+    <div class="tw-btn tw-btn-danger" data-act="delete"><i class="fa-solid fa-trash"></i> 이 펫 지우기</div>
+    <div class="tw-sub">기록은 사라지지만, 외형은 "내가 올린 외형"에 남아요.</div>
+  </div>
+</div>`;
+}
+
+function fillEdit(p) {
+    const cur = lookKeyOf(p);
+    win.form = { kind: 'edit', id: p.id, look: cur, file: null, prep: null,
+        base: { name: p.name, pers: p.personality?.base || 'aegyo', facing: p.look?.facing || 'front', squish: String(Math.round((p.look?.squish ?? 0.5) * 10) / 10), look: cur } };
+    const b = win.form.base, box = win.body;
     box.querySelector('[data-f="name"]').value = b.name;
     box.querySelector('[data-f="pers"]').value = b.pers;
     box.querySelector('[data-f="facing"]').value = b.facing;
     box.querySelector('[data-f="squish"]').value = b.squish;
-    box.querySelector('[data-f="file"]').value = '';
-    info.file = null; info.prep = null;
-    box.querySelector('.tavvy-info-filename').textContent = '바꾸지 않아요';
-    box.querySelector('.tavvy-info-prevrow').hidden = true;
+    drawLookGrid();
     showSquish();
 }
 
+function showTab(tab) {
+    win.tab = tab;
+    win.body.querySelectorAll('.tw-tab').forEach(t => t.classList.toggle('tw-on', t.dataset.tab === tab));
+    win.body.querySelectorAll('.tw-pane').forEach(pn => { pn.hidden = pn.dataset.pane !== tab; });
+    refreshWin();
+}
+
+/* --- new pet --- */
+
+function newHtml() {
+    return `<div class="tw-form">
+  <div class="tw-sub" data-live="newroom"></div>
+  <label class="tw-label">이름 <input data-f="name" maxlength="20" placeholder="이름"></label>
+  <div class="tw-cap">외형</div>
+  <div class="tw-lookgrid"></div>
+  ${uploadHtml()}
+  <div class="tw-uploadopts" hidden>${facingHtml()}</div>
+  <label class="tw-label">성격 <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
+  <div class="tw-btn tw-btn-main tw-wide" data-act="create">만들기</div>
+  <div class="tw-msg"></div>
+</div>`;
+}
+
+function fillNew() {
+    win.form = { kind: 'new', look: null, file: null, prep: null, autoName: '' };
+    win.body.querySelector('[data-f="facing"]').value = 'front';
+    win.body.querySelector('[data-f="squish"]').value = '0.5';
+    drawLookGrid();
+    showSquish();
+}
+
+/* --- settings --- */
+
+function settingsHtml() {
+    const themes = Object.entries(THEMES).map(([k, v]) =>
+        `<div class="tw-theme" data-theme-pick="${k}"><div class="tw-swatch tw-swatch-${k}"><i></i><i></i></div><span>${v}</span></div>`).join('');
+    return `<div class="tw-form">
+  <div class="tw-cap">창 색</div>
+  <div class="tw-themes">${themes}</div>
+
+  <div class="tw-cap">펫</div>
+  <label class="tw-check"><input type="checkbox" data-s="autoWake"> 방에 들어올 때 자동으로 깨우기</label>
+  <label class="tw-label">무대
+    <select data-s="stageMode">
+      <option value="chat">채팅창 전체 (말풍선 위에도 올라가요)</option>
+      <option value="floor">바닥만 (입력창 위에서만 지내요)</option>
+    </select>
+  </label>
+  <label class="tw-check"><input type="checkbox" data-s="lineLedges"> 줄 모양 채팅에서 메시지 사이 경계선도 발판으로 쓰기</label>
+  <label class="tw-check"><input type="checkbox" data-s="badge"> 재워 둔 동안 침대에 쌓인 밥 수 보기</label>
+  <label class="tw-label">친밀도 표시
+    <select data-s="heartMode">
+      <option value="both">하트 + 이름 (♥♥ 친구)</option>
+      <option value="hearts">하트만</option>
+      <option value="name">이름만</option>
+      <option value="hide">숨기기</option>
+    </select>
+  </label>
+
+  <div class="tw-cap">깨우기 버튼</div>
+  <div class="tw-row">
+    <div class="tw-btn" data-act="bedreset">위치 처음으로</div>
+    <div class="tw-btn" data-act="bedfind">찾기 (화면 가운데로)</div>
+  </div>
+  <div id="tavvy-diag" class="tw-sub tw-diag"></div>
+
+  <div class="tw-cap">내가 올린 외형</div>
+  <div data-live="looks"></div>
+
+  <div class="tw-cap">백업 <span class="tw-sub">(하루 한 번 자동, 최근 ${BACKUP_KEEP}개)</span></div>
+  <div class="tw-row"><select data-live="backups" class="tw-grow"></select><div class="tw-btn" data-act="restore">되돌리기</div></div>
+  <div class="tw-sub">되돌리면 모든 펫의 기록(먹은 양 등)이 그날 기록으로 바뀌어요.</div>
+  <div class="tw-msg"></div>
+</div>`;
+}
+
+function fillSettings() {
+    const s = root.settings, box = win.body;
+    box.querySelector('[data-s="autoWake"]').checked = !!s.autoWake;
+    box.querySelector('[data-s="stageMode"]').value = stageIsChat() ? 'chat' : 'floor';
+    box.querySelector('[data-s="lineLedges"]').checked = s.lineLedges !== false;
+    box.querySelector('[data-s="lineLedges"]').disabled = !stageIsChat();
+    box.querySelector('[data-s="badge"]').checked = s.badge !== false;
+    box.querySelector('[data-s="heartMode"]').value = s.heartMode || 'both';
+    box.querySelectorAll('[data-theme-pick]').forEach(t => t.classList.toggle('tw-on', t.dataset.themePick === (THEMES[s.winTheme] ? s.winTheme : 'theme')));
+}
+
+function looksLiveHtml() {
+    const looks = root?.looks || [];
+    if (!looks.length) return '<div class="tw-sub">아직 없어요. 새 펫을 만들 때 그림을 올리면 여기 남아요.</div>';
+    return looks.map(l => {
+        const users = lookUsers(l);
+        return `<div class="tw-lookrow">
+  <div class="tw-av"><img src="${esc(imgUrl(l.roles?.idle?.[0]))}" alt=""></div>
+  <div class="tw-card-main"><b>${esc(l.name)}</b><span>${users.length ? `${esc(users.map(p => p.name).join(', '))}${josa(users[users.length - 1].name, '이', '가').slice(users[users.length - 1].name.length)} 쓰는 중` : '쓰는 펫 없음'}</span></div>
+  ${users.length ? '' : `<div class="tw-btn tw-btn-small" data-dellook="${esc(l.id)}">지우기</div>`}
+</div>`;
+    }).join('');
+}
+
+function backupsHtml() {
+    const files = [...(root?.settings.backup?.files || [])].reverse();
+    return files.length
+        ? files.map(f => `<option value="${esc(f.day)}">${esc(f.day)} · 펫 ${Number(f.pets) || 0}마리</option>`).join('')
+        : '<option value="">아직 백업이 없어요</option>';
+}
+
+/* --- live parts (the pet may be eating while you look) --- */
+
+function refreshWin() {
+    if (!win?.open || !root) return;
+    if (win.view === 'pet' && !root.pets.some(p => p.id === win.id)) return show('home');
+    const p = win.view === 'pet' ? root.pets.find(x => x.id === win.id) : null;
+    win.body.querySelectorAll('[data-live]').forEach(node => {
+        const kind = node.dataset.live;
+        let html;
+        if (kind === 'home') html = homeLiveHtml();
+        else if (kind === 'room') html = esc(roomNote());
+        else if (kind === 'hero') html = heroHtml(p);
+        else if (kind === 'journal') { if (win.tab !== 'journal') return; html = journalHtml(p); }
+        else if (kind === 'acts') { if (win.tab !== 'acts') return; html = actsHtml(p); }
+        else if (kind === 'looks') html = looksLiveHtml();
+        else if (kind === 'backups') html = backupsHtml();
+        else if (kind === 'newroom') html = esc(readOnly ? readOnlyReason : room ? '지금 열려 있는 채팅방이 이 펫의 집이 돼요.' : '먼저 펫이 살 채팅방을 열어 주세요.');
+        else return;
+        if (node.dataset.html !== html) { node.innerHTML = html; node.dataset.html = html; }
+    });
+    if (win.view === 'pet') {
+        const t = win.head.querySelector('.tw-title');
+        if (p && t.textContent !== p.name) t.textContent = p.name;
+    }
+}
+
+/* --- forms --- */
+
+function drawLookGrid() {
+    const grid = win.body.querySelector('.tw-lookgrid');
+    if (!grid || !win.form) return;
+    grid.innerHTML = lookGridHtml(win.form.look, win.form.kind === 'edit' ? win.form.base.look : null);
+    const up = win.form.look === 'upload';
+    win.body.querySelector('.tw-upload').hidden = !up;
+    const opts = win.body.querySelector('.tw-uploadopts');
+    if (opts) opts.hidden = !up;
+}
+
 function showSquish() {
-    const v = Number(info.el.querySelector('[data-f="squish"]').value);
-    info.el.querySelector('.tavvy-squish-val').textContent = v <= 0 ? '(안 말랑)' : `(${Math.round(v * 100)}%)`;
+    const v = Number(win.body.querySelector('[data-f="squish"]')?.value);
+    const out = win.body.querySelector('.tw-squish-val');
+    if (out) out.textContent = v <= 0 ? '(안 말랑)' : `(${Math.round(v * 100)}%)`;
 }
 
-function showInfoTab(tab) {
-    info.tab = tab;
-    info.el.querySelectorAll('.tavvy-tab').forEach(t => t.classList.toggle('tavvy-tab-on', t.dataset.tab === tab));
-    info.el.querySelectorAll('.tavvy-pane').forEach(pn => { pn.hidden = pn.dataset.pane !== tab; });
-    refreshInfo();
+function formDirty() {
+    const f = win?.form;
+    if (!f || !win.open) return false;
+    const box = win.body;
+    const val = (k) => box.querySelector(`[data-f="${k}"]`)?.value ?? '';
+    if (f.kind === 'new') return !!val('name').trim() || !!f.look;
+    if (f.kind !== 'edit') return false;
+    const b = f.base;
+    return f.look !== b.look || !!f.file
+        || val('name') !== b.name || val('pers') !== b.pers || val('facing') !== b.facing
+        || String(Number(val('squish'))) !== String(Number(b.squish));
 }
 
-/** Header and journal follow the pet live (it may be eating while the window is open). */
-function refreshInfo() {
-    if (!info || info.chooser || info.el.hidden) return;
-    const p = root?.pets.find(x => x.id === info.id);
-    if (!p) { info.el.hidden = true; info = null; return; }
-    const img = info.el.querySelector('.tavvy-info-img');
-    const src = imgUrl(p.look?.roles?.idle?.[0]);
-    if (img.getAttribute('src') !== src) img.src = src;
-    info.el.querySelector('.tavvy-info-name').textContent = p.name;
-    const lv = levelLabel(p);
-    info.el.querySelector('.tavvy-info-sub').textContent = `${PERSONALITIES[p.personality?.base]?.name || '?'}${lv ? ' · ' + lv : ''} · ${homeLabel(p)}`;
-    if (info.tab === 'journal') {
-        const pane = info.el.querySelector('[data-pane="journal"]');
-        const html = journalHtml(p);
-        if (pane.dataset.html !== html) { pane.innerHTML = html; pane.dataset.html = html; }
-    }
-}
-
-function infoDirty() {
-    if (!info || info.chooser) return false;
-    const box = info.el, b = info.base;
-    return !!info.file
-        || box.querySelector('[data-f="name"]').value !== b.name
-        || box.querySelector('[data-f="pers"]').value !== b.pers
-        || box.querySelector('[data-f="facing"]').value !== b.facing
-        || String(Number(box.querySelector('[data-f="squish"]').value)) !== String(Number(b.squish));
-}
-
-let closingInfo = false;
-async function closeInfo() {
-    if (!info || closingInfo) return;
-    if (infoDirty()) {
-        closingInfo = true;
-        try { if (!(await confirmBox('저장 안 한 내용이 있어요. 닫을까요?'))) return; } finally { closingInfo = false; }
-    }
-    if (!info) return;
-    info.el.hidden = true;
-    info = null;
-}
-
-function infoMsg(text) {
-    const m = info?.el.querySelector('.tavvy-info-msg');
-    if (m) m.textContent = text;
-}
-
-function onInfoClick(e) {
-    if (!info) return;
-    if (e.target.closest('[data-close]')) return closeInfo();
-    const pick = e.target.closest('[data-pick]');
-    if (pick) return openInfo(pick.dataset.pick);
-    const tab = e.target.closest('[data-tab]');
-    if (tab) return showInfoTab(tab.dataset.tab);
-    const act = e.target.closest('[data-act]')?.dataset.act;
-    if (act === 'pick') info.el.querySelector('[data-f="file"]').click();   // SillyTavern hides file inputs → our button
-    if (act === 'save') saveInfo();
-}
-
-async function onInfoInput(e) {
-    if (!info) return;
-    const f = e.target.dataset?.f;
-    if (f === 'squish') showSquish();
-    if (f === 'file' || (f === 'crop' && info.file)) {
-        if (e.type !== 'change') return;
-        if (f === 'file') info.file = e.target.files?.[0] || null;
-        const row = info.el.querySelector('.tavvy-info-prevrow');
-        info.el.querySelector('.tavvy-info-filename').textContent = info.file ? info.file.name : '바꾸지 않아요';
-        info.prep = null;
-        if (!info.file) { row.hidden = true; return; }
-        const file = info.file;
-        try {
-            const out = await preparePng(file, info.el.querySelector('[data-f="crop"]').checked);
-            if (!info || info.file !== file) return;
-            info.prep = out;
-            info.el.querySelector('.tavvy-info-prev').src = out.dataUrl;
-            row.hidden = false;
-        } catch {
-            if (info?.file === file) { infoMsg('그림을 읽지 못했어요. 다른 PNG를 골라 주세요.'); row.hidden = true; }
+function pickLook(key) {
+    const f = win.form;
+    if (!f) return;
+    f.look = key;
+    const box = win.body;
+    const L = lookById(key);
+    if (L) {
+        box.querySelector('[data-f="facing"]').value = L.facing;
+        box.querySelector('[data-f="squish"]').value = String(L.squish);
+        showSquish();
+        if (f.kind === 'new') {
+            const nameEl = box.querySelector('[data-f="name"]');
+            if (!nameEl.value.trim() || nameEl.value === f.autoName) { nameEl.value = L.name; f.autoName = L.name; }
         }
     }
+    drawLookGrid();
 }
 
-/** Only image files of our own (never the built-in pets' pictures). */
-function imageFiles(p) {
-    const out = [];
-    for (const list of Object.values(p.look?.roles || {})) for (const f of list || []) if (f && !f.startsWith('builtin:')) out.push(f);
-    return out;
-}
-
-let savingInfo = false;
-async function saveInfo() {
-    if (!info || info.chooser || savingInfo) return;
-    if (readOnly) return infoMsg(readOnlyReason);
-    if (!ready) return infoMsg('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 눌러 주세요.');
-    const p = root.pets.find(x => x.id === info.id);
-    if (!p) return;
-    const box = info.el;
-    const name = box.querySelector('[data-f="name"]').value.trim();
-    if (!name) return infoMsg('이름을 적어 주세요.');
-    if (!infoDirty()) return infoMsg('바뀐 게 없어요.');
-    const pers = PERSONALITIES[box.querySelector('[data-f="pers"]').value] ? box.querySelector('[data-f="pers"]').value : p.personality.base;
-    const facing = ['front', 'left', 'right'].includes(box.querySelector('[data-f="facing"]').value) ? box.querySelector('[data-f="facing"]').value : 'front';
-    const squish = clamp(Number(box.querySelector('[data-f="squish"]').value) || 0, 0, 1);
-    savingInfo = true;
-    let newPath = null;
+async function onFilePicked(input) {
+    const f = win.form;
+    if (!f) return;
+    f.file = input.files?.[0] || null;
+    f.prep = null;
+    const box = win.body;
+    box.querySelector('.tw-filename').textContent = f.file ? f.file.name : '아직 안 골랐어요';
+    const row = box.querySelector('.tw-prevrow');
+    if (!f.file) { row.hidden = true; return; }
+    const file = f.file;
     try {
-        if (info.file) {
-            if (info.file.size > 8 * 1024 * 1024) return infoMsg('그림이 너무 커요 (8MB 이하).');
-            infoMsg('그림 올리는 중…');
-            const img = info.prep || await preparePng(info.file, box.querySelector('[data-f="crop"]').checked);
-            newPath = await uploadFile(`tavvy_${p.id}_idle_${Date.now().toString(36)}.png`, img.base64);
+        const out = await preparePng(file, box.querySelector('[data-f="crop"]').checked);
+        if (win.form !== f || f.file !== file) return;
+        f.prep = out;
+        box.querySelector('.tw-prev').src = out.dataUrl;
+        row.hidden = false;
+    } catch {
+        if (win.form === f && f.file === file) { say('그림을 읽지 못했어요. 다른 PNG를 골라 주세요.'); row.hidden = true; }
+    }
+}
+
+/** Upload the chosen picture and keep it in the look library. Returns the new look. */
+async function uploadLook(name, facing, squish) {
+    const f = win.form;
+    if (!f.file) throw new Error('PNG 그림을 골라 주세요.');
+    if (f.file.size > 8 * 1024 * 1024) throw new Error('그림이 너무 커요 (8MB 이하).');
+    say('그림 올리는 중…');
+    const img = f.prep || await preparePng(f.file, win.body.querySelector('[data-f="crop"]').checked);
+    const id = 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const path = await uploadFile(`tavvy_look_${id}.png`, img.base64);
+    return { id, name, kind: 'single', facing, squish, roles: { idle: [path] }, baseline: 0, createdAt: Date.now() };
+}
+
+function formValues() {
+    const box = win.body;
+    const v = (k) => box.querySelector(`[data-f="${k}"]`)?.value ?? '';
+    return {
+        name: v('name').trim(),
+        pers: PERSONALITIES[v('pers')] ? v('pers') : 'aegyo',
+        facing: ['front', 'left', 'right'].includes(v('facing')) ? v('facing') : 'front',
+        squish: Math.round(clamp(Number(v('squish')) || 0, 0, 1) * 10) / 10,
+    };
+}
+
+let busy = false;
+
+async function saveEdit() {
+    if (busy || win.form?.kind !== 'edit') return;
+    if (readOnly) return say(readOnlyReason);
+    if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 눌러 주세요.');
+    const p = root.pets.find(x => x.id === win.form.id);
+    if (!p) return;
+    const v = formValues();
+    if (!v.name) return say('이름을 적어 주세요.');
+    if (!formDirty()) return say('바뀐 게 없어요.');
+    const f = win.form;
+    if (f.look === 'upload' && !f.file) return say('올릴 PNG 그림을 골라 주세요.');
+    busy = true;
+    let added = null;
+    try {
+        let look = null;
+        if (f.look === 'upload') {
+            added = await uploadLook(v.name, v.facing, v.squish);
+            look = { kind: 'single', roles: structuredClone(added.roles), baseline: 0 };
+        } else if (f.look !== f.base.look) {
+            look = lookById(f.look)?.make() || null;
         }
-        const oldFiles = newPath ? imageFiles(p) : [];
-        p.name = name;
-        p.personality = { ...(p.personality || {}), base: pers };
-        p.look.facing = facing;
-        p.look.squish = Math.round(squish * 10) / 10;
-        if (newPath) { p.look.roles = { idle: [newPath] }; p.look.kind = 'single'; p.look.baseline = 0; }
+        if (added) root.looks.push(added);
+        p.name = v.name;
+        p.personality = { ...(p.personality || {}), base: v.pers };
+        if (look) { p.look.roles = look.roles; p.look.kind = look.kind; p.look.baseline = look.baseline; }
+        p.look.facing = v.facing;
+        p.look.squish = v.squish;
         const ok = await saveNow();
-        if (ok) for (const f of oldFiles) deleteFile(f);      // old picture only after the record is safely saved
-        else saveSoon();
-        for (const a of actors) if (a.rec === p) { a.p = PERSONALITIES[pers]; if (newPath) a.reloadLook(); }
+        if (!ok) saveSoon();
+        for (const a of actors) if (a.rec === p) { a.p = PERSONALITIES[v.pers]; if (look) a.reloadLook(); }
         refreshBed();
         renderPanel();
-        if (info?.id === p.id) { fillInfoForm(p); refreshInfo(); }
-        infoMsg(ok ? '저장했어요.' : '바꿨지만 저장이 늦어지고 있어요. 잠시 뒤 다시 저장돼요.');
+        if (win.view === 'pet' && win.id === p.id) { fillEdit(p); win.body.querySelector('.tw-filename').textContent = '아직 안 골랐어요'; win.body.querySelector('.tw-prevrow').hidden = true; }
+        say(ok ? '저장했어요.' : '바꿨지만 저장이 늦어지고 있어요. 잠시 뒤 다시 저장돼요.');
     } catch (e) {
         console.error('[Tavvy] edit failed', e);
-        if (newPath) deleteFile(newPath);
-        infoMsg('저장하지 못했어요: ' + (e.message || e));
+        if (added) { root.looks = root.looks.filter(l => l !== added); lookFiles(added).forEach(deleteFile); }
+        say('저장하지 못했어요: ' + (e.message || e));
     } finally {
-        savingInfo = false;
+        busy = false;
+    }
+}
+
+async function createPet() {
+    if (busy || win.form?.kind !== 'new') return;
+    if (readOnly) return say(readOnlyReason);
+    if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 눌러 주세요.');
+    if (!room) return say('먼저 펫이 살 채팅방을 열어 주세요.');
+    const f = win.form;
+    if (!f.look) return say('외형을 골라 주세요.');
+    const v = formValues();
+    if (!v.name) return say('이름을 적어 주세요.');
+    if (f.look === 'upload' && !f.file) return say('올릴 PNG 그림을 골라 주세요.');
+    busy = true;
+    let added = null;
+    try {
+        let look;
+        if (f.look === 'upload') {
+            added = await uploadLook(v.name, v.facing, v.squish);
+            look = { kind: 'single', facing: v.facing, roles: structuredClone(added.roles), baseline: 0, size: { ...DEFAULT_SIZE }, squish: v.squish };
+        } else {
+            look = lookById(f.look)?.make();
+            if (!look) return say('외형을 다시 골라 주세요.');
+        }
+        const rec = newPetRecord({ id: newId(), name: v.name, personality: v.pers, look });
+        rec.home = { chatId: room.chatId, integrity: room.integrity };
+        root.pets.push(rec);
+        if (added) root.looks.push(added);
+        const ok = await saveNow();
+        if (!ok && readOnly) {
+            root.pets.pop();
+            if (added) { root.looks.pop(); lookFiles(added).forEach(deleteFile); }
+            return say(readOnlyReason);
+        }
+        if (!ok) saveSoon();
+        refreshBed();
+        renderPanel();
+        win.form = null;
+        show('pet', { id: rec.id });
+        say(ok ? `${josa(v.name, '이', '가')} 이 방에 왔어요! 🛏️ 버튼을 눌러 깨워 보세요.` : '만들었지만 저장이 늦어지고 있어요. 잠시 뒤 다시 저장돼요.');
+    } catch (e) {
+        console.error('[Tavvy] create failed', e);
+        if (added) lookFiles(added).forEach(deleteFile);
+        say('펫을 만들지 못했어요: ' + (e.message || e));
+    } finally {
+        busy = false;
+    }
+}
+
+async function deletePet(id) {
+    if (readOnly) return say(readOnlyReason);
+    const i = root.pets.findIndex(p => p.id === id);
+    if (i < 0) return;
+    const pet = root.pets[i];
+    if (!(await confirmBox(`${josa(pet.name, '을', '를')} 정말 지울까요? 기록은 사라지고, 외형은 "내가 올린 외형"에 남아요.`))) return;
+    for (const a of [...actors]) if (a.rec === pet) { a.onGone = null; a.vanish(); }
+    root.pets.splice(i, 1);
+    const ok = await saveNow();
+    // files only after the record is safely saved, and only ones nothing else uses (saved looks stay)
+    if (ok) for (const f of petFiles(pet)) { if (!fileInUse(f)) deleteFile(f); }
+    else saveSoon();
+    refreshBed();
+    renderPanel();
+    if (win?.open) { win.form = null; show('home'); }
+    say(`${josa(pet.name, '을', '를')} 지웠어요.`);
+}
+
+async function deleteLook(id) {
+    if (readOnly) return say(readOnlyReason);
+    const l = (root.looks || []).find(x => x.id === id);
+    if (!l) return;
+    if (lookUsers(l).length) return say('이 외형을 쓰는 펫이 있어서 지울 수 없어요.');
+    if (!(await confirmBox(`"${l.name}" 외형을 지울까요? 그림 파일도 함께 지워져요.`))) return;
+    root.looks = root.looks.filter(x => x !== l);
+    const ok = await saveNow();
+    if (ok) for (const f of lookFiles(l)) { if (!fileInUse(f)) deleteFile(f); }
+    else saveSoon();
+    refreshWin();
+    say('외형을 지웠어요.');
+}
+
+function setSetting(key, value) {
+    if (!root) return;
+    root.settings[key] = value;
+    saveSoon();
+    if (key === 'stageMode' || key === 'lineLedges') measure();
+    if (key === 'badge') refreshBed();
+    if (key === 'stageMode') fillSettings();
+    if (key === 'winTheme') { applyTheme(); fillSettings(); }
+    renderPanel();
+}
+
+function onWinClick(e) {
+    if (!win?.open) return;
+    const t = e.target;
+    const act = t.closest('[data-act]')?.dataset.act;
+    if (act === 'close') return closeWin();
+    if (act === 'back') return leave(() => show('home'));
+    if (act === 'settings') return show('settings');
+    if (act === 'new') return show('new');
+    if (act === 'save') return saveEdit();
+    if (act === 'create') return createPet();
+    if (act === 'delete') return deletePet(win.id);
+    if (act === 'pickfile') return win.body.querySelector('[data-f="file"]').click();   // SillyTavern hides file inputs
+    if (act === 'bedreset') {
+        root.settings.bedPos = { phone: null, pc: null };
+        saveSoon(); placeBed();
+        return say('깨우기 버튼을 처음 자리로 옮겼어요.');
+    }
+    if (act === 'bedfind') return findBed();
+    if (act === 'restore') return restoreBackup(win.body.querySelector('[data-live="backups"]').value);
+    const pet = t.closest('[data-pet]');
+    if (pet) return show('pet', { id: pet.dataset.pet });
+    const tab = t.closest('[data-tab]');
+    if (tab) return showTab(tab.dataset.tab);
+    const look = t.closest('[data-look]');
+    if (look) return pickLook(look.dataset.look);
+    const theme = t.closest('[data-theme-pick]');
+    if (theme) return setSetting('winTheme', theme.dataset.themePick);
+    const dl = t.closest('[data-dellook]');
+    if (dl) return deleteLook(dl.dataset.dellook);
+}
+
+function onWinInput(e) {
+    if (!win?.open) return;
+    const t = e.target;
+    if (t.matches?.('[data-size]')) return onSizeInput(t, e.type === 'change');
+    const f = t.dataset?.f;
+    if (f === 'squish') return showSquish();
+    if (f === 'file' && e.type === 'change') return onFilePicked(t);
+    if (f === 'crop' && e.type === 'change' && win.form?.file) return onFilePicked(win.body.querySelector('[data-f="file"]'));
+    const s = t.dataset?.s;
+    if (s && e.type === 'change') {
+        if (s === 'stageMode') return setSetting(s, t.value === 'floor' ? 'floor' : 'chat');
+        if (s === 'heartMode') return setSetting(s, ['both', 'hearts', 'name', 'hide'].includes(t.value) ? t.value : 'both');
+        return setSetting(s, t.checked);
     }
 }
 
@@ -3385,65 +3737,17 @@ function addWandItem() {
     return true;
 }
 
+/** Keep the little settings drawer and the open window up to date. */
 function renderPanel() {
-    if (!$id('tavvy-list') || !root) return;
     const warn = $id('tavvy-warn');
-    warn.hidden = !readOnly;
-    warn.textContent = readOnly ? readOnlyReason : '';
-    $id('tavvy-autowake').checked = !!root.settings.autoWake;
-    $id('tavvy-stage').value = stageIsChat() ? 'chat' : 'floor';
-    $id('tavvy-lines').checked = root.settings.lineLedges !== false;
-    $id('tavvy-lines').disabled = !stageIsChat();
-    $id('tavvy-badge').checked = root.settings.badge !== false;
-    $id('tavvy-hearts').value = root.settings.heartMode || 'both';
-    const files = [...(root.settings.backup?.files || [])].reverse();
-    const bhtml = files.length
-        ? files.map(f => `<option value="${esc(f.day)}">${esc(f.day)} · 펫 ${Number(f.pets) || 0}마리</option>`).join('')
-        : '<option value="">아직 백업이 없어요</option>';
-    const sel = $id('tavvy-backups');
-    if (sel.dataset.html !== bhtml) { sel.innerHTML = bhtml; sel.dataset.html = bhtml; }
-    $id('tavvy-restore').classList.toggle('disabled', !files.length || readOnly);
-
-    const here = residents();
-    $id('tavvy-room').textContent = !room
-        ? '열려 있는 채팅방이 없어요.'
-        : here.length ? `이 방에 사는 펫: ${here.map(p => p.name).join(', ')}` : '이 방에는 아직 펫이 없어요.';
-
-    const list = $id('tavvy-list');
-    if (!root.pets.length) {
-        list.innerHTML = '<div class="tavvy-note">아직 펫이 없어요.</div>';
-        list.dataset.html = '';
-    } else {
-        const html = root.pets.map(p => {
-            const pers = PERSONALITIES[p.personality?.base]?.name || '?';
-            const icon = imgUrl(p.look?.roles?.idle?.[0]);
-            const dev = device();
-            const size = petSize(p);
-            const lv = levelLabel(p);
-            return `<div class="tavvy-row">
-  <img src="${esc(icon)}" alt="">
-  <div class="tavvy-row-main"><b>${esc(p.name)}</b><span>${pers} · ${homeLabel(p)}${lv ? ' · ' + esc(lv) : ''}</span></div>
-  <div class="menu_button tavvy-jbtn" data-info="${esc(p.id)}">정보</div>
-  <div class="menu_button tavvy-del" data-del="${esc(p.id)}" title="삭제">삭제</div>
-  <label class="tavvy-size">
-    <span>크기(${dev === 'phone' ? '폰' : 'PC'})</span>
-    <input type="number" class="text_pole" inputmode="numeric" min="${SIZE_MIN}" max="${SIZE_MAX}" step="1" value="${size}" data-size="${esc(p.id)}">
-    <span class="tavvy-size-val" data-sizeval="${esc(p.id)}">${sizeLabel(p, size)}</span>
-  </label>
-</div>`;
-        }).join('');
-        // don't rebuild while a size box is being typed in (the list refreshes on its own every so often).
-        // Only the size box: SillyTavern makes every .menu_button focusable, so a pressed button keeps focus.
-        const ae = document.activeElement;
-        const typingSize = !!ae && list.contains(ae) && !!ae.matches?.('[data-size]');
-        if (html !== list.dataset.html && !typingSize) {
-            list.innerHTML = html;
-            list.dataset.html = html;
-        }
+    if (warn) { warn.hidden = !readOnly; warn.textContent = readOnly ? readOnlyReason : ''; }
+    const r = $id('tavvy-room');
+    if (r && root) {
+        const here = residents();
+        const text = !room ? '열려 있는 채팅방이 없어요.' : here.length ? `이 방에 사는 펫: ${here.map(p => p.name).join(', ')}` : '이 방에는 아직 펫이 없어요.';
+        if (r.textContent !== text) r.textContent = text;
     }
-    const btn = $id('tavvy-create');
-    btn.classList.toggle('disabled', !room || readOnly);
-    refreshInfo();
+    refreshWin();
 }
 
 /** Korean particle: josa('보리','이','가') → '보리가', josa('콩떡','이','가') → '콩떡이'. */
@@ -3457,80 +3761,12 @@ function newId() {
     return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
-let creating = false;
-
-async function createPetFromForm() {
-    if (creating) return;
-    if (readOnly) return say(readOnlyReason);
-    if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 눌러 주세요.');
-    if (!room) return say('먼저 펫이 살 채팅방을 열어 주세요.');
-    const choice = document.querySelector('input[name="tavvy-look"]:checked')?.value;
-    if (!choice) return say('모습을 골라 주세요.');
-    const name = $id('tavvy-name').value.trim() || (BUILTIN[choice]?.name ?? '');
-    if (!name) return say('이름을 적어 주세요.');
-    const personality = $id('tavvy-pers').value;
-
-    creating = true;
-    const uploaded = [];
-    try {
-        const id = newId();
-        let look;
-        if (choice === 'mine') {
-            if (!mineFile) return say('PNG 그림을 골라 주세요.');
-            if (mineFile.size > 8 * 1024 * 1024) return say('그림이 너무 커요 (8MB 이하).');
-            say('그림 올리는 중…');
-            const img = await preparePng(mineFile, $id('tavvy-crop').checked);
-            const path = await uploadFile(`tavvy_${id}_idle_0.png`, img.base64);
-            uploaded.push(path);
-            look = { kind: 'single', facing: $id('tavvy-facing').value, roles: { idle: [path] }, baseline: 0, size: { ...DEFAULT_SIZE }, squish: 0.5 };
-        } else {
-            look = builtinLook(choice);
-        }
-        const rec = newPetRecord({ id, name, personality, look });
-        rec.home = { chatId: room.chatId, integrity: room.integrity };
-        root.pets.push(rec);
-        const ok = await saveNow();
-        if (!ok && readOnly) {
-            root.pets.pop();
-            for (const p of uploaded) deleteFile(p);
-            return say(readOnlyReason);
-        }
-        say(ok ? `${josa(name, '이', '가')} 이 방에 왔어요! 🛏️ 버튼을 눌러 깨워 보세요.` : `${josa(name, '을', '를')} 만들었지만 저장이 늦어지고 있어요. 잠시 뒤 다시 저장돼요.`);
-        if (!ok) saveSoon();
-        $id('tavvy-name').value = '';
-        refreshBed();
-        renderPanel();
-    } catch (e) {
-        console.error('[Tavvy] create failed', e);
-        for (const p of uploaded) deleteFile(p);
-        say('펫을 만들지 못했어요: ' + (e.message || e));
-    } finally {
-        creating = false;
-    }
-}
-
 async function confirmBox(text) {
     const c = ctx();
     if (typeof c.callGenericPopup === 'function' && c.POPUP_TYPE) {
         return !!(await c.callGenericPopup(text, c.POPUP_TYPE.CONFIRM));
     }
     return window.confirm(text);
-}
-
-async function deletePet(id) {
-    if (readOnly) return say(readOnlyReason);
-    const i = root.pets.findIndex(p => p.id === id);
-    if (i < 0) return;
-    const pet = root.pets[i];
-    if (!(await confirmBox(`${josa(pet.name, '을', '를')} 정말 지울까요? 기록과 그림도 함께 사라져요.`))) return;
-    for (const a of [...actors]) if (a.rec === pet) { a.onGone = null; a.vanish(); }
-    root.pets.splice(i, 1);
-    const ok = await saveNow();
-    if (ok) for (const p of petFiles(pet)) deleteFile(p);   // files only after the record is safely saved
-    else saveSoon();
-    refreshBed();
-    renderPanel();
-    say(`${josa(pet.name, '을', '를')} 지웠어요.`);
 }
 
 /* =====================================================================
