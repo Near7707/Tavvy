@@ -763,7 +763,7 @@
 .tavvy-bubble.tavvy-bubble-special { border-color: #f0a6c0; font-weight: 600; }
 
 /* the window above the phone keyboard: top of the visible part, filling it */
-.tavvy-modal.tavvy-kb { align-items: flex-start; padding: 6px; }
+.tavvy-modal.tavvy-kb { align-items: flex-start; padding: 6px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .45); }
 
 /* night sky window colour */
 .tavvy-win[data-theme="night"] {
@@ -899,3 +899,49 @@
 .tavvy-win .tw-date select { padding: 6px 6px; font-size: 13px; }
 .tavvy-win .tw-date input { grid-column: 1 / -1; font-size: 13px; }
 .tavvy-win .tw-icon-small { width: 30px; height: 30px; font-size: 14px; }
+
+/* ---------- 0.7.1 ---------- */
+/* phone: boxes at 16px so the screen never zooms in when you tap one */
+@media (pointer: coarse) {
+    .tavvy-win input:not([type="checkbox"]):not([type="range"]):not([type="file"]),
+    .tavvy-win select,
+    .tavvy-win textarea,
+    .tavvy-win .tw-date select,
+    .tavvy-win .tw-date input { font-size: 16px; }
+}
+/* pick boxes: always the window's own colours (some themes/phones paint them white) */
+.tavvy-win select {
+    -webkit-appearance: none;
+    appearance: none;
+    background-color: var(--tw-field) !important;
+    color: var(--tw-fg) !important;
+    -webkit-text-fill-color: var(--tw-fg);
+    opacity: 1;
+    background-image: linear-gradient(45deg, transparent 50%, var(--tw-sub) 50%), linear-gradient(135deg, var(--tw-sub) 50%, transparent 50%) !important;
+    background-position: right 16px center, right 11px center !important;
+    background-size: 5px 5px, 5px 5px !important;
+    background-repeat: no-repeat !important;
+    padding-right: 30px;
+}
+.tavvy-win input:not([type="checkbox"]):not([type="range"]):not([type="file"]),
+.tavvy-win textarea {
+    background-color: var(--tw-field) !important;
+    color: var(--tw-fg) !important;
+    -webkit-text-fill-color: var(--tw-fg);
+}
+.tavvy-win input::placeholder, .tavvy-win textarea::placeholder { color: var(--tw-sub); -webkit-text-fill-color: var(--tw-sub); opacity: 1; }
+
+/* background remover preview */
+.tavvy-win .tw-bgrow { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 4px 0; }
+.tavvy-win .tw-bgrow input[type="range"] { flex: 1; }
+.tavvy-win .tw-checker {
+    background-color: #fff;
+    background-image: linear-gradient(45deg, #ddd 25%, transparent 25%), linear-gradient(-45deg, #ddd 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #ddd 75%), linear-gradient(-45deg, transparent 75%, #ddd 75%);
+    background-size: 12px 12px;
+    background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+}
+.tavvy-win .tw-bgrow[hidden], .tavvy-win .tw-rolepend[hidden] { display: none; }
+.tavvy-win .tw-prevrow { align-items: flex-start; }
+.tavvy-win .tw-prev.tw-checker { width: 72px; height: 72px; }
+.tavvy-win .tw-rolepend { margin: 4px 0 10px; padding: 8px; border-radius: 12px; background: var(--tw-card); }

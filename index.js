@@ -160,12 +160,14 @@ const MY_BUBBLE = 0.65;         // climbing up by itself → picks one of your m
 const RESIST_CHANCE = 0.6;      // put to bed → digs its feet in for a second
 const IDLE_DOZE = 90;           // s with nothing from you → climbs onto your last message and nods off
 const IDLE_DOZE_CHANCE = 0.75;
-const PRESS_CHANCE = 0.4;       // reacting to you → presses against the screen
+const PRESS_CHANCE = 0.15;      // reacting to you → presses against the screen
 const PRESS_SCALE = 1.5, PRESS_HOLD = 2.4;
 const PRESS_HOLD_BY = { aegyo: 1.4, saechim: 0.6, neugut: 1.5, simsul: 1, musim: 0.9 };
 const BONK_CHANCE = 0.2;        // hits the glass too hard → dizzy, cries a little
 const TEAR_COLOR = '#6fc3ff', TEAR_ANGLE = 30;   // degrees (0 = sideways)
-const GIFT_CHANCE = 0.25;       // 애교 only, when reacting to you
+const GIFT_CHANCE = 0.15;       // 애교 only, when reacting to you
+const BIG_REST = 180;           // s — after growing big (screen press / present), not again for this long
+const bigAt = new Map();        // pet id → when it last grew big (kept across sleep / wake)
 const GIFTS = ['🌼', '🍀', '🍬', '⭐', '🎁'];
 
 // pictures per action (6-2). key = role name in look.roles; fb = the picture used when this one is empty.
@@ -503,14 +505,18 @@ function opaqueBox(g, w, h) {
     return x1 >= 0 ? { sx: x0, sy: y0, sw: x1 - x0 + 1, sh: y1 - y0 + 1 } : null;
 }
 
+const READ_MAX = 1200;           // big photos are shrunk to this first (the pet ends up ≤ 384 anyway)
+const BG_TOL = 28;              // "배경 지우기" default strength (how different a colour may be and still count as background)
+
 async function fileCanvas(file) {
     const url = URL.createObjectURL(file);
     try {
         const im = await loadImage(url);
+        const k = Math.min(1, READ_MAX / Math.max(im.naturalWidth, im.naturalHeight));
         const cv = document.createElement('canvas');
-        cv.width = im.naturalWidth; cv.height = im.naturalHeight;
-        const g = cv.getContext('2d');
-        g.drawImage(im, 0, 0);
+        cv.width = Math.max(1, Math.round(im.naturalWidth * k)); cv.height = Math.max(1, Math.round(im.naturalHeight * k));
+        const g = cv.getContext('2d', { willReadFrequently: true });
+        g.drawImage(im, 0, 0, cv.width, cv.height);
         return { cv, g, w: cv.width, h: cv.height };
     } finally {
         URL.revokeObjectURL(url);
@@ -518,11 +524,77 @@ async function fileCanvas(file) {
 }
 
 /**
+ * Plain background → transparent. Looks at the picture's edge: if it is mostly one solid colour,
+ * that colour is wiped out starting from the edge (so the same colour INSIDE the character, which
+ * isn't connected to the edge, stays). The rim gets softened so no hard white fringe is left.
+ * Does nothing for pictures that are already transparent or have a busy background. Returns true if it erased.
+ */
+function removeBg(g, w, h, tol = BG_TOL) {
+    if (w < 3 || h < 3 || tol <= 0) return false;
+    const img = g.getImageData(0, 0, w, h), d = img.data;
+    const edge = [];
+    for (let x = 0; x < w; x++) edge.push(x, (h - 1) * w + x);
+    for (let y = 1; y < h - 1; y++) edge.push(y * w, y * w + w - 1);
+    // already see-through around the edge → nothing to do
+    let clear = 0;
+    for (const i of edge) if (d[i * 4 + 3] < 128) clear++;
+    if (clear > edge.length * 0.5) return false;
+    // the most common edge colour (in coarse buckets), averaged
+    const buckets = new Map();
+    for (const i of edge) {
+        const o = i * 4;
+        if (d[o + 3] < 128) continue;
+        const key = (d[o] >> 4) << 8 | (d[o + 1] >> 4) << 4 | (d[o + 2] >> 4);
+        const b = buckets.get(key) || buckets.set(key, { n: 0, r: 0, g: 0, b: 0 }).get(key);
+        b.n++; b.r += d[o]; b.g += d[o + 1]; b.b += d[o + 2];
+    }
+    let top = null;
+    for (const b of buckets.values()) if (!top || b.n > top.n) top = b;
+    if (!top || top.n < edge.length * 0.35) return false;                      // edge isn't one plain colour
+    const br = top.r / top.n, bgc = top.g / top.n, bb = top.b / top.n;
+    const dist = (o) => Math.max(Math.abs(d[o] - br), Math.abs(d[o + 1] - bgc), Math.abs(d[o + 2] - bb));
+    // flood from the edge through background-coloured pixels
+    const seen = new Uint8Array(w * h);                                         // 1 = background
+    const stack = [];
+    for (const i of edge) if (!seen[i] && d[i * 4 + 3] > 8 && dist(i * 4) <= tol) { seen[i] = 1; stack.push(i); }
+    while (stack.length) {
+        const i = stack.pop(), x = i % w;
+        const near = [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w];
+        for (const j of near) {
+            if (j < 0 || j >= w * h || seen[j]) continue;
+            const o = j * 4;
+            if (d[o + 3] > 8 && dist(o) <= tol) { seen[j] = 1; stack.push(j); }
+        }
+    }
+    let wiped = 0;
+    for (let i = 0; i < w * h; i++) if (seen[i]) { d[i * 4 + 3] = 0; wiped++; }
+    if (!wiped) return false;
+    // soften the rim: pixels touching the background that are still close to its colour fade out,
+    // and lose the background tint they picked up (otherwise a pale halo shows on dark themes)
+    const soft = tol * 2.5;
+    for (let i = 0; i < w * h; i++) {
+        if (seen[i]) continue;
+        const x = i % w;
+        if (!((x > 0 && seen[i - 1]) || (x < w - 1 && seen[i + 1]) || (i >= w && seen[i - w]) || (i < w * (h - 1) && seen[i + w]))) continue;
+        const o = i * 4, dd = dist(o);
+        if (dd >= soft) continue;
+        const a = Math.max(0.05, (dd - tol) / (soft - tol));
+        d[o] = clamp((d[o] - br * (1 - a)) / a, 0, 255);
+        d[o + 1] = clamp((d[o + 1] - bgc * (1 - a)) / a, 0, 255);
+        d[o + 2] = clamp((d[o + 2] - bb * (1 - a)) / a, 0, 255);
+        d[o + 3] = Math.round(d[o + 3] * a);
+    }
+    g.putImageData(img, 0, 0);
+    return true;
+}
+
+/**
  * Several pictures for one action (frames): cropped with ONE shared box when they are the same size,
  * so the frames don't jump around. Returns [{ base64, dataUrl, w, h }] in the given order.
  */
-async function prepareFrames(files, crop) {
+async function prepareFrames(files, crop, bgTol = 0) {
     const cvs = await Promise.all(files.map(fileCanvas));
+    if (bgTol > 0) for (const c of cvs) removeBg(c.g, c.w, c.h, bgTol);
     const same = cvs.every(c => c.w === cvs[0].w && c.h === cvs[0].h);
     let shared = null;
     if (crop && same) {
@@ -539,8 +611,10 @@ async function prepareFrames(files, crop) {
 }
 
 /** Read a user PNG, optionally crop transparent margins, limit size. Returns { base64, w, h }. */
-async function preparePng(file, crop) {
-    return finishPng(await fileCanvas(file), crop, null);
+async function preparePng(file, crop, bgTol = 0) {
+    const c = await fileCanvas(file);
+    if (bgTol > 0) removeBg(c.g, c.w, c.h, bgTol);
+    return finishPng(c, crop, null);
 }
 
 function finishPng({ cv, g, w, h }, crop, box) {
@@ -1042,8 +1116,9 @@ class Actor {
         const mid = (stage.left + stage.right) / 2;
         if (this.side && Math.abs(mid - this.x) > 8) this.dir = mid >= this.x ? 1 : -1;
         this.lastMe = performance.now();
-        if (can(this, 'press') && Math.random() < PRESS_CHANCE) return this.startPress();   // 내편: up against the screen
-        if (can(this, 'gift') && Math.random() < GIFT_CHANCE) return this.startGift();      // 내편 애교: a little present
+        const bigOk = performance.now() - (bigAt.get(this.rec.id) ?? -Infinity) > BIG_REST * 1000;
+        if (bigOk && can(this, 'press') && Math.random() < PRESS_CHANCE) { bigAt.set(this.rec.id, performance.now()); return this.startPress(); }   // 내편: up against the screen
+        if (bigOk && can(this, 'gift') && Math.random() < GIFT_CHANCE) { bigAt.set(this.rec.id, performance.now()); return this.startGift(); }     // 내편 애교: a little present
         this.meHeart = Math.random() < 0.55;
         this.setState('me');
     }
@@ -1278,8 +1353,9 @@ class Actor {
             if (e.button !== undefined && e.button !== 0) return;
             e.preventDefault(); e.stopPropagation();
             noteUserAct();
-            if (down) return;                                   // one finger at a time — a second finger is ignored
-            if (this.held) { this.release(); return; }          // held with no finger on it = stuck → a tap frees it
+            if (down && down.id === e.pointerId) return;
+            if (this.held) { this.dropPointer(); return; }      // held and touched again = stuck (or a 2nd finger) → let go
+            if (down) { clearTimeout(timer); down = null; }    // an old touch that never ended → forget it, start fresh
             try { this.el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
             down = { id: e.pointerId, x: e.clientX, y: e.clientY, picked: false };
             timer = setTimeout(() => pick(null), PICK_DELAY);
@@ -1308,6 +1384,13 @@ class Actor {
         this.el.addEventListener('pointerup', end);
         this.el.addEventListener('pointercancel', end);
         this.el.addEventListener('lostpointercapture', end);   // finger lost without a pointerup → still let go
+        /** Forget the finger and put the pet down (stuck, or the app went to the background). */
+        this.dropPointer = () => {
+            clearTimeout(timer);
+            if (down) { try { this.el.releasePointerCapture(down.id); } catch { /* ignore */ } }
+            down = null;
+            if (this.held) this.release();
+        };
     }
 
     /** Tap = a pat: a little hop and a reaction. Counts once a day toward closeness. */
@@ -3316,13 +3399,31 @@ function lookGridHtml(selected, current = null) {
 <div class="tw-cap">내가 올린 외형</div><div class="tw-looks">${mine}<div class="tw-look tw-look-add${selected === 'upload' ? ' tw-on' : ''}" data-look="upload"><div class="tw-look-img"><i class="fa-solid fa-plus"></i></div><span>새로 올리기</span></div></div>`;
 }
 
+const PIC_ACCEPT = 'image/png,image/jpeg,image/webp';
+
+/** "배경 지우기" switch + strength bar (prefix '' = upload box, 'role' = 그림 tab). */
+function bgHtml(prefix = '') {
+    return `<label class="tw-check"><input type="checkbox" data-f="${prefix}bg" checked> 배경 지우기 <span class="tw-sub">(하얀색 같은 단색 배경)</span></label>
+<div class="tw-bgrow" data-bgrow="${prefix}"><span class="tw-sub">조금</span><input type="range" min="6" max="80" step="2" value="${BG_TOL}" data-f="${prefix}bgtol"><span class="tw-sub">많이</span></div>`;
+}
+
+/** Background strength chosen in the window (0 = off). */
+function bgTolOf(prefix = '') {
+    const on = win.body.querySelector(`[data-f="${prefix}bg"]`);
+    if (on && !on.checked) return 0;
+    return Number(win.body.querySelector(`[data-f="${prefix}bgtol"]`)?.value) || BG_TOL;
+}
+
 /** The upload box (new picture → also kept in the look library). */
 function uploadHtml() {
     return `<div class="tw-upload" hidden>
-  <input type="file" accept="image/png" data-f="file">
+  <input type="file" accept="${PIC_ACCEPT}" data-f="file">
   <div class="tw-row"><div class="tw-btn" data-act="pickfile"><i class="fa-solid fa-image"></i> 그림 고르기</div><span class="tw-sub tw-filename">아직 안 골랐어요</span></div>
-  <div class="tw-row tw-prevrow" hidden><img class="tw-prev" alt=""><label class="tw-check"><input type="checkbox" data-f="crop" checked> 투명 여백 자르기</label></div>
-  <div class="tw-sub">투명 배경 PNG 한 장이면 돼요. 한 번 올리면 "내가 올린 외형"에 남아서 다음에 고르기만 하면 돼요.</div>
+  <div class="tw-row tw-prevrow" hidden><img class="tw-prev tw-checker" alt=""><div>
+    <label class="tw-check"><input type="checkbox" data-f="crop" checked> 투명 여백 자르기</label>
+    ${bgHtml('')}
+  </div></div>
+  <div class="tw-sub">그림 한 장이면 돼요. 배경이 하얀색처럼 한 가지 색이면 알아서 지워요(미리보기에서 확인). 한 번 올리면 "내가 올린 외형"에 남아서 다음에 고르기만 하면 돼요.</div>
 </div>`;
 }
 
@@ -3495,10 +3596,19 @@ function fitWin() {
     el.style.width = `${Math.round(w)}px`;
     el.style.height = `${Math.round(h)}px`;
     el.style.transform = 'none';
+    if (kb) {
+        // keyboard up: stick straight onto the visible part (no measuring mid-slide — iPhone moves things
+        // while the keyboard animates, and correcting against that made the window jump about)
+        el.style.top = `${Math.round(y)}px`;
+        el.style.left = `${Math.round(x)}px`;
+        keepFocusVisible();
+        return;
+    }
+    el.style.top = '0px';
+    el.style.left = '0px';
     const r = el.getBoundingClientRect();
     const dx = x - r.left, dy = y - r.top;
     if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) el.style.transform = `translate(${Math.round(dx)}px, ${Math.round(dy)}px)`;
-    if (kb) keepFocusVisible();
 }
 
 /** The box you are typing in stays in view (scrolls inside the window, not the page). */
@@ -3886,23 +3996,23 @@ async function onFilePicked(input) {
     if (!f.file) { row.hidden = true; return; }
     const file = f.file;
     try {
-        const out = await preparePng(file, box.querySelector('[data-f="crop"]').checked);
+        const out = await preparePng(file, box.querySelector('[data-f="crop"]').checked, bgTolOf(''));
         if (win.form !== f || f.file !== file) return;
         f.prep = out;
         box.querySelector('.tw-prev').src = out.dataUrl;
         row.hidden = false;
     } catch {
-        if (win.form === f && f.file === file) { say('그림을 읽지 못했어요. 다른 PNG를 골라 주세요.'); row.hidden = true; }
+        if (win.form === f && f.file === file) { say('그림을 읽지 못했어요. 다른 그림(PNG·JPG)을 골라 주세요.'); row.hidden = true; }
     }
 }
 
 /** Upload the chosen picture and keep it in the look library. Returns the new look. */
 async function uploadLook(name, facing, squish) {
     const f = win.form;
-    if (!f.file) throw new Error('PNG 그림을 골라 주세요.');
+    if (!f.file) throw new Error('그림을 골라 주세요.');
     if (f.file.size > 8 * 1024 * 1024) throw new Error('그림이 너무 커요 (8MB 이하).');
     say('그림 올리는 중…');
-    const img = f.prep || await preparePng(f.file, win.body.querySelector('[data-f="crop"]').checked);
+    const img = f.prep || await preparePng(f.file, win.body.querySelector('[data-f="crop"]').checked, bgTolOf(''));
     const id = 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const path = await uploadFile(`tavvy_look_${id}.png`, img.base64);
     return { id, name, kind: 'single', facing, squish, roles: { idle: [path] }, roleOpts: {}, baseline: 0, createdAt: Date.now() };
@@ -4080,6 +4190,8 @@ function onWinClick(e) {
     if (act === 'adddate') return addDateRow();
     if (act === 'rolesback') { win.roleEdit = null; return drawRoles(); }
     if (act === 'addframe') return win.body.querySelector('[data-f="rolefile"]')?.click();
+    if (act === 'pendok') return confirmRolePend();
+    if (act === 'pendno') { win.rolePend = null; return drawRolePend(); }
     const dd = t.closest('[data-deldate]');
     if (dd) return dd.closest('.tw-date')?.remove();
     const df = t.closest('[data-delframe]');
@@ -4109,7 +4221,9 @@ function onWinInput(e) {
     if (f === 'file' && e.type === 'change') return onFilePicked(t);
     if (f === 'rolefile' && e.type === 'change') return addRoleFrames(t);
     if (t.dataset?.ro && e.type === 'change') return setRoleOpt(t.dataset.ro, t.value);
-    if (f === 'crop' && e.type === 'change' && win.form?.file) return onFilePicked(win.body.querySelector('[data-f="file"]'));
+    if ((f === 'crop' || f === 'bg' || f === 'bgtol') && e.type === 'change' && win.form?.file) { showBgRow(''); return onFilePicked(win.body.querySelector('[data-f="file"]')); }
+    if (f === 'bg' && e.type === 'change') return showBgRow('');
+    if ((f === 'rolebg' || f === 'rolebgtol' || f === 'rolecrop') && e.type === 'change') { showBgRow('role'); return redoRolePreview(); }
     const s = t.dataset?.s;
     if (s && e.type === 'change') {
         if (s === 'stageMode') return setSetting(s, t.value === 'floor' ? 'floor' : 'chat');
@@ -4187,9 +4301,15 @@ function roleEditHtml(p, key) {
 </div>
 <div class="tw-cap">그림 ${list.length}/${FRAMES_MAX} <span class="tw-sub">· 여러 장이면 차례로 넘어가요</span></div>
 <div class="tw-frames">${frames}${add}</div>
-<input type="file" accept="image/png" multiple data-f="rolefile">
+<div class="tw-rolepend" hidden>
+  <div class="tw-cap">미리보기 <span class="tw-sub">· 이대로 넣을까요?</span></div>
+  <div class="tw-frames tw-pendframes"></div>
+  <div class="tw-row"><div class="tw-btn" data-act="pendok"><i class="fa-solid fa-check"></i> 넣기</div><div class="tw-btn" data-act="pendno">취소</div></div>
+</div>
+<input type="file" accept="${PIC_ACCEPT}" multiple data-f="rolefile">
 <label class="tw-check"><input type="checkbox" data-f="rolecrop" checked> 투명 여백 자르기</label>
-<div class="tw-sub">여러 장을 한 번에 고르면 이름 순서대로 들어가고, 같은 크기면 같은 자리로 잘라서 움직임이 흔들리지 않아요.</div>
+${bgHtml('role')}
+<div class="tw-sub">여러 장을 한 번에 고르면 이름 순서대로 들어가고, 같은 크기면 같은 자리로 잘라서 움직임이 흔들리지 않아요. 배경 지우기를 켜 두면 넣기 전에 미리보기를 보여 줘요.</div>
 ${speed}
 <label class="tw-label">이 그림이 보는 쪽
   <select data-ro="facing">
@@ -4214,6 +4334,7 @@ function drawRoles() {
     if (!p || !pane) return;
     stopPreview();
     const keep = win.body.scrollTop;
+    win.rolePend = null;                                           // an unconfirmed preview never survives a redraw
     pane.innerHTML = win.roleEdit && ROLE_DEFS[win.roleEdit] ? roleEditHtml(p, win.roleEdit) : rolesHtml(p);
     win.body.scrollTop = keep;
     if (!win.roleEdit) return;
@@ -4275,26 +4396,86 @@ async function addRoleFrames(input) {
     const space = FRAMES_MAX - (p.look.roles[key]?.length || 0);
     const use = files.slice(0, Math.max(0, space));
     if (!use.length) return say(`한 동작에는 그림을 ${FRAMES_MAX}장까지 넣을 수 있어요.`);
+    const skipped = files.length - use.length;
+    if (bgTolOf('role') > 0) {                                       // background removal on → look first
+        win.rolePend = { pet: p, key, files: use, skipped, imgs: null };
+        return redoRolePreview();
+    }
+    const crop = win.body.querySelector('[data-f="rolecrop"]')?.checked !== false;
     busy = true;
+    try {
+        say('그림 준비 중…');
+        await putRoleFrames(p, key, await prepareFrames(use, crop, 0), skipped);
+    } catch (e) {
+        say('그림을 읽지 못했어요: ' + (e.message || e));
+    } finally {
+        busy = false;
+    }
+}
+
+/** Process the waiting pictures again with the current switches and show them. */
+async function redoRolePreview() {
+    const pend = win.rolePend;
+    if (!pend) return;
+    const crop = win.body.querySelector('[data-f="rolecrop"]')?.checked !== false;
+    say('배경 지우는 중…');
+    try {
+        const imgs = await prepareFrames(pend.files, crop, bgTolOf('role'));
+        if (win.rolePend !== pend) return;
+        pend.imgs = imgs;
+        say('');
+    } catch (e) {
+        if (win.rolePend === pend) { win.rolePend = null; say('그림을 읽지 못했어요: ' + (e.message || e)); }
+    }
+    drawRolePend();
+}
+
+function drawRolePend() {
+    const box = win.body.querySelector('.tw-rolepend');
+    if (!box) return;
+    const pend = win.rolePend;
+    box.hidden = !pend?.imgs;
+    box.querySelector('.tw-pendframes').innerHTML = pend?.imgs
+        ? pend.imgs.map((im, i) => `<div class="tw-frame"><img class="tw-checker" src="${im.dataUrl}" alt=""><span>${i + 1}</span></div>`).join('') : '';
+    if (pend?.imgs) box.scrollIntoView?.({ block: 'nearest' });
+}
+
+async function confirmRolePend() {
+    const pend = win.rolePend;
+    if (!pend?.imgs || busy) return;
+    if (curPet() !== pend.pet || win.roleEdit !== pend.key) { win.rolePend = null; return drawRolePend(); }
+    busy = true;
+    try {
+        await putRoleFrames(pend.pet, pend.key, pend.imgs, pend.skipped);
+    } finally {
+        busy = false;
+    }
+}
+
+/** Upload ready pictures into one action's slot. */
+async function putRoleFrames(p, key, imgs, skipped) {
     const uploaded = [];
     try {
         say('그림 올리는 중…');
-        const crop = win.body.querySelector('[data-f="rolecrop"]')?.checked !== false;
-        const imgs = await prepareFrames(use, crop);
         for (const im of imgs) {
             const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
             uploaded.push(await uploadFile(`tavvy_role_${id}.png`, im.base64));
         }
         if (curPet() !== p || win.roleEdit !== key) throw new Error('창이 바뀌었어요');
         const ok = await changeRoles(p, (look) => { look.roles[key] = [...(look.roles[key] || []), ...uploaded]; });
-        say((ok ? `${uploaded.length}장 넣었어요.` : '넣었지만 저장이 늦어지고 있어요.') + (files.length > use.length ? ` (${FRAMES_MAX}장이 넘어서 ${files.length - use.length}장은 뺐어요)` : ''));
+        say((ok ? `${uploaded.length}장 넣었어요.` : '넣었지만 저장이 늦어지고 있어요.') + (skipped ? ` (${FRAMES_MAX}장이 넘어서 ${skipped}장은 뺐어요)` : ''));
     } catch (e) {
         console.error('[Tavvy] role pictures failed', e);
         for (const f of uploaded) if (!fileInUse(f)) deleteFile(f);
         say('그림을 넣지 못했어요: ' + (e.message || e));
-    } finally {
-        busy = false;
     }
+}
+
+/** Show the strength bar only while "배경 지우기" is on. */
+function showBgRow(prefix) {
+    const row = win.body.querySelector(`[data-bgrow="${prefix}"]`);
+    const on = win.body.querySelector(`[data-f="${prefix}bg"]`);
+    if (row && on) row.hidden = !on.checked;
 }
 
 async function delRoleFrame(i) {
@@ -4627,8 +4808,12 @@ function onReady() {
     document.addEventListener('focusin', () => setTimeout(measure, 350));
     document.addEventListener('focusout', () => setTimeout(measure, 350));
     // coming back from another app (iPhone may shift or resize the page while we were away)
+    // leaving the app mid-hold: the finger's "let go" never arrives → put held pets down
+    const dropAll = () => { for (const a of actors) a.dropPointer?.(); };
+    window.addEventListener('pagehide', dropAll);
+    window.addEventListener('blur', dropAll);
     const onReturn = () => {
-        if (document.hidden) return;
+        if (document.hidden) return dropAll();
         measure(); recheckRoom();
         setTimeout(() => { measure(); recheckRoom(); }, 300);
         setTimeout(() => { measure(); recheckRoom(); }, 1200);
