@@ -3566,6 +3566,7 @@ function ensureWin() {
     window.visualViewport?.addEventListener('scroll', refit);
     el.addEventListener('focusin', refitSoon);
     el.addEventListener('focusout', refitSoon);
+    hookTyper(el);
     el.addEventListener('toggle', (e) => {                          // folded groups in the 그림 tab stay as you left them
         const g = e.target?.dataset?.group;
         if (g) { if (e.target.open) win.rolesOpen.add(g); else win.rolesOpen.delete(g); }
@@ -3585,6 +3586,7 @@ function ensureWin() {
  * taller than the screen (the same thing the pets' layer corrects for), which pushed the X off screen.
  */
 function fitWin() {
+    if (typer?.open) return;                                        // phone typing box is up → the window stays put
     const el = win.el, vv = window.visualViewport;
     const w = vv ? vv.width : window.innerWidth;
     const h = vv ? vv.height : window.innerHeight;
@@ -3609,6 +3611,113 @@ function fitWin() {
     const r = el.getBoundingClientRect();
     const dx = x - r.left, dy = y - r.top;
     if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) el.style.transform = `translate(${Math.round(dx)}px, ${Math.round(dy)}px)`;
+}
+
+/* ---------- phone typing box ----------
+ * On phones, tapping a text box in the window doesn't type in place: a small box opens at the very top of
+ * the screen instead, and what you write goes back into the window's box when you finish. The keyboard
+ * then never has to share the screen with the big window (iPhone kept cutting it in half). */
+const isTouchUi = () => window.matchMedia?.('(pointer: coarse)').matches;
+const TYPED = 'input:not([type="checkbox"]):not([type="range"]):not([type="file"]), textarea';
+let typer = null;   // { el, field, target, open }
+
+function typerLabel(f) {
+    const lab = f.closest('label');
+    const t = lab ? [...lab.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' ').trim() : '';
+    return t || f.placeholder || '적기';
+}
+
+function ensureTyper() {
+    if (typer) return typer;
+    const el = document.createElement('div');
+    el.className = 'tavvy-typer';
+    el.hidden = true;
+    el.innerHTML = `<div class="tavvy-typer-box"><div class="tavvy-typer-head"><span></span><div class="tw-btn" data-typer="done">완료</div></div><div class="tavvy-typer-slot"></div></div>`;
+    document.body.appendChild(el);
+    typer = { el, field: null, target: null, open: false };
+    // tap "완료" without the field losing focus first
+    el.querySelector('[data-typer="done"]').addEventListener('pointerdown', (e) => { e.preventDefault(); closeTyper(true); });
+    const place = () => {
+        if (!typer.open) return;
+        const vv = window.visualViewport;
+        el.style.top = `${Math.round(vv ? vv.offsetTop : 0)}px`;
+        el.style.left = `${Math.round(vv ? vv.offsetLeft : 0)}px`;
+        el.style.width = `${Math.round(vv ? vv.width : window.innerWidth)}px`;
+    };
+    typer.place = place;
+    window.visualViewport?.addEventListener('resize', place);
+    window.visualViewport?.addEventListener('scroll', place);
+    return typer;
+}
+
+/** Copy what's typed back into the window's box, as if it was typed there. */
+function typerPush() {
+    const t = typer;
+    if (!t?.target || !t.field) return;
+    if (t.target.value === t.field.value) return;
+    t.target.value = t.field.value;
+    t.target.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function openTyper(target) {
+    const t = ensureTyper();
+    if (t.open) closeTyper(true);
+    const multi = target.tagName === 'TEXTAREA';
+    const f = document.createElement(multi ? 'textarea' : 'input');
+    for (const a of ['type', 'inputmode', 'maxlength', 'min', 'max', 'step', 'placeholder', 'enterkeyhint']) {
+        const v = target.getAttribute(a);
+        if (v != null) f.setAttribute(a, v);
+    }
+    if (!multi) f.setAttribute('enterkeyhint', 'done');
+    if (multi) f.rows = 4;
+    f.value = target.value;
+    f.addEventListener('input', typerPush);
+    f.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !multi) { e.preventDefault(); closeTyper(true); } });
+    f.addEventListener('blur', () => setTimeout(() => { if (t.field === f) closeTyper(true); }, 0));   // keyboard closed
+    t.el.querySelector('.tavvy-typer-slot').replaceChildren(f);
+    t.el.querySelector('.tavvy-typer-head span').textContent = typerLabel(target);
+    t.el.dataset.theme = win?.box?.dataset?.theme || 'theme';
+    t.field = f; t.target = target; t.open = true;
+    t.el.hidden = false;
+    t.place();
+    target.classList.add('tw-typing');
+    // the keyboard's ˄ ˅ keys must not hop into the big window's boxes
+    for (const x of win?.body?.querySelectorAll(TYPED) || []) if (!x.readOnly) { x.readOnly = true; x.dataset.typerLock = '1'; }
+    f.focus();                                                      // same tap → iPhone opens the keyboard
+    try { const n = f.value.length; f.setSelectionRange(n, n); } catch { /* number boxes */ }
+}
+
+function closeTyper(keep = true) {
+    const t = typer;
+    if (!t?.open) return;
+    if (keep) {
+        typerPush();
+        t.target?.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    t.target?.classList.remove('tw-typing');
+    for (const x of document.querySelectorAll('[data-typer-lock]')) { x.readOnly = false; delete x.dataset.typerLock; }
+    t.open = false;
+    const f = t.field;
+    t.field = null; t.target = null;
+    t.el.hidden = true;
+    f?.blur();
+    if (win?.open) refitSoon();
+}
+
+/** Phones: the window's text boxes open the typing box instead of the keyboard in place. */
+function hookTyper(el) {
+    el.addEventListener('pointerdown', (e) => {
+        const f = e.target.closest?.(TYPED);
+        if (!f || !isTouchUi() || f.disabled) return;
+        if (!f.readOnly) { f.readOnly = true; f.dataset.typerLock = '1'; }   // no keyboard here…
+    }, true);
+    el.addEventListener('click', (e) => {
+        const f = e.target.closest?.(TYPED);
+        if (!f || !f.dataset.typerLock || !isTouchUi() || f.disabled) return;
+        e.preventDefault();
+        f.blur();
+        openTyper(f);                                               // …but up top
+    }, true);
 }
 
 /** The box you are typing in stays in view (scrolls inside the window, not the page). */
@@ -3690,6 +3799,7 @@ async function leave(fn) {
 
 function closeWin() {
     if (!win?.open) return;
+    closeTyper(true);
     leave(() => { win.el.hidden = true; win.open = false; win.form = null; win.talkBase = null; stopPreview(); });
 }
 
@@ -4375,13 +4485,15 @@ async function changeRoles(p, fn) {
         x.look.roles = structuredClone(p.look.roles); x.look.roleOpts = structuredClone(p.look.roleOpts); x.look.kind = p.look.kind;
     }
     if (L) { L.roles = structuredClone(p.look.roles); L.roleOpts = structuredClone(p.look.roleOpts); L.kind = p.look.kind; }
-    const ok = await saveNow();
-    if (!ok) saveSoon();
-    if (ok) for (const f of before) { if (!fileInUse(f)) deleteFile(f); }
+    // the screen changes right away; saving to SillyTavern (a trip to the server) carries on behind it
     for (const a of actors) if (wearers.includes(a.rec)) a.reloadLook();
     renderPanel();
     drawRoles();
-    return ok;
+    saveNow().then((ok) => {
+        if (!ok) { saveSoon(); return; }
+        for (const f of before) { if (!fileInUse(f)) deleteFile(f); }
+    });
+    return true;
 }
 
 async function addRoleFrames(input) {
@@ -4456,11 +4568,14 @@ async function confirmRolePend() {
 async function putRoleFrames(p, key, imgs, skipped) {
     const uploaded = [];
     try {
-        say('그림 올리는 중…');
-        for (const im of imgs) {
-            const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-            uploaded.push(await uploadFile(`tavvy_role_${id}.png`, im.base64));
-        }
+        say(imgs.length > 1 ? `그림 ${imgs.length}장 올리는 중…` : '그림 올리는 중…');
+        const res = await Promise.allSettled(imgs.map((im) => {
+            const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+            return uploadFile(`tavvy_role_${id}.png`, im.base64);
+        }));
+        for (const r of res) if (r.status === 'fulfilled') uploaded.push(r.value);
+        const bad = res.find(r => r.status === 'rejected');
+        if (bad) throw bad.reason;
         if (curPet() !== p || win.roleEdit !== key) throw new Error('창이 바뀌었어요');
         const ok = await changeRoles(p, (look) => { look.roles[key] = [...(look.roles[key] || []), ...uploaded]; });
         say((ok ? `${uploaded.length}장 넣었어요.` : '넣었지만 저장이 늦어지고 있어요.') + (skipped ? ` (${FRAMES_MAX}장이 넘어서 ${skipped}장은 뺐어요)` : ''));

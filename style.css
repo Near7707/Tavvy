@@ -945,3 +945,48 @@
 .tavvy-win .tw-prevrow { align-items: flex-start; }
 .tavvy-win .tw-prev.tw-checker { width: 72px; height: 72px; }
 .tavvy-win .tw-rolepend { margin: 4px 0 10px; padding: 8px; border-radius: 12px; background: var(--tw-card); }
+
+/* ---------- 0.7.2 ---------- */
+/* iPhone paints its own white over a box you're typing in → cover it from the inside with the field colour */
+.tavvy-win input:not([type="checkbox"]):not([type="range"]):not([type="file"]),
+.tavvy-win textarea,
+.tavvy-win select:focus,
+.tavvy-typer input, .tavvy-typer textarea {
+    box-shadow: inset 0 0 0 100px var(--tw-field) !important;
+    -webkit-text-fill-color: var(--tw-fg) !important;
+    color: var(--tw-fg) !important;
+    caret-color: var(--tw-accent);
+}
+.tavvy-win input:-webkit-autofill, .tavvy-win textarea:-webkit-autofill {
+    box-shadow: inset 0 0 0 100px var(--tw-field) !important;
+    -webkit-text-fill-color: var(--tw-fg) !important;
+}
+/* the box being typed in (up top) is marked in the window */
+.tavvy-win .tw-typing { outline: 2px solid var(--tw-accent); outline-offset: 1px; }
+
+/* phone typing box: a small strip at the very top of the screen */
+.tavvy-typer {
+    position: fixed; top: 0; left: 0; width: 100vw; z-index: 10030;
+    padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 6px; box-sizing: border-box;
+    --tw-bg: var(--SmartThemeBlurTintColor, #fff); --tw-fg: var(--SmartThemeBodyColor, #222); --tw-sub: color-mix(in srgb, var(--tw-fg) 60%, transparent);
+    --tw-line: var(--SmartThemeBorderColor, #ccc); --tw-field: color-mix(in srgb, var(--tw-fg) 6%, var(--tw-bg)); --tw-accent: #d4537e;
+}
+.tavvy-typer[hidden] { display: none; }
+.tavvy-typer[data-theme="cream"] { --tw-bg: #fbf6ee; --tw-fg: #4b1528; --tw-sub: #993556; --tw-line: #f4c0d1; --tw-field: #fff; --tw-accent: #d4537e; }
+.tavvy-typer[data-theme="white"] { --tw-bg: #fff; --tw-fg: #2c2c2a; --tw-sub: #888780; --tw-line: #eceae5; --tw-field: #fff; --tw-accent: #d4537e; }
+.tavvy-typer[data-theme="night"] { --tw-bg: #22232e; --tw-fg: #e9e8f2; --tw-sub: #a9a8bd; --tw-line: #444760; --tw-field: #33354a; --tw-accent: #f0a6c0; }
+.tavvy-typer-box {
+    background: var(--tw-bg); color: var(--tw-fg); border: 1px solid var(--tw-line); border-radius: 14px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .35); padding: 8px 10px 10px;
+    backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px)); -webkit-backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px));
+}
+.tavvy-typer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 13px; color: var(--tw-sub); }
+.tavvy-typer-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tavvy-typer .tw-btn {
+    flex: none; padding: 6px 14px; border-radius: 10px; background: var(--tw-accent); color: #fff; font-size: 14px; cursor: pointer; user-select: none;
+}
+.tavvy-typer[data-theme="night"] .tw-btn { color: #2a1b23; }
+.tavvy-typer input, .tavvy-typer textarea {
+    width: 100%; box-sizing: border-box; margin: 0; padding: 8px 10px; border-radius: 10px;
+    border: 1px solid var(--tw-line); background: var(--tw-field); font: inherit; font-size: 16px; resize: none;
+}
