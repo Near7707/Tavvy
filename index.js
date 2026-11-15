@@ -19,6 +19,7 @@
 //        speech lines for little moments (optionally filled in by AI), and special days.
 // 0.7.3: no more pressing against the screen; squishing only as much as 말랑 정도 says;
 //        a gentler lean, no shiver while held, the window stays whole while the keyboard goes down.
+// 0.7.4: no leaning into a pat; moving a pet to this room, copying it here, pet files and PNG cards.
 
 import { saveSettings, saveSettingsDebounced, getRequestHeaders, eventSource, event_types } from '../../../../script.js';
 
@@ -139,7 +140,6 @@ const REVISIT_LINES = {
 const UNLOCKS = [
     { key: 'peekInput', lv: 1, name: '입력창 기웃' },
     { key: 'follow',    lv: 1, name: '손 따라 보기' },
-    { key: 'lean',      lv: 1, name: '쓰다듬기에 기대기' },
     { key: 'bedWiggle', lv: 2, name: '침대 들썩' },
     { key: 'myBubble',  lv: 2, name: '내 말풍선 좋아하기' },
     { key: 'resist',    lv: 3, name: '배웅 투정' },
@@ -155,7 +155,6 @@ const FOLLOW_NEAR = 2.2;        // × pet height (at least 110px) — how close 
 const FOLLOW_CHANCE = 0.5;      // hand comes near → looks at it
 const FOLLOW_REST = [6, 12];    // s after looking before it does it again
 const FOLLOW_STEP = 0.3;        // takes a step or two toward it (심술; 애교 0.5; 새침·느긋·무심 only look)
-const LEAN_CHANCE = 0.7;        // a pat → leans into it (otherwise the little hop)
 const WIGGLE_GAP = [4, 9];      // s — the bed wiggles while food piles up
 const MY_BUBBLE = 0.65;         // climbing up by itself → picks one of your messages
 const RESIST_CHANCE = 0.6;      // put to bed → digs its feet in for a second
@@ -440,7 +439,7 @@ function checkHome(pet, r) {
     const sameN = h.chatId === r.chatId;
     if (sameI && sameN) return { here: true, changed: false };
     if (sameI && !sameN) {
-        if (r.branch) return { here: false, changed: false };    // a branch — don't follow automatically
+        if (r.branch || h.branch) return { here: false, changed: false };   // a branch (here or at home) — don't follow automatically
         h.chatId = r.chatId;                                      // the chat was renamed
         return { here: true, changed: true };
     }
@@ -453,6 +452,9 @@ function checkHome(pet, r) {
     }
     return { here: false, changed: false };
 }
+
+/** The address of the open room, to keep as a pet's home. */
+const homeOf = (r) => (r.branch ? { chatId: r.chatId, integrity: r.integrity, branch: true } : { chatId: r.chatId, integrity: r.integrity });
 
 function residents() {
     if (!room || !root) return [];
@@ -926,7 +928,6 @@ class Actor {
         this.followNext = 0;         // ms — no looking at your hand again before this
         this.followedOnce = false;   // 무심 looks at your hand only the first time
         this.fstep = false;          // will take a step or two toward your hand
-        this.leanD = 1;              // which way it leans into a pat
         this.pk = null;              // { d } — peeking at the input box
         this.big = null;             // { kind: 'gift', … } — leaning out toward you
         this.meHeart = false;        // 무심 (내편): a ♥ this time
@@ -1307,16 +1308,10 @@ class Actor {
         const close = closenessOf(this.rec) >= CLOSE;
         const soft = can(this, 'soft');
         const rapid = this.p.fussy && this.taps.length >= RAPID_TAPS;
-        // 관심: leans into the pat instead of the little hop (심술 that isn't close yet still backs off)
-        const lean = !rapid && can(this, 'lean') && this.free() && !this.air && !(k === 'simsul' && !close) && Math.random() < LEAN_CHANCE;
-        if (!lean && !this.air) { this.air = true; this.vy = 300; this.vx = 0; this.next = 'idle'; }
+        if (!this.air) { this.air = true; this.vy = 300; this.vx = 0; this.next = 'idle'; }
         if (rapid) return fx(this, '💢');   // 연타 싫어! (closeness is not lost)
         patPet(this.rec);
         this.talk('pat');
-        if (lean) {
-            this.leanD = px == null || Math.abs(px - this.x) < this.w * 0.12 ? (Math.random() < 0.5 ? -1 : 1) : px > this.x ? 1 : -1;
-            this.setState('lean');
-        }
         fx(this, k === 'simsul' && soft ? '♥' : this.p.tap);                                // 내편 심술: no 💢, just ♥
         const later = (fn) => setTimeout(() => { if (!this.gone && !this.held) fn(); }, 650);
         if (k === 'saechim' && close) later(() => fx(this, '♥', 'tavvy-fx-small'));      // 친하면 작은 ♥
@@ -1407,7 +1402,6 @@ class Actor {
         const k = this.rec.personality?.base;
         if (s === 'peekin') { this.fxT = 0; this.until = { aegyo: 1.5, neugut: 1.8, simsul: 1.7 }[k] || 1.4; }
         if (s === 'follow') { this.fxT = 0; this.fstepped = false; this.until = { saechim: 1.3, simsul: 1.6, musim: 0.9 }[k] || 3; }
-        if (s === 'lean') { this.until = k === 'neugut' ? 1.8 : 1.2; }
         if (s === 'resist') { this.fxT = 0; this.until = 1.0; this.tiltT = 0; }
         if (s === 'sleepy') { this.fxT = 0.8; }
         if (s === 'gift') { this.fxT = 0; this.tiltT = 0; }
@@ -1781,12 +1775,6 @@ class Actor {
                     }
                     break;
                 }
-                case 'lean':                           // 관심: leaning into a pat
-                    breath = 1;
-                    this.tiltT = this.leanD * 6;
-                    pose = this.rec.personality?.base === 'aegyo' ? this.role('happy', 'idle') : this.role('idle');
-                    if (this.t > this.until) this.setState('idle');
-                    break;
                 case 'resist': {                       // 단짝: doesn't want to go to bed yet (도리도리)
                     const k = this.rec.personality?.base, d = this.side ? this.dir : 1;
                     pose = k === 'simsul' ? this.rp('angry') : k === 'saechim' ? this.rp('flick') : k === 'musim' ? this.role('idle') : this.rp('fluster');
@@ -2245,7 +2233,7 @@ function bumpCheck() {
  * Food (stage 4) — counting, the bowl, sparkles, backups
  * ===================================================================== */
 
-const EATABLE = ['idle', 'walk', 'eat', 'look', 'wait', 'watch', 'perch', 'edge', 'me', 'peekin', 'follow', 'lean'];
+const EATABLE = ['idle', 'walk', 'eat', 'look', 'wait', 'watch', 'perch', 'edge', 'me', 'peekin', 'follow'];
 
 /** "2026-11-12" — the day starts at 6 a.m. */
 function dayKey(t = Date.now()) {
@@ -3709,6 +3697,8 @@ function homeHtml() {
     return `<div class="tw-sub tw-roomnote" data-live="room"></div>
 <div data-live="home"></div>
 <div class="tw-btn tw-btn-main tw-wide" data-act="new"><i class="fa-solid fa-plus"></i> 새 펫 만들기</div>
+<input type="file" accept=".json,.png,application/json,image/png" data-f="importfile" hidden>
+<div class="tw-btn tw-wide" data-act="import"><i class="fa-solid fa-file-import"></i> 불러오기 (펫 파일 · PNG 카드)</div>
 <div class="tw-msg"></div>`;
 }
 
@@ -3742,6 +3732,7 @@ function roomNote() {
 
 function petHtml(p) {
     return `<div data-live="hero"></div>
+<div data-live="move"></div>
 <div class="tw-tabs">
   <div class="tw-tab" data-tab="journal">기록</div>
   <div class="tw-tab" data-tab="acts">행동</div>
@@ -3767,6 +3758,10 @@ function petHtml(p) {
   ${facingHtml()}
   <div class="tw-btn tw-btn-main tw-wide" data-act="save">저장</div>
   <div class="tw-msg"></div>
+  <div class="tw-cap">내보내기</div>
+  <div class="tw-row"><div class="tw-btn" data-act="exportpet"><i class="fa-solid fa-file-arrow-down"></i> 펫 파일</div><span class="tw-sub">기록까지 모두 담긴 백업 파일이에요.</span></div>
+  <div class="tw-row"><div class="tw-btn" data-act="exportcard"><i class="fa-solid fa-image"></i> PNG 카드</div><span class="tw-sub">외형과 동작 그림만 담긴 그림이에요. 남에게 나눠 줄 때 써요.</span></div>
+  <div class="tw-sub">펫이 사는 방 정보는 넣지 않아요. 메신저·사진 앱을 거치면 카드 안 정보가 지워질 수 있어요. 그럴 땐 파일 그대로 보내 주세요.</div>
   <div class="tw-danger">
     <div class="tw-btn tw-btn-danger" data-act="delete"><i class="fa-solid fa-hand"></i> 작별하기</div>
     <div class="tw-sub">함께한 기록은 사라지고 되돌릴 수 없어요. 외형은 "내가 올린 외형"에 남아요.</div>
@@ -3931,6 +3926,7 @@ function refreshWin() {
         if (kind === 'home') html = homeLiveHtml();
         else if (kind === 'room') html = esc(roomNote());
         else if (kind === 'hero') html = heroHtml(p);
+        else if (kind === 'move') html = moveHtml(p);
         else if (kind === 'journal') { if (win.tab !== 'journal') return; html = journalHtml(p); }
         else if (kind === 'acts') { if (win.tab !== 'acts') return; html = actsHtml(p); }
         else if (kind === 'looks') html = looksLiveHtml();
@@ -4109,7 +4105,7 @@ async function createPet() {
             if (!look) return say('외형을 다시 골라 주세요.');
         }
         const rec = newPetRecord({ id: newId(), name: v.name, personality: v.pers, look });
-        rec.home = { chatId: room.chatId, integrity: room.integrity };
+        rec.home = homeOf(room);
         root.pets.push(rec);
         if (added) root.looks.push(added);
         const ok = await saveNow();
@@ -4165,6 +4161,410 @@ async function deleteLook(id) {
     say('외형을 지웠어요.');
 }
 
+/* ---------- moving, copying, pet files and PNG cards (7단계) ---------- */
+
+/** On a pet's page: bring a pet that lives in another room into this one, or copy it here. */
+function moveHtml(p) {
+    if (!p || !room || readOnly || checkHome(p, room).here) return '';
+    return `<div class="tw-movebox">
+  <div class="tw-sub">${p.home ? '다른 방에 사는 펫이에요.' : '집이 없는 펫이에요.'}</div>
+  <div class="tw-row"><div class="tw-btn tw-btn-main" data-act="movehere"><i class="fa-solid fa-house"></i> 이 방으로 데려오기</div>
+  <div class="tw-btn" data-act="clonehere"><i class="fa-solid fa-clone"></i> 이 방에 복제</div></div>
+  <label class="tw-check"><input type="checkbox" data-f="clonerec"> 복제할 때 기록·친밀도도 함께 복사</label>
+</div>`;
+}
+
+async function movePetHere(id) {
+    if (readOnly) return say(readOnlyReason);
+    if (busy) return;
+    const p = root.pets.find(x => x.id === id);
+    if (!p || !room) return say('먼저 데려올 채팅방을 열어 주세요.');
+    if (checkHome(p, room).here) return;
+    if (!(await confirmBox(`${josa(p.name, '을', '를')} 이 방으로 데려올까요? 원래 방에서는 사라져요. 기록과 친밀도는 그대로예요.`))) return;
+    const before = p.home;
+    p.home = homeOf(room);
+    prevVisit.set(p.id, p.lastVisit);
+    p.lastVisit = Date.now();
+    const ok = await saveNow();
+    if (!ok && readOnly) { p.home = before; renderPanel(); return say(readOnlyReason); }
+    if (!ok) saveSoon();
+    refreshBed();
+    renderPanel();
+    say(`${josa(p.name, '이', '가')} 이 방으로 왔어요! 🛏️ 버튼을 눌러 깨워 보세요.`);
+}
+
+/** The parts of a pet that make it "that pet" (look, personality, lines, special days). */
+function petCore(p) {
+    return {
+        name: p.name,
+        look: structuredClone(p.look),
+        personality: structuredClone(p.personality),
+        lines: structuredClone(p.lines || {}),
+        talkFreq: p.talkFreq,
+        dates: structuredClone(p.dates || []).map(d => ({ ...d, id: 'd' + Math.random().toString(36).slice(2, 9) })),
+        metOn: p.metOn,
+        sounds: structuredClone(p.sounds || {}),
+    };
+}
+
+async function clonePetHere(id, withRecords) {
+    if (readOnly) return say(readOnlyReason);
+    if (busy) return;
+    const p = root.pets.find(x => x.id === id);
+    if (!p || !room) return say('먼저 복제할 채팅방을 열어 주세요.');
+    const what = withRecords ? '기록·친밀도까지 똑같이' : '기록은 처음부터 새로';
+    if (!(await confirmBox(`${josa(p.name, '을', '를')} 이 방에 한 마리 더 만들까요? (${what}) 원래 펫은 그대로 있어요.`))) return;
+    let rec;
+    if (withRecords) {
+        rec = structuredClone(p);
+        rec.dates = petCore(p).dates;
+        rec.celebrated = p.celebrated?.met ? { met: p.celebrated.met } : {};
+    } else {
+        const c = petCore(p);
+        rec = newPetRecord({ id: '', name: c.name, personality: 'aegyo', look: c.look });
+        Object.assign(rec, c);
+    }
+    rec.id = newId();
+    rec.home = homeOf(room);
+    rec.bowl = { me: 0, them: 0, tokens: 0 };      // food waiting belongs to the old room
+    rec.lastVisit = Date.now();
+    root.pets.push(rec);
+    const ok = await saveNow();
+    if (!ok && readOnly) { root.pets.pop(); renderPanel(); return say(readOnlyReason); }
+    if (!ok) saveSoon();
+    refreshBed();
+    renderPanel();
+    show('pet', { id: rec.id });
+    say(`이 방에도 ${josa(rec.name, '이', '가')} 생겼어요! 🛏️ 버튼을 눌러 깨워 보세요.`);
+}
+
+/* --- files --- */
+
+const PET_FILE = 'tavvy-pet';
+const CARD_KEY = 'tavvy';
+const IMPORT_MAX = 40 * 1024 * 1024;
+const DATA_IMG = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
+
+function blobToDataUrl(blob) {
+    return new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => no(r.error); r.readAsDataURL(blob); });
+}
+
+async function fileToDataUrl(path) {
+    const res = await fetch(imgUrl(path), { cache: 'no-store' });
+    if (!res.ok) throw new Error('그림을 읽지 못했어요 (' + res.status + ')');
+    return blobToDataUrl(await res.blob());
+}
+
+/** Picture lists with every picture packed in: { roles: { idle: [0, 1] }, files: [dataUrl…] }. builtin pictures stay as they are unless `packBuiltin`. */
+async function packRoles(roles, packBuiltin) {
+    const files = [], index = new Map(), out = {};
+    for (const [k, list] of Object.entries(roles || {})) {
+        if (!Array.isArray(list)) continue;
+        out[k] = [];
+        for (const path of list) {
+            if (typeof path !== 'string' || !path) continue;
+            if (path.startsWith('builtin:') && !packBuiltin) { out[k].push(path); continue; }
+            if (!index.has(path)) { index.set(path, files.length); files.push(await fileToDataUrl(path)); }
+            out[k].push(index.get(path));
+        }
+    }
+    return { roles: out, files };
+}
+
+function safeName(name) {
+    return String(name || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim().slice(0, 20) || 'pet';
+}
+
+function download(name, blob) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+}
+
+const lookShape = (l) => ({ kind: l.kind, facing: l.facing, roleOpts: structuredClone(l.roleOpts || {}), baseline: l.baseline || 0, size: structuredClone(l.size || DEFAULT_SIZE), squish: l.squish ?? 0.5 });
+
+async function exportPetFile(id) {
+    const p = root?.pets.find(x => x.id === id);
+    if (!p || busy) return;
+    busy = true;
+    try {
+        say('펫 파일 만드는 중…');
+        const { roles, files } = await packRoles(p.look?.roles, false);
+        const pet = structuredClone(p);
+        delete pet.home;                      // which room it lives in stays here (room names can hold names and dates)
+        delete pet.bowl;                      // food waiting belongs to that room
+        delete pet.sounds;
+        pet.look = { ...lookShape(p.look || {}), roles };
+        const data = { [PET_FILE]: 1, formatVersion: FORMAT_VERSION, pet, files };
+        download(`tavvy_${safeName(p.name)}.json`, new Blob([JSON.stringify(data)], { type: 'application/json' }));
+        say('펫 파일을 내려받았어요.');
+    } catch (e) {
+        console.error('[Tavvy] export failed', e);
+        say('펫 파일을 만들지 못했어요: ' + (e.message || e));
+    } finally {
+        busy = false;
+    }
+}
+
+/* PNG chunks: the card is the pet's picture with a tEXt chunk "tavvy" (base64 JSON) before IEND. */
+let crcTable = null;
+function crc32(bytes) {
+    if (!crcTable) {
+        crcTable = new Uint32Array(256);
+        for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; crcTable[n] = c >>> 0; }
+    }
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) c = crcTable[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+const PNG_SIG = [137, 80, 78, 71, 13, 10, 26, 10];
+const isPng = (b) => b.length > 8 && PNG_SIG.every((v, i) => b[i] === v);
+
+function pngChunks(b) {
+    const out = [];
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    let o = 8;
+    while (o + 12 <= b.length) {
+        const len = dv.getUint32(o);
+        const type = String.fromCharCode(b[o + 4], b[o + 5], b[o + 6], b[o + 7]);
+        if (o + 12 + len > b.length) break;
+        out.push({ type, start: o, data: b.subarray(o + 8, o + 8 + len) });
+        o += 12 + len;
+        if (type === 'IEND') break;
+    }
+    return out;
+}
+
+function addTextChunk(png, key, text) {
+    const body = new Uint8Array(key.length + 1 + text.length);
+    for (let i = 0; i < key.length; i++) body[i] = key.charCodeAt(i);
+    for (let i = 0; i < text.length; i++) body[key.length + 1 + i] = text.charCodeAt(i);   // base64 → plain ASCII
+    const typed = new Uint8Array(4 + body.length);
+    typed.set([116, 69, 88, 116]);           // "tEXt"
+    typed.set(body, 4);
+    const chunk = new Uint8Array(12 + body.length);
+    const dv = new DataView(chunk.buffer);
+    dv.setUint32(0, body.length);
+    chunk.set(typed, 4);
+    dv.setUint32(8 + body.length, crc32(typed));
+    const iend = pngChunks(png).find(c => c.type === 'IEND');
+    if (!iend) throw new Error('PNG 모양이 이상해요');
+    const out = new Uint8Array(png.length + chunk.length);
+    out.set(png.subarray(0, iend.start));
+    out.set(chunk, iend.start);
+    out.set(png.subarray(iend.start), iend.start + chunk.length);
+    return out;
+}
+
+function readTextChunk(png, key) {
+    for (const c of pngChunks(png)) {
+        if (c.type !== 'tEXt') continue;
+        const z = c.data.indexOf(0);
+        if (z < 0 || String.fromCharCode(...c.data.subarray(0, z)) !== key) continue;
+        let s = '';
+        for (let i = z + 1; i < c.data.length; i += 8192) s += String.fromCharCode(...c.data.subarray(i, Math.min(c.data.length, i + 8192)));
+        return s;
+    }
+    return null;
+}
+
+const utf8ToB64 = (str) => { const b = new TextEncoder().encode(str); let s = ''; for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode(...b.subarray(i, i + 8192)); return btoa(s); };
+const b64ToUtf8 = (b64) => { const s = atob(b64); const b = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i); return new TextDecoder().decode(b); };
+
+const CARD_MAX = 512;   // px — the card picture's longer side
+
+async function exportPetCard(id) {
+    const p = root?.pets.find(x => x.id === id);
+    if (!p || busy) return;
+    busy = true;
+    try {
+        say('PNG 카드 만드는 중…');
+        const { roles, files } = await packRoles(p.look?.roles, true);
+        const look = { ...lookShape(p.look || {}), roles };
+        delete look.size;                     // size is the person's own screen choice
+        const text = utf8ToB64(JSON.stringify({ [CARD_KEY]: 1, formatVersion: FORMAT_VERSION, look, files }));
+        // the card picture: the pet's own main picture
+        const img = await loadImage(files[roles.idle?.[0] ?? 0] || imgUrl(p.look?.roles?.idle?.[0]));
+        const k = Math.min(1, CARD_MAX / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+        const cv = document.createElement('canvas');
+        cv.width = Math.max(1, Math.round((img.naturalWidth || 1) * k));
+        cv.height = Math.max(1, Math.round((img.naturalHeight || 1) * k));
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        const blob = await new Promise((ok) => cv.toBlob(ok, 'image/png'));
+        if (!blob) throw new Error('그림을 만들지 못했어요');
+        const png = addTextChunk(new Uint8Array(await blob.arrayBuffer()), CARD_KEY, text);
+        download(`tavvy_${safeName(p.name)}_card.png`, new Blob([png], { type: 'image/png' }));
+        say('PNG 카드를 내려받았어요.');
+    } catch (e) {
+        console.error('[Tavvy] card failed', e);
+        say('PNG 카드를 만들지 못했어요: ' + (e.message || e));
+    } finally {
+        busy = false;
+    }
+}
+
+/* --- reading a file back in --- */
+
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const num = (v, d = 0) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : d);
+
+/** Upload packed pictures and rebuild the picture lists. Returns { roles, uploaded } — or throws. */
+async function unpackRoles(roles, files, tag) {
+    if (!isObj(roles) || !Array.isArray(files)) throw new Error('그림 정보가 없어요');
+    const uploaded = [], paths = new Map(), out = {};
+    try {
+        for (const [k, list] of Object.entries(roles)) {
+            if (!/^[a-zA-Z0-9_]{1,30}$/.test(k) || !Array.isArray(list)) continue;
+            const got = [];
+            for (const it of list.slice(0, FRAMES_MAX)) {
+                if (typeof it === 'string') {
+                    const m = /^builtin:([a-z]+)\/([a-z0-9_]+\.png)$/.exec(it);
+                    if (m && BUILTIN[m[1]]) got.push(it);
+                    continue;
+                }
+                if (!Number.isInteger(it) || typeof files[it] !== 'string' || !DATA_IMG.test(files[it])) continue;
+                if (!paths.has(it)) {
+                    const [, ext] = /^data:image\/(\w+);/.exec(files[it]);
+                    const path = await uploadFile(`tavvy_${tag}_${uploaded.length}.${ext === 'jpeg' ? 'jpg' : ext}`, files[it].split(',')[1]);
+                    uploaded.push(path);
+                    paths.set(it, path);
+                }
+                got.push(paths.get(it));
+            }
+            if (got.length) out[k] = got;
+        }
+    } catch (e) {
+        uploaded.forEach(deleteFile);
+        throw e;
+    }
+    if (!out.idle?.length) { uploaded.forEach(deleteFile); throw new Error('기본 그림이 없어요'); }
+    return { roles: out, uploaded };
+}
+
+function cleanLook(l, roles) {
+    const roleOpts = {};
+    if (isObj(l.roleOpts)) for (const [k, v] of Object.entries(l.roleOpts)) if (roles[k] && isObj(v)) roleOpts[k] = structuredClone(v);
+    return {
+        kind: Object.values(roles).some(x => x.length > 1) ? 'frames' : 'single',
+        facing: ['front', 'left', 'right'].includes(l.facing) ? l.facing : 'front',
+        roles, roleOpts,
+        baseline: num(l.baseline),
+        size: { ...DEFAULT_SIZE },
+        squish: Math.min(1, num(l.squish, 0.5)),
+    };
+}
+
+const strList = (v, max) => (Array.isArray(v) ? v.filter(x => typeof x === 'string').map(x => x.slice(0, LINE_MAX)).slice(0, max) : []);
+
+/** A pet from a pet file, checked field by field. */
+function cleanPet(src, look) {
+    const rec = newPetRecord({ id: newId(), name: String(src.name || '').trim().slice(0, 20) || '펫', personality: PERSONALITIES[src.personality?.base] ? src.personality.base : 'aegyo', look });
+    if (Array.isArray(src.personality?.traits)) rec.personality.traits = src.personality.traits.filter(x => typeof x === 'string').slice(0, 10);
+    if (isObj(src.lines)) for (const [k, v] of Object.entries(src.lines)) if (/^[a-zA-Z]{1,20}$/.test(k)) { const l = strList(v, 30); if (l.length) rec.lines[k] = l; }
+    if (TALK_FREQ[src.talkFreq]) rec.talkFreq = src.talkFreq;
+    if (Array.isArray(src.dates)) {
+        rec.dates = src.dates.filter(d => isObj(d) && /^\d\d-\d\d$/.test(d.md)).slice(0, 30)
+            .map(d => ({ id: 'd' + Math.random().toString(36).slice(2, 9), kind: String(d.kind || 'other').slice(0, 20), md: d.md, msg: String(d.msg || '').slice(0, LINE_MAX) }));
+    }
+    if (typeof src.metOn === 'boolean') rec.metOn = src.metOn;
+    if (num(src.createdAt) > 0 && src.createdAt <= Date.now()) rec.createdAt = src.createdAt;
+    for (const k of ['me', 'them', 'tokens']) rec.eaten[k] = num(src.eaten?.[k]);
+    rec.pats.score = num(src.pats?.score);
+    if (typeof src.pats?.lastDay === 'string') rec.pats.lastDay = src.pats.lastDay;
+    if (isObj(src.today) && typeof src.today.day === 'string') rec.today = { day: src.today.day, eaten: num(src.today.eaten), full: !!src.today.full };
+    if (isObj(src.celebrated)) for (const [k, v] of Object.entries(src.celebrated)) if (typeof v === 'string' && k === 'met') rec.celebrated.met = v;
+    const j = src.journal;
+    if (isObj(j)) {
+        rec.journal.talkDays = num(j.talkDays);
+        if (typeof j.lastTalkDay === 'string') rec.journal.lastTalkDay = j.lastTalkDay;
+        if (Array.isArray(j.moments)) rec.journal.moments = j.moments.filter(isObj).slice(0, 200).map(m => structuredClone(m));
+    }
+    for (const k of Object.keys(src)) if (rec[k] === undefined && k !== 'home' && k !== 'bowl') { try { rec[k] = structuredClone(src[k]); } catch { /* skip */ } }   // things from a newer Tavvy stay
+    return rec;
+}
+
+async function importPicked(input) {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    if (readOnly) return say(readOnlyReason);
+    if (busy) return;
+    if (file.size > IMPORT_MAX) return say('파일이 너무 커요 (40MB 이하).');
+    busy = true;
+    try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (isPng(bytes)) {
+            const text = readTextChunk(bytes, CARD_KEY);
+            if (!text) return say('이 그림에는 Tavvy 카드 정보가 없어요. 메신저 등을 거치며 지워졌을 수 있어요. 그냥 그림으로 쓰려면 "새 펫 만들기"에서 올려 주세요.');
+            let data;
+            try { data = JSON.parse(b64ToUtf8(text)); } catch { return say('카드 정보를 읽지 못했어요.'); }
+            return await importCard(data);
+        }
+        let data;
+        try { data = JSON.parse(new TextDecoder().decode(bytes)); } catch { return say('Tavvy 펫 파일이 아니에요.'); }
+        return await importPetFile(data);
+    } catch (e) {
+        console.error('[Tavvy] import failed', e);
+        say('불러오지 못했어요: ' + (e.message || e));
+    } finally {
+        busy = false;
+    }
+}
+
+async function importPetFile(data) {
+    if (!isObj(data) || data[PET_FILE] !== 1 || !isObj(data.pet) || !isObj(data.pet.look)) return say('Tavvy 펫 파일이 아니에요.');
+    if (typeof data.formatVersion !== 'number' || data.formatVersion > FORMAT_VERSION) return say('더 새로운 버전의 Tavvy가 만든 파일이에요. 확장을 업데이트해 주세요.');
+    if (!room) return say('먼저 펫이 살 채팅방을 열어 주세요.');
+    say('불러오는 중…');
+    const id = newId();
+    const { roles, uploaded } = await unpackRoles(data.pet.look.roles, data.files, 'pet_' + id);
+    const rec = cleanPet(data.pet, cleanLook(data.pet.look, roles));
+    rec.id = id;
+    rec.home = homeOf(room);
+    let added = null;
+    if (!roles.idle[0].startsWith('builtin:')) {
+        added = { id: 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: rec.name, ...structuredClone({ kind: rec.look.kind, facing: rec.look.facing, squish: rec.look.squish, roles: rec.look.roles, roleOpts: rec.look.roleOpts, baseline: rec.look.baseline }), createdAt: Date.now() };
+        root.looks.push(added);
+    }
+    root.pets.push(rec);
+    const ok = await saveNow();
+    if (!ok && readOnly) {
+        root.pets.pop();
+        if (added) root.looks.pop();
+        uploaded.forEach(deleteFile);
+        return say(readOnlyReason);
+    }
+    if (!ok) saveSoon();
+    refreshBed();
+    renderPanel();
+    show('pet', { id: rec.id });
+    say(`${josa(rec.name, '이', '가')} 이 방에 왔어요! 🛏️ 버튼을 눌러 깨워 보세요.`);
+}
+
+/** A card only has a look: it goes into "내가 올린 외형", then a new pet can wear it. */
+async function importCard(data) {
+    if (!isObj(data) || data[CARD_KEY] !== 1 || !isObj(data.look)) return say('Tavvy 카드가 아니에요.');
+    if (typeof data.formatVersion !== 'number' || data.formatVersion > FORMAT_VERSION) return say('더 새로운 버전의 Tavvy가 만든 카드예요. 확장을 업데이트해 주세요.');
+    say('불러오는 중…');
+    const id = 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const { roles, uploaded } = await unpackRoles(data.look.roles, data.files, 'look_' + id);
+    const l = cleanLook(data.look, roles);
+    const look = { id, name: '받은 외형', kind: l.kind, facing: l.facing, squish: l.squish, roles: l.roles, roleOpts: l.roleOpts, baseline: l.baseline, createdAt: Date.now() };
+    root.looks.push(look);
+    const ok = await saveNow();
+    if (!ok && readOnly) { root.looks.pop(); uploaded.forEach(deleteFile); return say(readOnlyReason); }
+    if (!ok) saveSoon();
+    show('new');
+    pickLook('lib:' + id);
+    const nameEl = win.body.querySelector('[data-f="name"]');
+    if (nameEl) { nameEl.value = ''; win.form.autoName = ''; }
+    say('카드 외형을 "내가 올린 외형"에 넣었어요. 이름과 성격을 정하고 만들기를 눌러 주세요.');
+}
+
 function setSetting(key, value) {
     if (!root) return;
     root.settings[key] = value;
@@ -4187,6 +4587,11 @@ function onWinClick(e) {
     if (act === 'save') return saveEdit();
     if (act === 'create') return createPet();
     if (act === 'delete') return deletePet(win.id);
+    if (act === 'movehere') return movePetHere(win.id);
+    if (act === 'clonehere') return clonePetHere(win.id, !!win.body.querySelector('[data-f="clonerec"]')?.checked);
+    if (act === 'exportpet') return exportPetFile(win.id);
+    if (act === 'exportcard') return exportPetCard(win.id);
+    if (act === 'import') return win.body.querySelector('[data-f="importfile"]')?.click();
     if (act === 'pickfile') return win.body.querySelector('[data-f="file"]').click();   // SillyTavern hides file inputs
     if (act === 'bedreset') {
         root.settings.bedPos = { phone: null, pc: null };
@@ -4229,6 +4634,7 @@ function onWinInput(e) {
     const f = t.dataset?.f;
     if (f === 'squish') return showSquish();
     if (f === 'file' && e.type === 'change') return onFilePicked(t);
+    if (f === 'importfile' && e.type === 'change') return importPicked(t);
     if (f === 'rolefile' && e.type === 'change') return addRoleFrames(t);
     if (t.dataset?.ro && e.type === 'change') return setRoleOpt(t.dataset.ro, t.value);
     if ((f === 'crop' || f === 'bg' || f === 'bgtol') && e.type === 'change' && win.form?.file) { showBgRow(''); return onFilePicked(win.body.querySelector('[data-f="file"]')); }
