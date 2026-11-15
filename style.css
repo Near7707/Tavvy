@@ -341,42 +341,6 @@
     55%  { opacity: 1; transform: translate(var(--dx), var(--dy)) rotate(var(--r)) scale(1); }
     100% { opacity: 0; transform: translate(calc(var(--dx) * 1.3), calc(var(--dy) + 22px)) rotate(var(--r)) scale(.9); }
 }
-/* pressed against the screen: a shine sweeps over, breath fogs up */
-.tavvy-glass {
-    position: absolute;
-    inset: -4%;
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity .25s;
-    overflow: hidden;
-    border-radius: 18%;
-}
-.tavvy-glass.tavvy-glass-on { opacity: 1; }
-.tavvy-glass::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(115deg, transparent 38%, rgba(255, 255, 255, .55) 47%, rgba(255, 255, 255, .15) 52%, transparent 60%);
-    transform: translateX(-80%);
-}
-.tavvy-glass.tavvy-glass-on::before { animation: tavvy-shine 1.1s ease-out .1s forwards; }
-@keyframes tavvy-shine { to { transform: translateX(80%); } }
-.tavvy-glass::after {
-    content: '';
-    position: absolute;
-    left: 20%;
-    right: 20%;
-    top: 52%;
-    height: 26%;
-    border-radius: 50%;
-    background: radial-gradient(ellipse at center, rgba(255, 255, 255, .6), rgba(255, 255, 255, 0) 70%);
-    opacity: 0;
-}
-.tavvy-glass.tavvy-glass-on::after { animation: tavvy-fog 2.2s ease-in-out .45s infinite; }
-@keyframes tavvy-fog {
-    0%, 100% { opacity: 0; transform: scale(.7); }
-    40% { opacity: 1; transform: scale(1); }
-}
 /* 내편 애교: a little present coming toward you */
 .tavvy-gift {
     position: absolute;

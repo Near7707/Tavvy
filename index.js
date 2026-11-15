@@ -12,11 +12,13 @@
 // Stage 6-1: a pet info window (journal + edit), and new things it learns as you grow closer —
 //          peeking at the input box, following your hand, leaning into a pat, a wiggling bed,
 //          liking your messages, not wanting to go to bed, dozing off while you're away,
-//          pressing against the screen, softer reactions, and little gifts.
+//          softer reactions, and little gifts.
 // 0.6.0: one Tavvy window (pet list, journal, behaviours, looks, settings) + saved looks.
 // 0.7.0: the window fits above the phone keyboard, "작별하기", a night-sky window colour;
 //        pictures for each action (several frames, speed, which way each one faces),
 //        speech lines for little moments (optionally filled in by AI), and special days.
+// 0.7.3: no more pressing against the screen; squishing only as much as 말랑 정도 says;
+//        a gentler lean, no shiver while held, the window stays whole while the keyboard goes down.
 
 import { saveSettings, saveSettingsDebounced, getRequestHeaders, eventSource, event_types } from '../../../../script.js';
 
@@ -142,7 +144,6 @@ const UNLOCKS = [
     { key: 'myBubble',  lv: 2, name: '내 말풍선 좋아하기' },
     { key: 'resist',    lv: 3, name: '배웅 투정' },
     { key: 'dozeWait',  lv: 3, name: '기다리다 졸기' },
-    { key: 'press',     lv: 4, name: '화면에 붙기' },
     { key: 'soft',      lv: 4, name: '마음이 풀린 반응', not: 'aegyo' },
     { key: 'gift',      lv: 4, name: '선물 주기', only: 'aegyo' },
 ];
@@ -160,13 +161,9 @@ const MY_BUBBLE = 0.65;         // climbing up by itself → picks one of your m
 const RESIST_CHANCE = 0.6;      // put to bed → digs its feet in for a second
 const IDLE_DOZE = 90;           // s with nothing from you → climbs onto your last message and nods off
 const IDLE_DOZE_CHANCE = 0.75;
-const PRESS_CHANCE = 0.15;      // reacting to you → presses against the screen
-const PRESS_SCALE = 1.5, PRESS_HOLD = 2.4;
-const PRESS_HOLD_BY = { aegyo: 1.4, saechim: 0.6, neugut: 1.5, simsul: 1, musim: 0.9 };
-const BONK_CHANCE = 0.2;        // hits the glass too hard → dizzy, cries a little
 const TEAR_COLOR = '#6fc3ff', TEAR_ANGLE = 30;   // degrees (0 = sideways)
 const GIFT_CHANCE = 0.15;       // 애교 only, when reacting to you
-const BIG_REST = 180;           // s — after growing big (screen press / present), not again for this long
+const BIG_REST = 180;           // s — after a present, not again for this long
 const bigAt = new Map();        // pet id → when it last grew big (kept across sleep / wake)
 const GIFTS = ['🌼', '🍀', '🍬', '⭐', '🎁'];
 
@@ -206,7 +203,6 @@ const ROLE_GROUPS = [
     ] },
     { key: 'special', name: '특별 순간', roles: [
         { key: 'appear', name: '등장', fb: 'jump' },
-        { key: 'press', name: '화면에 붙기', fb: 'happy' },
         { key: 'gift', name: '선물 주기', fb: 'happy' },
         { key: 'cheer', name: '축하', fb: 'dance' },
     ] },
@@ -932,8 +928,7 @@ class Actor {
         this.fstep = false;          // will take a step or two toward your hand
         this.leanD = 1;              // which way it leans into a pat
         this.pk = null;              // { d } — peeking at the input box
-        this.big = null;             // { kind: 'press' | 'gift', … } — growing toward you
-        this.glass = null;           // reflection / breath on the screen while pressed against it
+        this.big = null;             // { kind: 'gift', … } — leaning out toward you
         this.meHeart = false;        // 무심 (내편): a ♥ this time
         this.idleTried = false;      // already rolled for "dozing off while you're away" this quiet spell
         this.special = null;         // special days to celebrate when it comes out (birthday…)
@@ -1020,7 +1015,7 @@ class Actor {
 
     /** Free to react to things (not held, flying, hidden, leaving…). */
     free() {
-        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear', 'greet', 'sniff', 'eat', 'nod', 'dance', 'roll', 'resist', 'press', 'gift', 'sleepy'].includes(this.state);
+        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear', 'greet', 'sniff', 'eat', 'nod', 'dance', 'roll', 'resist', 'gift', 'sleepy'].includes(this.state);
     }
 
     /** Can a sparkle reaching it be eaten right now? (dozing → piled beside it; held / flying → waits nearby) */
@@ -1117,7 +1112,6 @@ class Actor {
         if (this.side && Math.abs(mid - this.x) > 8) this.dir = mid >= this.x ? 1 : -1;
         this.lastMe = performance.now();
         const bigOk = performance.now() - (bigAt.get(this.rec.id) ?? -Infinity) > BIG_REST * 1000;
-        if (bigOk && can(this, 'press') && Math.random() < PRESS_CHANCE) { bigAt.set(this.rec.id, performance.now()); return this.startPress(); }   // 내편: up against the screen
         if (bigOk && can(this, 'gift') && Math.random() < GIFT_CHANCE) { bigAt.set(this.rec.id, performance.now()); return this.startGift(); }     // 내편 애교: a little present
         this.meHeart = Math.random() < 0.55;
         this.setState('me');
@@ -1130,106 +1124,16 @@ class Actor {
         this.setState('idle');
     }
 
-    /* ---------- 내편: pressing against the screen / a gift ---------- */
-
-    startPress() {
-        const k = this.rec.personality?.base;
-        const bonk = Math.random() < BONK_CHANCE;
-        this.setState('press');
-        this.big = { kind: 'press', bonk, hold: bonk ? 1.7 : PRESS_HOLD * (PRESS_HOLD_BY[k] || 1), hit: false, n: 0, cryT: 0 };
-        const g = document.createElement('div');
-        g.className = 'tavvy-glass';
-        this.body.appendChild(g);
-        this.glass = g;
-    }
+    /* ---------- 내편: a gift ---------- */
 
     startGift() {
         this.setState('gift');
         this.big = { kind: 'gift', shown: false, item: GIFTS[Math.floor(Math.random() * GIFTS.length)] };
     }
 
-    /**
-     * One frame of pressing against the screen: grows toward you and a little down → bump on the
-     * glass (wide and flat) → shine + breath on the glass → slowly back to normal size.
-     * Sometimes (bonk) it hits too hard: stars, then a little cry while it shrinks back.
-     */
-    pressStep(dt, b) {
-        const k = this.rec.personality?.base, d = this.side ? this.dir : 1;
-        const GROW = 0.35, t = this.t;
-        let pose = this.role('press', 'happy', 'idle'), bob = 0;
-        if (t < GROW) {
-            const f = t / GROW, e = 1 - (1 - f) * (1 - f);
-            this.scale = 1 + (PRESS_SCALE - 1) * e;
-            bob = -6 * e * this.k;                                   // a little down
-            this.tiltT = 0;
-            return { pose: this.role('look', 'idle'), bob };
-        }
-        bob = -6 * this.k;
-        if (t < GROW + b.hold) {
-            const s = t - GROW;
-            this.scale = PRESS_SCALE;
-            this.sqT = 0.87;                                         // squashed against the glass
-            if (!b.hit) {
-                b.hit = true;
-                this.sq = b.bonk ? 0.6 : 0.78;
-                this.glass?.classList.add('tavvy-glass-on');
-                fx(this, b.bonk ? '쿵' : '톡', b.bonk ? '' : 'tavvy-fx-small');
-            }
-            if (b.bonk) {
-                if (s < 0.8) {                                       // dizzy ★
-                    this.tiltT = Math.sin(s * 9) * 8;
-                    pose = this.role('surprise', 'idle');
-                    if (b.n === 0 && s > 0.1) { b.n = 1; fx(this, '★', 'tavvy-fx-star'); }
-                    if (b.n === 1 && s > 0.45) { b.n = 2; fx(this, '★', 'tavvy-fx-star'); }
-                } else {                                             // ouch… 촥촥
-                    this.tiltT = 0;
-                    pose = this.role('cry', 'surprise', 'idle');
-                    b.cryT -= dt;
-                    if (b.cryT <= 0) { b.cryT = 0.5; tearBurst(this); }
-                }
-                return { pose, bob };
-            }
-            const every = (gap, i, fn) => { if (s > 0.15 + b.n * gap && b.n < i) { b.n++; fn(b.n); } };
-            if (k === 'aegyo') {                                     // 톡톡 ♥, the longest
-                pose = this.role('press', 'happy', 'idle');
-                this.tiltT = Math.sin(s * 3) * 3;
-                every(0.55, 99, (n) => fx(this, n % 2 ? '톡' : '♥', n % 2 ? 'tavvy-fx-small' : ''));
-            } else if (k === 'saechim') {                            // a moment… 홱 + small ♥
-                this.tiltT = s > b.hold * 0.55 ? -d * 9 : 0;
-                if (b.n === 0 && s > b.hold * 0.75) { b.n = 1; fx(this, '♥', 'tavvy-fx-small'); }
-            } else if (k === 'neugut') {                             // falls asleep stuck there
-                pose = this.role('sleep', 'idle');
-                this.tiltT = d * 4;
-                every(1.2, 99, () => fx(this, 'Z', 'tavvy-fx-z'));
-            } else if (k === 'simsul') {                             // 톡톡 쿵쿵 — then ♥, no 💢
-                this.tiltT = 0;
-                if (s < b.hold * 0.7) every(0.45, 99, (n) => fx(this, n % 2 ? '톡' : '쿵', 'tavvy-fx-small'));
-                else if (b.n < 100) { b.n = 100; fx(this, '♥'); }
-            } else {                                                 // 무심: "…" — and its first ♥
-                this.tiltT = 0;
-                if (b.n === 0 && s > 0.2) { b.n = 1; fx(this, '…'); }
-                if (b.n === 1 && s > b.hold * 0.7) { b.n = 2; fx(this, '♥'); }
-            }
-            return { pose, bob };
-        }
-        // slowly back to normal size (crying all the way after a bonk)
-        this.sqT = 1;
-        this.tiltT = 0;
-        this.glass?.classList.remove('tavvy-glass-on');
-        if (b.bonk) {
-            pose = this.role('cry', 'surprise', 'idle');
-            b.cryT -= dt;
-            if (b.cryT <= 0) { b.cryT = 0.5; tearBurst(this); }
-        }
-        this.scale += (1 - this.scale) * (1 - Math.exp(-dt * (b.bonk ? 1.8 : 3.5)));
-        if (this.scale - 1 < 0.015) { this.scale = 1; this.setState('idle'); }
-        return { pose, bob: bob * (this.scale - 1) / (PRESS_SCALE - 1) };
-    }
-
-    /** Leaving the press / gift: back to normal size, glass gone. */
+    /** Leaving the gift: back to normal size. */
     endBig() {
         this.big = null;
-        if (this.glass) { this.glass.remove(); this.glass = null; }
         if (this.scale > 1) this.scale = 1;
     }
 
@@ -1395,7 +1299,7 @@ class Actor {
 
     /** Tap = a pat: a little hop and a reaction. Counts once a day toward closeness. */
     tap(px) {
-        if (['tuck', 'wave', 'resist', 'press', 'gift'].includes(this.state) || this.held) return;
+        if (['tuck', 'wave', 'resist', 'gift'].includes(this.state) || this.held) return;
         const now = performance.now();
         this.taps = this.taps.filter(t => now - t < RAPID_WINDOW * 1000);
         this.taps.push(now);
@@ -1440,7 +1344,7 @@ class Actor {
         this.vy = 0; this.vx = 0;
         this.body.style.transformOrigin = '';
         const soft = (this.rec.look.squish ?? 0.5) * 2;
-        if (soft > 0) this.sq = 1 - Math.min(0.22, impact / 4200) * soft;
+        if (soft > 0) this.sq = 1 - Math.min(0.22, impact / 4200);
         // a big landing bounces once, lightly
         if (impact > 500) { this.air = true; this.plat = null; this.vy = impact * 0.18; return; }
         if (this.plat) this.pr = liveRect(this.plat);
@@ -1506,7 +1410,7 @@ class Actor {
         if (s === 'lean') { this.until = k === 'neugut' ? 1.8 : 1.2; }
         if (s === 'resist') { this.fxT = 0; this.until = 1.0; this.tiltT = 0; }
         if (s === 'sleepy') { this.fxT = 0.8; }
-        if (s === 'press' || s === 'gift') { this.fxT = 0; this.tiltT = 0; }
+        if (s === 'gift') { this.fxT = 0; this.tiltT = 0; }
     }
 
     /** Walk somewhere on what it stands on (floor or ledge). toEdge = walk to the very end of a ledge. */
@@ -1779,9 +1683,6 @@ class Actor {
             this.y = stage.floorY - top - this.h;
             this.ptr.vx *= Math.pow(0.08, dt);                      // pointer stopped → swing settles
             this.tiltT = clamp(-this.ptr.vx * 0.07, -HOLD_SWING_MAX, HOLD_SWING_MAX);
-            shiver = Math.sin(this.clock * 55) * 0.6;
-            this.fxT -= dt;
-            if (this.fxT <= 0) { this.fxT = rand(2.2, 4); if (Math.random() < 0.6) fx(this, '💦', 'tavvy-fx-small'); }
             pose = this.role('held', 'surprise');
         } else if (this.state === 'off') {
             if (this.t > this.until) this.fallFromTop();
@@ -1882,14 +1783,12 @@ class Actor {
                 }
                 case 'lean':                           // 관심: leaning into a pat
                     breath = 1;
-                    this.tiltT = this.leanD * 12;
-                    this.sqT = 0.95;
+                    this.tiltT = this.leanD * 6;
                     pose = this.rec.personality?.base === 'aegyo' ? this.role('happy', 'idle') : this.role('idle');
                     if (this.t > this.until) this.setState('idle');
                     break;
                 case 'resist': {                       // 단짝: doesn't want to go to bed yet (도리도리)
                     const k = this.rec.personality?.base, d = this.side ? this.dir : 1;
-                    this.sqT = 0.92;
                     pose = k === 'simsul' ? this.rp('angry') : k === 'saechim' ? this.rp('flick') : k === 'musim' ? this.role('idle') : this.rp('fluster');
                     if (k === 'saechim') this.tiltT = this.t < 0.15 ? 0 : -d * 10;              // 홱
                     else if (k === 'musim') this.tiltT = Math.sin(this.t * 10) * 4;
@@ -1904,25 +1803,17 @@ class Actor {
                 }
                 case 'sleepy':                         // 단짝: you've been away a while — nodding off on your message
                     breath = 0.6;
-                    this.sqT = 0.94;
                     pose = this.role('nod', 'sleep', 'idle');
                     this.tiltT = (this.side ? this.dir : 1) * (7 + Math.max(0, Math.sin(this.t * 2.6)) * 8);
                     this.fxT -= dt;
                     if (this.fxT <= 0) { this.fxT = 1.6; fx(this, 'Z', 'tavvy-fx-z'); }
                     break;
-                case 'press': {                        // 내편: up against the screen
-                    const b = this.big;
-                    if (!b) { this.setState('idle'); break; }
-                    const r = this.pressStep(dt, b);
-                    pose = r.pose; bob = r.bob;
-                    break;
-                }
                 case 'gift': {                         // 내편 애교: here, for you
                     const b = this.big;
                     if (!b) { this.setState('idle'); break; }
                     breath = 1;
                     if (this.t < 0.7) {                                  // 꼼지락 (getting it out)
-                        this.tiltT = Math.sin(this.t * 22) * 5; this.sqT = 0.93;
+                        this.tiltT = Math.sin(this.t * 22) * 5;
                     } else if (this.t < 2.4) {
                         if (!b.shown) { b.shown = true; showGift(this, b.item); fx(this, '♥'); }
                         pose = this.role('gift', 'happy', 'idle');
@@ -1957,7 +1848,7 @@ class Actor {
                         // foot touches down: next frame + a tiny squish
                         this.frame++;
                         const soft = (this.rec.look.squish ?? 0.5) * 2;
-                        if (soft > 0) this.sq = Math.min(this.sq, 1 - 0.05 * soft);
+                        if (soft > 0) this.sq = Math.min(this.sq, 0.95);
                     }
                     pose = this.aside ? this.rp('aside') : this.role('walk');
                     break;
@@ -1977,7 +1868,6 @@ class Actor {
                     if (this.t > 0.35) this.launch();
                     break;
                 case 'perch':                          // sitting on a message
-                    this.sqT = 0.94;
                     breath = 0.8;
                     pose = this.role('sit', 'idle');
                     if (this.t > this.until) this.decide();
@@ -2211,7 +2101,8 @@ class Actor {
     render(pose, { shiver, bob, waddle, breath }) {
         const soft = (this.rec.look.squish ?? 0.5) * 2;
         const br = breath ? 1 + Math.sin(this.clock * (breath < 1 ? 1.4 : 2.2)) * 0.022 * soft : 1;
-        const sy = this.sq * br;
+        // every squish goes through 말랑 정도 here: 0 → never squashed (no breathing either)
+        const sy = Math.max(0.55, 1 - (1 - this.sq) * soft) * br;
         const sx = 1 + (1 - sy) * 0.7;
         const left = this.x - this.w / 2 + shiver;
         const top = stage.floorY - this.y - this.h + this.basePx - bob;
@@ -3591,9 +3482,14 @@ function fitWin() {
     const w = vv ? vv.width : window.innerWidth;
     const h = vv ? vv.height : window.innerHeight;
     const x = vv ? vv.offsetLeft : 0, y = vv ? vv.offsetTop : 0;
-    win.fit = `${Math.round(w)}|${Math.round(h)}|${Math.round(x)}|${Math.round(y)}`;
     // phone keyboard up: the part you can see got much shorter → the window sits at its top and fills it
     const kb = !!vv && window.innerHeight - h > 120;
+    // typing box just closed: the keyboard is still sliding down → keep the window as it was (no half-size flash)
+    if (typerShut) {
+        if (kb && performance.now() < typerShut) return;
+        typerShut = 0;
+    }
+    win.fit = `${Math.round(w)}|${Math.round(h)}|${Math.round(x)}|${Math.round(y)}`;
     el.classList.toggle('tavvy-kb', kb);
     el.style.width = `${Math.round(w)}px`;
     el.style.height = `${Math.round(h)}px`;
@@ -3620,6 +3516,8 @@ function fitWin() {
 const isTouchUi = () => window.matchMedia?.('(pointer: coarse)').matches;
 const TYPED = 'input:not([type="checkbox"]):not([type="range"]):not([type="file"]), textarea';
 let typer = null;   // { el, field, target, open }
+let typerShut = 0;  // until when the window waits for the keyboard to go down after the typing box closed
+const TYPER_SHUT_WAIT = 1000;   // ms
 
 function typerLabel(f) {
     const lab = f.closest('label');
@@ -3700,8 +3598,10 @@ function closeTyper(keep = true) {
     const f = t.field;
     t.field = null; t.target = null;
     t.el.hidden = true;
+    typerShut = performance.now() + TYPER_SHUT_WAIT;
     f?.blur();
     if (win?.open) refitSoon();
+    setTimeout(() => { if (win?.open) fitWin(); }, TYPER_SHUT_WAIT + 50);   // in case the phone never says the keyboard is gone
 }
 
 /** Phones: the window's text boxes open the typing box instead of the keyboard in place. */
