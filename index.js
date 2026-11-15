@@ -21,6 +21,7 @@
 //        a gentler lean, no shiver while held, the window stays whole while the keyboard goes down.
 // 0.7.4: no leaning into a pat; moving a pet to this room, copying it here, pet files and PNG cards.
 // 0.7.5: cut a picture by hand when uploading; split a sheet into frames (find them, or rows × columns).
+// 0.7.6: share one sheet out to several actions; frames move both ways.
 
 import { saveSettings, saveSettingsDebounced, getRequestHeaders, eventSource, event_types } from '../../../../script.js';
 
@@ -3689,6 +3690,7 @@ function show(view, opts = {}) {
     win.form = null;
     win.talkBase = null;
     win.roleEdit = null;
+    win.sheet = null;
     stopPreview();
     closeCutter();
     const back = view !== 'home';
@@ -4143,7 +4145,7 @@ function drawCut() {
         const what = c.how === 'grid' ? '그림이 있는 칸' : '그림';
         info.textContent = c.drag ? ''
             : !n ? (c.how === 'grid' ? '그림이 있는 칸이 없어요.' : '나눌 그림을 못 찾았어요. 칸 수로 나눠 보세요.')
-            : n > c.space ? `${what} ${n}개를 찾았어요. 이 동작에는 ${c.space}장만 더 넣을 수 있어서 앞의 ${c.space}장만 넣어요.`
+            : n > c.space && c.space < Infinity ? `${what} ${n}개를 찾았어요. 이 동작에는 ${c.space}장만 더 넣을 수 있어서 앞의 ${c.space}장만 넣어요.`
             : `${what} ${n}개를 찾았어요. 왼쪽 → 오른쪽, 위 → 아래 순서로 들어가요.${c.how === 'auto' ? ' 잘못 나뉘면 칸 수로 해 보세요.' : ''}`;
     }
     el.querySelector('[data-cut="ok"]').textContent = sheet ? `나누기 (${use}장)` : '자르기';
@@ -4305,7 +4307,7 @@ function gridCells(c, b, { m, w, s }) {
             const mx0 = Math.floor(q * cw * s), mx1 = Math.ceil((q + 1) * cw * s), my0 = Math.floor(r * ch * s), my1 = Math.ceil((r + 1) * ch * s);
             let ink = 0;
             for (let y = my0; y < my1; y++) for (let x = mx0; x < mx1 && x < w; x++) ink += m[y * w + x] || 0;
-            if (ink >= Math.max(2, (mx1 - mx0) * (my1 - my0) * 0.002)) out.push({ sx, sy, sw, sh });
+            if (ink >= Math.max(2, (mx1 - mx0) * (my1 - my0) * 0.002)) out.push({ sx, sy, sw, sh, row: r });
         }
     }
     return out;
@@ -4318,13 +4320,14 @@ function gridCells(c, b, { m, w, s }) {
  */
 function autoCells(c, b, { m, w, h, s }) {
     const rowHas = (y) => { for (let x = 0; x < w; x++) if (m[y * w + x]) return true; return false; };
-    let pieces = [];
+    let pieces = [], row = -1;
     for (const [ya, yb] of inkRuns(h, rowHas)) {
+        row++;
         const colHas = (x) => { for (let y = ya; y <= yb; y++) if (m[y * w + x]) return true; return false; };
         for (const [xa, xb] of inkRuns(w, colHas)) {
             let ty0 = yb, ty1 = ya;
             for (let y = ya; y <= yb; y++) for (let x = xa; x <= xb; x++) if (m[y * w + x]) { if (y < ty0) ty0 = y; if (y > ty1) ty1 = y; }
-            pieces.push({ x: xa, y: ty0, w: xb - xa + 1, h: ty1 - ty0 + 1 });
+            pieces.push({ x: xa, y: ty0, w: xb - xa + 1, h: ty1 - ty0 + 1, row });
         }
     }
     const big = Math.max(0, ...pieces.map(p => p.w * p.h));
@@ -4332,14 +4335,14 @@ function autoCells(c, b, { m, w, h, s }) {
     const nat = pieces.map((p) => {
         const sx = clamp(Math.floor(b.sx + p.x / s), 0, c.W - 1), sy = clamp(Math.floor(b.sy + p.y / s), 0, c.H - 1);
         const ex = clamp(Math.ceil(b.sx + (p.x + p.w) / s), sx + 1, c.W), ey = clamp(Math.ceil(b.sy + (p.y + p.h) / s), sy + 1, c.H);
-        return { sx, sy, sw: ex - sx, sh: ey - sy };
+        return { sx, sy, sw: ex - sx, sh: ey - sy, row: p.row };
     });
     if (nat.length < 2) return nat;
     const Wm = Math.max(...nat.map(p => p.sw)), Hm = Math.max(...nat.map(p => p.sh));
     return nat.map((p) => ({
         sx: clamp(Math.round(p.sx + p.sw / 2 - Wm / 2), 0, c.W - Wm),
         sy: clamp(p.sy + p.sh - Hm, 0, c.H - Hm),
-        sw: Wm, sh: Hm, keep: p,
+        sw: Wm, sh: Hm, keep: p, row: p.row,
     }));
 }
 
@@ -4969,6 +4972,9 @@ function onWinClick(e) {
     if (act === 'addframe') return win.body.querySelector('[data-f="rolefile"]')?.click();
     if (act === 'pendok') return confirmRolePend();
     if (act === 'pendno') { win.rolePend = null; return drawRolePend(); }
+    if (act === 'sheetall') return win.body.querySelector('[data-f="sheetfile"]')?.click();
+    if (act === 'sheetok') return confirmSheet();
+    if (act === 'sheetno') { win.sheet = null; return drawRoles(); }
     if (act === 'cutopen') {
         const f = win.form;
         if (!f?.file) return;
@@ -5016,10 +5022,12 @@ function onWinInput(e) {
     if (f === 'file' && e.type === 'change') return onFilePicked(t);
     if (f === 'importfile' && e.type === 'change') return importPicked(t);
     if (f === 'rolefile' && e.type === 'change') return addRoleFrames(t);
+    if (f === 'sheetfile' && e.type === 'change') return sheetPicked(t);
+    if ((t.dataset?.sheetpick != null || t.dataset?.sheetrow != null) && e.type === 'change') return onSheetInput(t);
     if (t.dataset?.ro && e.type === 'change') return setRoleOpt(t.dataset.ro, t.value);
     if ((f === 'crop' || f === 'bg' || f === 'bgtol') && e.type === 'change' && win.form?.file) { showBgRow(''); return redoUploadPreview(); }
     if (f === 'bg' && e.type === 'change') return showBgRow('');
-    if ((f === 'rolebg' || f === 'rolebgtol' || f === 'rolecrop') && e.type === 'change') { showBgRow('role'); return redoRolePreview(); }
+    if ((f === 'rolebg' || f === 'rolebgtol' || f === 'rolecrop') && e.type === 'change') { showBgRow('role'); return win.sheet ? redoSheet() : redoRolePreview(); }
     const s = t.dataset?.s;
     if (s && e.type === 'change') {
         if (s === 'stageMode') return setSetting(s, t.value === 'floor' ? 'floor' : 'chat');
@@ -5074,6 +5082,8 @@ function rolesHtml(p) {
         return `<details class="tw-fold" data-group="${g.key}"${win.rolesOpen.has(g.key) ? ' open' : ''}><summary>${esc(g.name)} <span class="tw-sub">${have ? `${have}칸 채움` : ''}</span></summary>${grid}</details>`;
     }).join('');
     return `<div class="tw-sub">그림이 없는 칸은 기본 그림 + 움직임으로 대신해요. 칸을 누르면 그림을 넣거나 빼요.</div>
+<div class="tw-row tw-sheetbar"><div class="tw-btn tw-btn-small" data-act="sheetall"><i class="fa-solid fa-table-cells"></i> 시트로 한꺼번에 넣기</div><span class="tw-sub">한 장을 나눠서 여러 동작에</span></div>
+<input type="file" accept="${PIC_ACCEPT}" data-f="sheetfile">
 ${groups}
 <div class="tw-sub" style="margin-top:10px">${lookNote(p)}</div>
 <div class="tw-msg"></div>`;
@@ -5084,7 +5094,7 @@ function roleEditHtml(p, key) {
     const list = p.look.roles[key] || [];
     const opt = p.look.roleOpts?.[key] || {};
     const canDel = key !== 'idle' || list.length > 1;
-    const frames = list.map((f, i) => `<div class="tw-frame"><img src="${esc(imgUrl(f))}" alt=""><span>${i + 1}</span>${canDel ? `<i class="fa-solid fa-xmark" data-delframe="${i}" title="빼기"></i>` : ''}${i ? `<em class="fa-solid fa-chevron-left" data-moveframe="${i}" title="앞으로"></em>` : ''}</div>`).join('');
+    const frames = list.map((f, i) => `<div class="tw-frame"><img src="${esc(imgUrl(f))}" alt=""><span>${i + 1}</span>${canDel ? `<i class="fa-solid fa-xmark" data-delframe="${i}" title="빼기"></i>` : ''}${i ? `<em class="fa-solid fa-chevron-left" data-moveframe="${i}" title="앞으로"></em>` : ''}${i < list.length - 1 ? `<em class="fa-solid fa-chevron-right tw-next" data-moveframe="${i + 1}" title="뒤로"></em>` : ''}</div>`).join('');
     const add = list.length < FRAMES_MAX ? '<div class="tw-frame tw-frame-add" data-act="addframe"><i class="fa-solid fa-plus"></i></div>' : '';
     const petFacing = { front: '정면', right: '오른쪽', left: '왼쪽' }[p.look.facing] || '정면';
     const speed = list.length < 2 ? ''
@@ -5132,6 +5142,12 @@ function drawRoles() {
     stopPreview();
     const keep = win.body.scrollTop;
     win.rolePend = null;                                           // an unconfirmed preview never survives a redraw
+    if (win.sheet && win.sheet.pet !== p) win.sheet = null;
+    if (win.sheet) {                                                // a sheet waiting to be shared out
+        pane.innerHTML = sheetHtml();
+        win.body.scrollTop = keep;
+        return drawSheet();
+    }
     pane.innerHTML = win.roleEdit && ROLE_DEFS[win.roleEdit] ? roleEditHtml(p, win.roleEdit) : rolesHtml(p);
     win.body.scrollTop = keep;
     if (!win.roleEdit) return;
@@ -5251,6 +5267,154 @@ async function confirmRolePend() {
     busy = true;
     try {
         await putRoleFrames(pend.pet, pend.key, pend.imgs, pend.skipped);
+    } finally {
+        busy = false;
+    }
+}
+
+/* ---- 0.7.5: one sheet → pictures for several actions at once ---- */
+
+async function sheetPicked(input) {
+    const file = input.files?.[0];
+    input.value = '';
+    const p = curPet();
+    if (!p || !file) return;
+    if (readOnly) return say(readOnlyReason);
+    if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 해 주세요.');
+    if (file.size > 8 * 1024 * 1024) return say('그림이 너무 커요 (8MB 이하).');
+    openCutter(file, {
+        sheet: true, sheetOn: true, space: Infinity,
+        done: (cuts) => {
+            if (curPet() !== p) return;
+            const rows = cuts ? cuts.map(c => c.row ?? 0) : [0];
+            win.sheet = { pet: p, file, cuts, rows, picks: rows.map(() => ''), imgs: null };
+            drawRoles();
+            redoSheet();
+        },
+    });
+}
+
+/** Make the pieces again with the current switches (투명 여백 자르기, 배경 지우기). */
+async function redoSheet() {
+    const sh = win.sheet;
+    if (!sh) return;
+    const crop = win.body.querySelector('[data-f="rolecrop"]')?.checked !== false;
+    const tol = bgTolOf('role');
+    say(tol > 0 ? '배경 지우는 중…' : '그림 준비 중…');
+    try {
+        const imgs = await prepareFrames([sh.file], crop, tol, sh.cuts);
+        if (win.sheet !== sh) return;
+        sh.imgs = imgs;
+        say('');
+    } catch (e) {
+        if (win.sheet === sh) say('그림을 읽지 못했어요: ' + (e.message || e));
+    }
+    drawSheet();
+}
+
+function roleOptions(sel, first) {
+    return first + ROLE_GROUPS.map(g => `<optgroup label="${esc(g.name)}">${g.roles.map(r => `<option value="${r.key}"${sel === r.key ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</optgroup>`).join('');
+}
+
+/** Which picked pictures still fit (8 per action, after what's already there). */
+function sheetFit(p, sh) {
+    const count = {}, fit = [];
+    sh.picks.forEach((k, i) => {
+        if (!k) return;
+        count[k] ??= p.look.roles[k]?.length || 0;
+        if (count[k] < FRAMES_MAX) { count[k]++; fit[i] = true; } else fit[i] = false;
+    });
+    return fit;
+}
+
+function sheetHtml() {
+    return `<div class="tw-btn tw-btn-small" data-act="sheetno"><i class="fa-solid fa-arrow-left"></i> 동작 목록</div>
+<div class="tw-cap">어느 동작에 넣을까요?</div>
+<div class="tw-sub">그림 아래 칸을 눌러 동작을 골라요. 줄 옆 칸으로 그 줄 전부를 한 번에 고를 수도 있어요. 고르지 않은 그림은 넣지 않고, 이미 그림이 있는 동작에는 뒤에 붙어요.</div>
+<div class="tw-sheet"></div>
+<label class="tw-check"><input type="checkbox" data-f="rolecrop" checked> 투명 여백 자르기</label>
+${bgHtml('role')}
+<div class="tw-row"><div class="tw-btn tw-btn-main" data-act="sheetok"></div><div class="tw-btn" data-act="sheetno">취소</div></div>
+<div class="tw-msg"></div>`;
+}
+
+function drawSheet() {
+    const p = curPet(), sh = win.sheet;
+    const box = win.body.querySelector('.tw-sheet');
+    if (!p || !sh || !box) return;
+    if (!sh.imgs) { box.innerHTML = '<div class="tw-sub">준비 중…</div>'; return; }
+    const fit = sheetFit(p, sh);
+    const rows = [...new Set(sh.rows)];
+    box.innerHTML = rows.map((r, ri) => {
+        const idx = sh.rows.map((x, i) => (x === r ? i : -1)).filter(i => i >= 0);
+        const tiles = idx.map(i => `<div class="tw-sheet-frame${sh.picks[i] ? '' : ' tw-sheet-none'}${fit[i] === false ? ' tw-sheet-over' : ''}">
+  <div class="tw-frame"><img class="tw-checker" src="${sh.imgs[i]?.dataUrl || ''}" alt=""><span>${i + 1}</span></div>
+  <select data-sheetpick="${i}">${roleOptions(sh.picks[i], `<option value=""${sh.picks[i] ? '' : ' selected'}>안 넣음</option>`)}</select>
+</div>`).join('');
+        const head = rows.length > 1 || idx.length > 1
+            ? `<div class="tw-row tw-sheet-head"><span class="tw-sub">${rows.length > 1 ? `${ri + 1}줄` : '전부'}</span><span class="tw-grow"></span><select data-sheetrow="${r}">${roleOptions('', '<option value="" selected>이 줄 전부 →</option><option value="-">안 넣음</option>')}</select></div>` : '';
+        return `<div class="tw-sheet-row">${head}<div class="tw-sheet-frames">${tiles}</div></div>`;
+    }).join('');
+    // actions that overflow
+    const over = {};
+    sh.picks.forEach((k, i) => { if (k && fit[i] === false) over[k] = (over[k] || 0) + 1; });
+    const warn = Object.entries(over).map(([k, n]) => {
+        const room = FRAMES_MAX - (p.look.roles[k]?.length || 0);
+        return `${esc(ROLE_DEFS[k]?.name || k)}: ${room > 0 ? `${room}장만 더 들어가요` : '이미 가득 찼어요'} (흐린 ${n}장은 빠져요)`;
+    });
+    if (warn.length) box.insertAdjacentHTML('beforeend', `<div class="tw-sheet-warn">${warn.join('<br>')}</div>`);
+    const n = fit.filter(Boolean).length;
+    const ok = win.body.querySelector('[data-act="sheetok"]');
+    if (ok) ok.innerHTML = `<i class="fa-solid fa-check"></i> 넣기 (${n}장)`;
+}
+
+function onSheetInput(t) {
+    const sh = win.sheet;
+    if (!sh) return;
+    if (t.dataset.sheetpick != null) sh.picks[Number(t.dataset.sheetpick)] = ROLE_DEFS[t.value] ? t.value : '';
+    if (t.dataset.sheetrow != null && t.value) {
+        const r = Number(t.dataset.sheetrow), v = t.value === '-' ? '' : (ROLE_DEFS[t.value] ? t.value : '');
+        sh.rows.forEach((x, i) => { if (x === r) sh.picks[i] = v; });
+    }
+    drawSheet();
+}
+
+async function confirmSheet() {
+    const p = curPet(), sh = win.sheet;
+    if (!p || !sh?.imgs || sh.pet !== p || busy) return;
+    if (readOnly) return say(readOnlyReason);
+    const fit = sheetFit(p, sh);
+    const groups = new Map();                                        // action → pictures, in sheet order
+    sh.picks.forEach((k, i) => { if (k && fit[i] && sh.imgs[i]) (groups.get(k) || groups.set(k, []).get(k)).push(sh.imgs[i]); });
+    const total = [...groups.values()].reduce((a, l) => a + l.length, 0);
+    if (!total) return say('넣을 그림이 없어요. 그림 아래 칸에서 동작을 골라 주세요.');
+    busy = true;
+    const uploaded = [];
+    try {
+        say(`그림 ${total}장 올리는 중…`);
+        const paths = new Map();
+        for (const [k, imgs] of groups) {
+            const res = await Promise.allSettled(imgs.map((im) => {
+                const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+                return uploadFile(`tavvy_role_${id}.png`, im.base64);
+            }));
+            const ok = res.filter(r => r.status === 'fulfilled').map(r => r.value);
+            uploaded.push(...ok);
+            const bad = res.find(r => r.status === 'rejected');
+            if (bad) throw bad.reason;
+            paths.set(k, ok);
+        }
+        if (curPet() !== p || win.sheet !== sh) throw new Error('창이 바뀌었어요');
+        win.sheet = null;
+        const saved = await changeRoles(p, (look) => {
+            for (const [k, list] of paths) look.roles[k] = [...(look.roles[k] || []), ...list].slice(0, FRAMES_MAX);
+        });
+        const names = [...paths.keys()].map(k => ROLE_DEFS[k]?.name || k).join(' · ');
+        say((saved ? `${total}장 넣었어요: ${names}` : '넣었지만 저장이 늦어지고 있어요.'));
+    } catch (e) {
+        console.error('[Tavvy] sheet pictures failed', e);
+        for (const f of uploaded) if (!fileInUse(f)) deleteFile(f);
+        say('그림을 넣지 못했어요: ' + (e.message || e));
     } finally {
         busy = false;
     }

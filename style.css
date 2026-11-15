@@ -999,3 +999,25 @@
 }
 .tavvy-win .tw-step em { font-style: normal; min-width: 14px; text-align: center; }
 .tavvy-win .tw-cut-btns { margin-top: 2px; }
+/* one sheet → several actions */
+.tavvy-win .tw-sheetbar { margin: 8px 0 4px; }
+.tavvy-win .tw-sheet { display: flex; flex-direction: column; gap: 10px; margin: 8px 0; }
+.tavvy-win .tw-sheet-row { padding: 8px; border-radius: 12px; background: var(--tw-card); }
+.tavvy-win .tw-sheet-head { margin-bottom: 6px; }
+.tavvy-win .tw-sheet-head select { width: auto; max-width: 60%; font-size: 13px; padding: 3px 6px; }
+.tavvy-win .tw-sheet-frames { display: flex; flex-wrap: wrap; gap: 8px; }
+.tavvy-win .tw-sheet-frame { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 72px; }
+.tavvy-win .tw-sheet-frame .tw-frame { width: 64px; height: 64px; }
+.tavvy-win .tw-sheet-frame .tw-frame img { border-radius: 6px; }
+.tavvy-win .tw-sheet-frame select { width: 72px; font-size: 11px; padding: 2px 3px; text-overflow: ellipsis; }
+.tavvy-win .tw-sheet-none .tw-frame { opacity: .45; }
+.tavvy-win .tw-sheet-over .tw-frame { opacity: .3; outline: 1px dashed var(--tw-accent); outline-offset: 1px; }
+.tavvy-win .tw-sheet-warn { font-size: 12px; color: var(--tw-accent); line-height: 1.5; }
+.tavvy-win .tw-frame em.tw-next { left: auto; right: -6px; }
+/* phone: a pick box under 16px makes iPhone zoom the page */
+@media (pointer: coarse) {
+    .tavvy-win .tw-sheet-frame { width: 80px; }
+    .tavvy-win .tw-sheet-frame select { width: 80px; font-size: 16px; padding: 2px 4px; }
+    .tavvy-win .tw-sheet-head select { font-size: 16px; }
+}
+.tavvy-win .tw-frames { gap: 10px 16px; }
