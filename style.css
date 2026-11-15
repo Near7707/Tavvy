@@ -955,3 +955,47 @@
     width: 100%; box-sizing: border-box; margin: 0; padding: 8px 10px; border-radius: 10px;
     border: 1px solid var(--tw-line); background: var(--tw-field); font: inherit; font-size: 16px; resize: none;
 }
+
+/* ---------- 0.7.5: cut by hand / split a sheet ---------- */
+.tavvy-win .tw-btn[hidden], .tavvy-win .tw-cut [hidden] { display: none !important; }
+.tavvy-win.tw-cutting > .tavvy-win-head, .tavvy-win.tw-cutting > .tavvy-win-body { display: none; }
+.tavvy-win .tw-cut {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto; box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 8px; padding: 14px;
+}
+.tavvy-win .tw-cut-wrap { display: flex; justify-content: center; width: 100%; }
+.tavvy-win .tw-cut-stage {
+    position: relative; line-height: 0; overflow: hidden; border-radius: 6px;
+    touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.tavvy-win .tw-cut-stage canvas { display: block; }
+.tavvy-win .tw-cut-box {
+    position: absolute; box-sizing: border-box; border: 2px solid var(--tw-accent); cursor: move;
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, .45);
+}
+.tavvy-win .tw-cut-box i {
+    position: absolute; width: 22px; height: 22px; box-sizing: border-box;
+    background: var(--tw-accent); border: 2px solid #fff; border-radius: 6px;
+}
+.tavvy-win .tw-cut-box i[data-h="nw"] { left: -2px; top: -2px; cursor: nwse-resize; }
+.tavvy-win .tw-cut-box i[data-h="ne"] { right: -2px; top: -2px; cursor: nesw-resize; }
+.tavvy-win .tw-cut-box i[data-h="sw"] { left: -2px; bottom: -2px; cursor: nesw-resize; }
+.tavvy-win .tw-cut-box i[data-h="se"] { right: -2px; bottom: -2px; cursor: nwse-resize; }
+.tavvy-win .tw-cut-cells { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.tavvy-win .tw-cut-cells div { position: absolute; box-sizing: border-box; border: 1.5px dashed #fff; outline: 1px dashed rgba(0, 0, 0, .55); }
+.tavvy-win .tw-cut-cells div.tw-cut-over { opacity: .35; }
+.tavvy-win .tw-cut-cells span {
+    position: absolute; left: 2px; top: 2px; line-height: 1; font-size: 11px; padding: 2px 4px;
+    border-radius: 6px; background: var(--tw-accent); color: var(--tw-on-accent);
+}
+.tavvy-win .tw-seg { display: flex; gap: 3px; padding: 3px; border-radius: 10px; background: var(--tw-field); }
+.tavvy-win .tw-seg span { flex: 1; text-align: center; padding: 6px 4px; border-radius: 8px; font-size: 13px; cursor: pointer; user-select: none; }
+.tavvy-win .tw-seg span.on { background: var(--tw-accent); color: var(--tw-on-accent); }
+.tavvy-win .tw-cut-sheet { display: flex; flex-direction: column; gap: 8px; }
+.tavvy-win .tw-step { display: inline-flex; align-items: center; gap: 6px; }
+.tavvy-win .tw-step b {
+    width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--tw-line); border-radius: 8px; background: var(--tw-card); cursor: pointer; user-select: none; font-weight: 500;
+}
+.tavvy-win .tw-step em { font-style: normal; min-width: 14px; text-align: center; }
+.tavvy-win .tw-cut-btns { margin-top: 2px; }

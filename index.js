@@ -20,6 +20,7 @@
 // 0.7.3: no more pressing against the screen; squishing only as much as 말랑 정도 says;
 //        a gentler lean, no shiver while held, the window stays whole while the keyboard goes down.
 // 0.7.4: no leaning into a pat; moving a pet to this room, copying it here, pet files and PNG cards.
+// 0.7.5: cut a picture by hand when uploading; split a sheet into frames (find them, or rows × columns).
 
 import { saveSettings, saveSettingsDebounced, getRequestHeaders, eventSource, event_types } from '../../../../script.js';
 
@@ -506,19 +507,47 @@ function opaqueBox(g, w, h) {
 const READ_MAX = 1200;           // big photos are shrunk to this first (the pet ends up ≤ 384 anyway)
 const BG_TOL = 28;              // "배경 지우기" default strength (how different a colour may be and still count as background)
 
-async function fileCanvas(file) {
+async function loadFileImage(file) {
     const url = URL.createObjectURL(file);
     try {
-        const im = await loadImage(url);
-        const k = Math.min(1, READ_MAX / Math.max(im.naturalWidth, im.naturalHeight));
-        const cv = document.createElement('canvas');
-        cv.width = Math.max(1, Math.round(im.naturalWidth * k)); cv.height = Math.max(1, Math.round(im.naturalHeight * k));
-        const g = cv.getContext('2d', { willReadFrequently: true });
-        g.drawImage(im, 0, 0, cv.width, cv.height);
-        return { cv, g, w: cv.width, h: cv.height };
+        return await loadImage(url);
     } finally {
         URL.revokeObjectURL(url);
     }
+}
+
+/**
+ * One piece of a picture on a canvas. box = { sx, sy, sw, sh } in the picture's own pixels (null = all of it).
+ * The piece is cut from the full-size picture first and only then shrunk, so a small piece of a big photo stays sharp.
+ */
+function imageCanvas(im, box) {
+    const W = im.naturalWidth, H = im.naturalHeight;
+    let sx = 0, sy = 0, sw = W, sh = H;
+    if (box) {
+        sx = clamp(Math.round(box.sx), 0, W - 1); sy = clamp(Math.round(box.sy), 0, H - 1);
+        sw = clamp(Math.round(box.sw), 1, W - sx); sh = clamp(Math.round(box.sh), 1, H - sy);
+    }
+    const k = Math.min(1, READ_MAX / Math.max(sw, sh));
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(sw * k)); cv.height = Math.max(1, Math.round(sh * k));
+    const g = cv.getContext('2d', { willReadFrequently: true });
+    g.drawImage(im, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+    return { cv, g, w: cv.width, h: cv.height, box: { sx, sy, sw, sh }, k };
+}
+
+async function fileCanvas(file, box = null) {
+    return imageCanvas(await loadFileImage(file), box);
+}
+
+/** A sheet piece that was widened to the common size: wipe what lies outside its own picture (bits of the neighbours). */
+function keepOnly(c, keep) {
+    if (!keep) return;
+    const x0 = Math.round((keep.sx - c.box.sx) * c.k), y0 = Math.round((keep.sy - c.box.sy) * c.k);
+    const x1 = Math.round((keep.sx + keep.sw - c.box.sx) * c.k), y1 = Math.round((keep.sy + keep.sh - c.box.sy) * c.k);
+    if (x0 > 0) c.g.clearRect(0, 0, x0, c.h);
+    if (x1 < c.w) c.g.clearRect(x1, 0, c.w - x1, c.h);
+    if (y0 > 0) c.g.clearRect(0, 0, c.w, y0);
+    if (y1 < c.h) c.g.clearRect(0, y1, c.w, c.h - y1);
 }
 
 /**
@@ -590,9 +619,16 @@ function removeBg(g, w, h, tol = BG_TOL) {
  * Several pictures for one action (frames): cropped with ONE shared box when they are the same size,
  * so the frames don't jump around. Returns [{ base64, dataUrl, w, h }] in the given order.
  */
-async function prepareFrames(files, crop, bgTol = 0) {
-    const cvs = await Promise.all(files.map(fileCanvas));
+async function prepareFrames(files, crop, bgTol = 0, cuts = null) {
+    let cvs;
+    if (cuts?.length) {                                   // one picture cut by hand, or a sheet split into pieces
+        const im = await loadFileImage(files[0]);
+        cvs = cuts.map(b => imageCanvas(im, b));
+    } else {
+        cvs = await Promise.all(files.map(f => fileCanvas(f)));
+    }
     if (bgTol > 0) for (const c of cvs) removeBg(c.g, c.w, c.h, bgTol);
+    if (cuts?.length) cvs.forEach((c, i) => keepOnly(c, cuts[i].keep));     // after the background is gone
     const same = cvs.every(c => c.w === cvs[0].w && c.h === cvs[0].h);
     let shared = null;
     if (crop && same) {
@@ -609,8 +645,8 @@ async function prepareFrames(files, crop, bgTol = 0) {
 }
 
 /** Read a user PNG, optionally crop transparent margins, limit size. Returns { base64, w, h }. */
-async function preparePng(file, crop, bgTol = 0) {
-    const c = await fileCanvas(file);
+async function preparePng(file, crop, bgTol = 0, box = null) {
+    const c = await fileCanvas(file, box);
     if (bgTol > 0) removeBg(c.g, c.w, c.h, bgTol);
     return finishPng(c, crop, null);
 }
@@ -3299,6 +3335,7 @@ function uploadHtml() {
   <input type="file" accept="${PIC_ACCEPT}" data-f="file">
   <div class="tw-row"><div class="tw-btn" data-act="pickfile"><i class="fa-solid fa-image"></i> 그림 고르기</div><span class="tw-sub tw-filename">아직 안 골랐어요</span></div>
   <div class="tw-row tw-prevrow" hidden><img class="tw-prev tw-checker" alt=""><div>
+    <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="cutopen"><i class="fa-solid fa-crop-simple"></i> 직접 자르기</div><span class="tw-sub tw-cutnote"></span></div>
     <label class="tw-check"><input type="checkbox" data-f="crop" checked> 투명 여백 자르기</label>
     ${bgHtml('')}
   </div></div>
@@ -3438,7 +3475,7 @@ function ensureWin() {
     el.addEventListener('click', onWinClick);
     el.addEventListener('input', onWinInput);
     el.addEventListener('change', onWinInput);
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && win?.open) closeWin(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && win?.open) { if (cutter) closeCutter(); else closeWin(); } });
     const refit = () => { if (win?.open) fitWin(); };
     window.addEventListener('resize', refit);
     window.visualViewport?.addEventListener('resize', refit);
@@ -3653,6 +3690,7 @@ function show(view, opts = {}) {
     win.talkBase = null;
     win.roleEdit = null;
     stopPreview();
+    closeCutter();
     const back = view !== 'home';
     const p = view === 'pet' ? root?.pets.find(x => x.id === win.id) : null;
     if (view === 'pet' && !p) return show('home');
@@ -3688,7 +3726,7 @@ async function leave(fn) {
 function closeWin() {
     if (!win?.open) return;
     closeTyper(true);
-    leave(() => { win.el.hidden = true; win.open = false; win.form = null; win.talkBase = null; stopPreview(); });
+    leave(() => { closeCutter(); win.el.hidden = true; win.open = false; win.form = null; win.talkBase = null; stopPreview(); });
 }
 
 /* --- home --- */
@@ -3991,19 +4029,343 @@ function pickLook(key) {
     drawLookGrid();
 }
 
+/* ---------- 0.7.5: cut a picture by hand, or split a sheet into frames ---------- */
+
+const CUT_GAP = 2;        // empty lines (on the small working copy) that separate two pictures on a sheet
+const CUT_DUST = 0.03;    // a piece smaller than this share of the biggest one is a stray dot, not a picture
+const CUT_WORK = 400;     // a sheet is looked at in this size (quick enough on phones)
+const GRID_MAX = 8;
+
+let cutter = null;
+
+/**
+ * Opens over the window. opts: { box (earlier cut), sheet (allow splitting), sheetOn, space (frames that still fit), done(cuts, sheet, extra) }.
+ * done gets null for "the whole picture", or a list of { sx, sy, sw, sh, keep? } in the picture's own pixels.
+ */
+async function openCutter(file, opts = {}) {
+    closeCutter();
+    let im;
+    try { im = await loadFileImage(file); } catch { return say('그림을 읽지 못했어요.'); }
+    if (!win?.open) return;
+    const W = im.naturalWidth, H = im.naturalHeight, b = opts.box;
+    const step = (k) => `<span class="tw-step"><b data-cutstep="${k}:-1">−</b><em data-cutval="${k}"></em><b data-cutstep="${k}:1">+</b></span>`;
+    const el = document.createElement('div');
+    el.className = 'tw-cut';
+    el.innerHTML = `<b>${opts.sheet ? '자르기 · 나누기' : '직접 자르기'}</b>
+<div class="tw-sub">네모 모서리를 끌면 크기가, 안쪽을 끌면 자리가 바뀌어요. 바깥을 끌면 새로 그려요.</div>
+<div class="tw-cut-wrap"><div class="tw-cut-stage tw-checker"><canvas></canvas><div class="tw-cut-cells"></div>
+  <div class="tw-cut-box"><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i></div></div></div>
+${opts.sheet ? `<div class="tw-seg"><span data-cutmode="one">한 장으로 자르기</span><span data-cutmode="sheet">여러 장으로 나누기</span></div>
+<div class="tw-cut-sheet">
+  <div class="tw-seg"><span data-cuthow="auto">자동 찾기</span><span data-cuthow="grid">칸 수</span></div>
+  <div class="tw-row tw-cut-grid">가로 ${step('cols')} × 세로 ${step('rows')}</div>
+  <div class="tw-sub tw-cut-info"></div>
+</div>` : ''}
+<div class="tw-row tw-cut-btns"><div class="tw-btn tw-btn-small" data-cut="all">전체</div><span class="tw-grow"></span><div class="tw-btn" data-cut="no">취소</div><div class="tw-btn tw-btn-main" data-cut="ok"></div></div>`;
+    const keepScroll = win.body.scrollTop;
+    win.box.classList.add('tw-cutting');
+    win.box.appendChild(el);
+    const cv = el.querySelector('canvas');
+    const k0 = Math.min(1, 900 / Math.max(W, H));                     // the on-screen copy doesn't need to be huge
+    cv.width = Math.max(1, Math.round(W * k0)); cv.height = Math.max(1, Math.round(H * k0));
+    const g = cv.getContext('2d');
+    g.imageSmoothingEnabled = Math.max(W, H) > 256;
+    g.drawImage(im, 0, 0, cv.width, cv.height);
+    if (Math.max(W, H) <= 256) cv.style.imageRendering = 'pixelated';
+    const c = cutter = {
+        el, im, W, H, opts, cv, keepScroll, space: opts.space || FRAMES_MAX, k: 1,
+        box: b ? { x0: b.sx, y0: b.sy, x1: b.sx + b.sw, y1: b.sy + b.sh } : { x0: 0, y0: 0, x1: W, y1: H },
+        sheet: !!opts.sheetOn, how: 'auto', cols: 2, rows: 1, cells: [], drag: null,
+    };
+    el.addEventListener('click', onCutClick);
+    const stage = el.querySelector('.tw-cut-stage');
+    stage.addEventListener('pointerdown', cutDown);
+    stage.addEventListener('pointermove', cutMove);
+    stage.addEventListener('pointerup', cutUp);
+    stage.addEventListener('pointercancel', cutUp);
+    if (typeof ResizeObserver === 'function') { c.ro = new ResizeObserver(() => fitCut()); c.ro.observe(el.querySelector('.tw-cut-wrap')); }
+    if (c.sheet) findCells();
+    fitCut();
+}
+
+function closeCutter() {
+    const c = cutter;
+    if (!c) return;
+    cutter = null;
+    c.ro?.disconnect();
+    c.el.remove();
+    if (win) {
+        win.box.classList.remove('tw-cutting');
+        win.body.scrollTop = c.keepScroll || 0;
+    }
+}
+
+/** Size the picture to the space there is (small pixel art is blown up so the corners can be caught). */
+function fitCut() {
+    const c = cutter;
+    if (!c) return;
+    const wrap = c.el.querySelector('.tw-cut-wrap');
+    const availW = Math.max(120, wrap.clientWidth);
+    const availH = Math.max(160, (window.visualViewport?.height || window.innerHeight) * 0.46);
+    const s = Math.min(availW / c.W, availH / c.H, 12);
+    c.cv.style.width = Math.round(c.W * s) + 'px';
+    c.cv.style.height = Math.round(c.H * s) + 'px';
+    drawCut();
+}
+
+const cutRect = (c) => {
+    const sx = Math.round(c.box.x0), sy = Math.round(c.box.y0);
+    return { sx, sy, sw: Math.max(1, Math.round(c.box.x1) - sx), sh: Math.max(1, Math.round(c.box.y1) - sy) };
+};
+
+function drawCut() {
+    const c = cutter;
+    if (!c) return;
+    const el = c.el, k = c.k = (c.cv.clientWidth / c.W) || 1;
+    const px = (v) => Math.round(v * k) + 'px';
+    const bx = el.querySelector('.tw-cut-box');
+    Object.assign(bx.style, { left: px(c.box.x0), top: px(c.box.y0), width: px(c.box.x1 - c.box.x0), height: px(c.box.y1 - c.box.y0) });
+    const sheet = !!(c.opts.sheet && c.sheet);
+    const n = c.cells.length, use = Math.min(n, c.space);
+    el.querySelector('.tw-cut-cells').innerHTML = sheet && !c.drag ? c.cells.map((p, i) => {
+        const q = p.keep || p;
+        return `<div class="${i >= c.space ? 'tw-cut-over' : ''}" style="left:${px(q.sx)};top:${px(q.sy)};width:${px(q.sw)};height:${px(q.sh)}"><span>${i + 1}</span></div>`;
+    }).join('') : '';
+    el.querySelectorAll('[data-cutmode]').forEach(s => s.classList.toggle('on', (s.dataset.cutmode === 'sheet') === sheet));
+    el.querySelectorAll('[data-cuthow]').forEach(s => s.classList.toggle('on', s.dataset.cuthow === c.how));
+    el.querySelectorAll('[data-cutval]').forEach(s => { s.textContent = c[s.dataset.cutval]; });
+    const sh = el.querySelector('.tw-cut-sheet');
+    if (sh) sh.hidden = !sheet;
+    const grid = el.querySelector('.tw-cut-grid');
+    if (grid) grid.hidden = c.how !== 'grid';
+    const info = el.querySelector('.tw-cut-info');
+    if (info) {
+        const what = c.how === 'grid' ? '그림이 있는 칸' : '그림';
+        info.textContent = c.drag ? ''
+            : !n ? (c.how === 'grid' ? '그림이 있는 칸이 없어요.' : '나눌 그림을 못 찾았어요. 칸 수로 나눠 보세요.')
+            : n > c.space ? `${what} ${n}개를 찾았어요. 이 동작에는 ${c.space}장만 더 넣을 수 있어서 앞의 ${c.space}장만 넣어요.`
+            : `${what} ${n}개를 찾았어요. 왼쪽 → 오른쪽, 위 → 아래 순서로 들어가요.${c.how === 'auto' ? ' 잘못 나뉘면 칸 수로 해 보세요.' : ''}`;
+    }
+    el.querySelector('[data-cut="ok"]').textContent = sheet ? `나누기 (${use}장)` : '자르기';
+}
+
+function cutPoint(c, e) {
+    const r = c.cv.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / c.k, y: (e.clientY - r.top) / c.k };
+}
+
+function cutDown(e) {
+    const c = cutter;
+    if (!c || c.drag) return;
+    e.preventDefault();
+    const pt = cutPoint(c, e), b = c.box;
+    const h = e.target?.dataset?.h;
+    const whole = b.x0 <= 0 && b.y0 <= 0 && b.x1 >= c.W && b.y1 >= c.H;      // nothing to move yet → draw a new one
+    const inside = !whole && pt.x >= b.x0 && pt.x <= b.x1 && pt.y >= b.y0 && pt.y <= b.y1;
+    c.drag = { id: e.pointerId, mode: h || (inside ? 'move' : 'new'), sx: pt.x, sy: pt.y, b: { ...b } };
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* not needed everywhere */ }
+}
+
+function cutMove(e) {
+    const c = cutter, d = c?.drag;
+    if (!d || e.pointerId !== d.id) return;
+    e.preventDefault();
+    const p = cutPoint(c, e), W = c.W, H = c.H;
+    const m = Math.min(Math.max(4, 18 / c.k), W, H);                 // smallest box
+    let { x0, y0, x1, y1 } = d.b;
+    const dx = p.x - d.sx, dy = p.y - d.sy;
+    if (d.mode === 'move') {
+        const w = x1 - x0, h = y1 - y0;
+        x0 = clamp(x0 + dx, 0, W - w); y0 = clamp(y0 + dy, 0, H - h); x1 = x0 + w; y1 = y0 + h;
+    } else if (d.mode === 'new') {
+        const ax = clamp(d.sx, 0, W), ay = clamp(d.sy, 0, H), bx = clamp(p.x, 0, W), by = clamp(p.y, 0, H);
+        if (Math.abs(bx - ax) < m || Math.abs(by - ay) < m) return;      // too small yet → keep the old box
+        x0 = Math.min(ax, bx); x1 = Math.max(ax, bx); y0 = Math.min(ay, by); y1 = Math.max(ay, by);
+    } else {
+        if (d.mode.includes('w')) x0 = clamp(x0 + dx, 0, x1 - m);
+        if (d.mode.includes('e')) x1 = clamp(x1 + dx, x0 + m, W);
+        if (d.mode.includes('n')) y0 = clamp(y0 + dy, 0, y1 - m);
+        if (d.mode.includes('s')) y1 = clamp(y1 + dy, y0 + m, H);
+    }
+    c.box = { x0, y0, x1, y1 };
+    drawCut();
+}
+
+function cutUp(e) {
+    const c = cutter, d = c?.drag;
+    if (!d || e.pointerId !== d.id) return;
+    c.drag = null;
+    const r = cutRect(c);
+    c.box = { x0: r.sx, y0: r.sy, x1: r.sx + r.sw, y1: r.sy + r.sh };
+    if (c.sheet) findCells();
+    drawCut();
+}
+
+function onCutClick(e) {
+    e.stopPropagation();                                              // the window's own buttons don't see these
+    const c = cutter;
+    if (!c) return;
+    const t = e.target;
+    const btn = t.closest('[data-cut]')?.dataset.cut;
+    if (btn === 'no') return closeCutter();
+    if (btn === 'ok') return cutOk();
+    if (btn === 'all') c.box = { x0: 0, y0: 0, x1: c.W, y1: c.H };
+    const md = t.closest('[data-cutmode]')?.dataset.cutmode;
+    if (md) c.sheet = md === 'sheet';
+    const hw = t.closest('[data-cuthow]')?.dataset.cuthow;
+    if (hw) c.how = hw;
+    const st = t.closest('[data-cutstep]')?.dataset.cutstep;
+    if (st) { const [key, d] = st.split(':'); c[key] = clamp(c[key] + Number(d), 1, GRID_MAX); }
+    if (!(btn || md || hw || st)) return;
+    if (c.sheet) findCells();
+    drawCut();
+}
+
+function cutOk() {
+    const c = cutter;
+    if (!c) return;
+    const done = c.opts.done;
+    if (c.opts.sheet && c.sheet) {
+        if (!c.cells.length) return;
+        const use = c.cells.slice(0, c.space);
+        closeCutter();
+        return done?.(use, true, c.cells.length - use.length);
+    }
+    const r = cutRect(c);
+    const whole = r.sx === 0 && r.sy === 0 && r.sw === c.W && r.sh === c.H;
+    closeCutter();
+    done?.(whole ? null : [r], false, 0);
+}
+
+/** Which pixels of the box are picture (not background), on a small copy. */
+function inkMask(im, b) {
+    const s = Math.min(1, CUT_WORK / Math.max(b.sw, b.sh));
+    const w = Math.max(1, Math.round(b.sw * s)), h = Math.max(1, Math.round(b.sh * s));
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const g = cv.getContext('2d', { willReadFrequently: true });
+    g.drawImage(im, b.sx, b.sy, b.sw, b.sh, 0, 0, w, h);
+    const d = g.getImageData(0, 0, w, h).data;
+    // plain background? same reading of the edge as "배경 지우기"
+    const edge = [];
+    for (let x = 0; x < w; x++) edge.push(x, (h - 1) * w + x);
+    for (let y = 1; y < h - 1; y++) edge.push(y * w, y * w + w - 1);
+    let clear = 0;
+    for (const i of edge) if (d[i * 4 + 3] < 128) clear++;
+    let bg = null;
+    if (clear <= edge.length * 0.5) {
+        const buckets = new Map();
+        for (const i of edge) {
+            const o = i * 4;
+            if (d[o + 3] < 128) continue;
+            const key = (d[o] >> 4) << 8 | (d[o + 1] >> 4) << 4 | (d[o + 2] >> 4);
+            const q = buckets.get(key) || buckets.set(key, { n: 0, r: 0, g: 0, b: 0 }).get(key);
+            q.n++; q.r += d[o]; q.g += d[o + 1]; q.b += d[o + 2];
+        }
+        let top = null;
+        for (const q of buckets.values()) if (!top || q.n > top.n) top = q;
+        if (top && top.n >= edge.length * 0.35) bg = [top.r / top.n, top.g / top.n, top.b / top.n];
+    }
+    const m = new Uint8Array(w * h);
+    for (let i = 0; i < w * h; i++) {
+        const o = i * 4;
+        if (d[o + 3] <= 8) continue;
+        if (bg && Math.max(Math.abs(d[o] - bg[0]), Math.abs(d[o + 1] - bg[1]), Math.abs(d[o + 2] - bg[2])) <= BG_TOL) continue;
+        m[i] = 1;
+    }
+    return { m, w, h, s };
+}
+
+/** Runs of "something here" along a line, closed after CUT_GAP empty steps. */
+function inkRuns(n, has) {
+    const out = [];
+    let st = -1, last = -1;
+    for (let i = 0; i < n; i++) {
+        if (has(i)) { if (st < 0) st = i; last = i; } else if (st >= 0 && i - last >= CUT_GAP) { out.push([st, last]); st = -1; }
+    }
+    if (st >= 0) out.push([st, last]);
+    return out;
+}
+
+function findCells() {
+    const c = cutter;
+    if (!c) return;
+    const b = cutRect(c);
+    const mk = inkMask(c.im, b);
+    c.cells = c.how === 'grid' ? gridCells(c, b, mk) : autoCells(c, b, mk);
+}
+
+/** Even grid over the box; cells with nothing in them are skipped. All cells are the same size. */
+function gridCells(c, b, { m, w, s }) {
+    const out = [], cw = b.sw / c.cols, ch = b.sh / c.rows;
+    const sw = Math.max(1, Math.floor(cw)), sh = Math.max(1, Math.floor(ch));
+    for (let r = 0; r < c.rows; r++) {
+        for (let q = 0; q < c.cols; q++) {
+            const sx = Math.round(b.sx + q * cw), sy = Math.round(b.sy + r * ch);
+            const mx0 = Math.floor(q * cw * s), mx1 = Math.ceil((q + 1) * cw * s), my0 = Math.floor(r * ch * s), my1 = Math.ceil((r + 1) * ch * s);
+            let ink = 0;
+            for (let y = my0; y < my1; y++) for (let x = mx0; x < mx1 && x < w; x++) ink += m[y * w + x] || 0;
+            if (ink >= Math.max(2, (mx1 - mx0) * (my1 - my0) * 0.002)) out.push({ sx, sy, sw, sh });
+        }
+    }
+    return out;
+}
+
+/**
+ * Finds the pictures by the empty space between them: rows first, then each row from left to right.
+ * The pieces are then widened to one common size (bottom-centred) so the frames don't jump; what
+ * that drags in from the neighbours is wiped later (keep).
+ */
+function autoCells(c, b, { m, w, h, s }) {
+    const rowHas = (y) => { for (let x = 0; x < w; x++) if (m[y * w + x]) return true; return false; };
+    let pieces = [];
+    for (const [ya, yb] of inkRuns(h, rowHas)) {
+        const colHas = (x) => { for (let y = ya; y <= yb; y++) if (m[y * w + x]) return true; return false; };
+        for (const [xa, xb] of inkRuns(w, colHas)) {
+            let ty0 = yb, ty1 = ya;
+            for (let y = ya; y <= yb; y++) for (let x = xa; x <= xb; x++) if (m[y * w + x]) { if (y < ty0) ty0 = y; if (y > ty1) ty1 = y; }
+            pieces.push({ x: xa, y: ty0, w: xb - xa + 1, h: ty1 - ty0 + 1 });
+        }
+    }
+    const big = Math.max(0, ...pieces.map(p => p.w * p.h));
+    pieces = pieces.filter(p => p.w * p.h >= big * CUT_DUST);
+    const nat = pieces.map((p) => {
+        const sx = clamp(Math.floor(b.sx + p.x / s), 0, c.W - 1), sy = clamp(Math.floor(b.sy + p.y / s), 0, c.H - 1);
+        const ex = clamp(Math.ceil(b.sx + (p.x + p.w) / s), sx + 1, c.W), ey = clamp(Math.ceil(b.sy + (p.y + p.h) / s), sy + 1, c.H);
+        return { sx, sy, sw: ex - sx, sh: ey - sy };
+    });
+    if (nat.length < 2) return nat;
+    const Wm = Math.max(...nat.map(p => p.sw)), Hm = Math.max(...nat.map(p => p.sh));
+    return nat.map((p) => ({
+        sx: clamp(Math.round(p.sx + p.sw / 2 - Wm / 2), 0, c.W - Wm),
+        sy: clamp(p.sy + p.sh - Hm, 0, c.H - Hm),
+        sw: Wm, sh: Hm, keep: p,
+    }));
+}
+
 async function onFilePicked(input) {
     const f = win.form;
     if (!f) return;
     f.file = input.files?.[0] || null;
+    f.cut = null;                                        // a new picture starts uncut
+    win.body.querySelector('.tw-filename').textContent = f.file ? f.file.name : '아직 안 골랐어요';
+    return redoUploadPreview();
+}
+
+/** Make the upload preview again with the current switches (and the hand cut, if any). */
+async function redoUploadPreview() {
+    const f = win.form;
+    if (!f) return;
     f.prep = null;
     const box = win.body;
-    box.querySelector('.tw-filename').textContent = f.file ? f.file.name : '아직 안 골랐어요';
     const row = box.querySelector('.tw-prevrow');
     if (!f.file) { row.hidden = true; return; }
-    const file = f.file;
+    const file = f.file, cut = f.cut;
+    const note = box.querySelector('.tw-cutnote');
+    if (note) note.textContent = cut ? '직접 자른 부분만 써요' : '';
     try {
-        const out = await preparePng(file, box.querySelector('[data-f="crop"]').checked, bgTolOf(''));
-        if (win.form !== f || f.file !== file) return;
+        const out = await preparePng(file, box.querySelector('[data-f="crop"]').checked, bgTolOf(''), cut);
+        if (win.form !== f || f.file !== file || f.cut !== cut) return;
         f.prep = out;
         box.querySelector('.tw-prev').src = out.dataUrl;
         row.hidden = false;
@@ -4018,7 +4380,7 @@ async function uploadLook(name, facing, squish) {
     if (!f.file) throw new Error('그림을 골라 주세요.');
     if (f.file.size > 8 * 1024 * 1024) throw new Error('그림이 너무 커요 (8MB 이하).');
     say('그림 올리는 중…');
-    const img = f.prep || await preparePng(f.file, win.body.querySelector('[data-f="crop"]').checked, bgTolOf(''));
+    const img = f.prep || await preparePng(f.file, win.body.querySelector('[data-f="crop"]').checked, bgTolOf(''), f.cut);
     const id = 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const path = await uploadFile(`tavvy_look_${id}.png`, img.base64);
     return { id, name, kind: 'single', facing, squish, roles: { idle: [path] }, roleOpts: {}, baseline: 0, createdAt: Date.now() };
@@ -4607,6 +4969,24 @@ function onWinClick(e) {
     if (act === 'addframe') return win.body.querySelector('[data-f="rolefile"]')?.click();
     if (act === 'pendok') return confirmRolePend();
     if (act === 'pendno') { win.rolePend = null; return drawRolePend(); }
+    if (act === 'cutopen') {
+        const f = win.form;
+        if (!f?.file) return;
+        return openCutter(f.file, { box: f.cut, done: (cuts) => { f.cut = cuts?.[0] || null; redoUploadPreview(); } });
+    }
+    if (act === 'pendcut') {
+        const pend = win.rolePend, p = curPet();
+        if (!pend || pend.files.length !== 1 || !p) return;
+        const space = Math.max(1, FRAMES_MAX - (p.look.roles[pend.key]?.length || 0));
+        return openCutter(pend.files[0], {
+            sheet: true, space, box: pend.sheet ? null : pend.cuts?.[0], sheetOn: pend.sheet,
+            done: (cuts, sheet, extra) => {
+                if (win.rolePend !== pend) return;
+                pend.cuts = cuts; pend.sheet = !!(sheet && cuts); pend.skipped = extra || 0;
+                redoRolePreview();
+            },
+        });
+    }
     const dd = t.closest('[data-deldate]');
     if (dd) return dd.closest('.tw-date')?.remove();
     const df = t.closest('[data-delframe]');
@@ -4637,7 +5017,7 @@ function onWinInput(e) {
     if (f === 'importfile' && e.type === 'change') return importPicked(t);
     if (f === 'rolefile' && e.type === 'change') return addRoleFrames(t);
     if (t.dataset?.ro && e.type === 'change') return setRoleOpt(t.dataset.ro, t.value);
-    if ((f === 'crop' || f === 'bg' || f === 'bgtol') && e.type === 'change' && win.form?.file) { showBgRow(''); return onFilePicked(win.body.querySelector('[data-f="file"]')); }
+    if ((f === 'crop' || f === 'bg' || f === 'bgtol') && e.type === 'change' && win.form?.file) { showBgRow(''); return redoUploadPreview(); }
     if (f === 'bg' && e.type === 'change') return showBgRow('');
     if ((f === 'rolebg' || f === 'rolebgtol' || f === 'rolecrop') && e.type === 'change') { showBgRow('role'); return redoRolePreview(); }
     const s = t.dataset?.s;
@@ -4720,12 +5100,13 @@ function roleEditHtml(p, key) {
 <div class="tw-rolepend" hidden>
   <div class="tw-cap">미리보기 <span class="tw-sub">· 이대로 넣을까요?</span></div>
   <div class="tw-frames tw-pendframes"></div>
+  <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="pendcut"><i class="fa-solid fa-crop-simple"></i> 자르기 · 나누기</div><span class="tw-sub tw-cutnote"></span></div>
   <div class="tw-row"><div class="tw-btn" data-act="pendok"><i class="fa-solid fa-check"></i> 넣기</div><div class="tw-btn" data-act="pendno">취소</div></div>
 </div>
 <input type="file" accept="${PIC_ACCEPT}" multiple data-f="rolefile">
 <label class="tw-check"><input type="checkbox" data-f="rolecrop" checked> 투명 여백 자르기</label>
 ${bgHtml('role')}
-<div class="tw-sub">여러 장을 한 번에 고르면 이름 순서대로 들어가고, 같은 크기면 같은 자리로 잘라서 움직임이 흔들리지 않아요. 배경 지우기를 켜 두면 넣기 전에 미리보기를 보여 줘요.</div>
+<div class="tw-sub">여러 장을 한 번에 고르면 이름 순서대로 들어가고, 같은 크기면 같은 자리로 잘라서 움직임이 흔들리지 않아요. 한 장을 고르면 미리보기에서 직접 자르거나, 여러 동작이 그려진 그림을 여러 장으로 나눌 수 있어요.</div>
 ${speed}
 <label class="tw-label">이 그림이 보는 쪽
   <select data-ro="facing">
@@ -4815,8 +5196,8 @@ async function addRoleFrames(input) {
     const use = files.slice(0, Math.max(0, space));
     if (!use.length) return say(`한 동작에는 그림을 ${FRAMES_MAX}장까지 넣을 수 있어요.`);
     const skipped = files.length - use.length;
-    if (bgTolOf('role') > 0) {                                       // background removal on → look first
-        win.rolePend = { pet: p, key, files: use, skipped, imgs: null };
+    if (bgTolOf('role') > 0 || use.length === 1) {                   // look first (and one picture can be cut or split there)
+        win.rolePend = { pet: p, key, files: use, skipped, imgs: null, cuts: null, sheet: false };
         return redoRolePreview();
     }
     const crop = win.body.querySelector('[data-f="rolecrop"]')?.checked !== false;
@@ -4836,9 +5217,10 @@ async function redoRolePreview() {
     const pend = win.rolePend;
     if (!pend) return;
     const crop = win.body.querySelector('[data-f="rolecrop"]')?.checked !== false;
-    say('배경 지우는 중…');
+    const tol = bgTolOf('role');
+    say(tol > 0 ? '배경 지우는 중…' : '그림 준비 중…');
     try {
-        const imgs = await prepareFrames(pend.files, crop, bgTolOf('role'));
+        const imgs = await prepareFrames(pend.files, crop, tol, pend.cuts);
         if (win.rolePend !== pend) return;
         pend.imgs = imgs;
         say('');
@@ -4853,6 +5235,10 @@ function drawRolePend() {
     if (!box) return;
     const pend = win.rolePend;
     box.hidden = !pend?.imgs;
+    const cutBtn = box.querySelector('[data-act="pendcut"]');
+    if (cutBtn) cutBtn.hidden = pend?.files?.length !== 1;
+    const note = box.querySelector('.tw-cutnote');
+    if (note) note.textContent = !pend?.cuts ? '' : pend.sheet ? `${pend.cuts.length}장으로 나눴어요` : '직접 자른 부분만 써요';
     box.querySelector('.tw-pendframes').innerHTML = pend?.imgs
         ? pend.imgs.map((im, i) => `<div class="tw-frame"><img class="tw-checker" src="${im.dataUrl}" alt=""><span>${i + 1}</span></div>`).join('') : '';
     if (pend?.imgs) box.scrollIntoView?.({ block: 'nearest' });
