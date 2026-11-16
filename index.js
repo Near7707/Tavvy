@@ -22,6 +22,8 @@
 // 0.7.4: no leaning into a pat; moving a pet to this room, copying it here, pet files and PNG cards.
 // 0.7.5: cut a picture by hand when uploading; split a sheet into frames (find them, or rows × columns).
 // 0.7.6: share one sheet out to several actions; frames move both ways.
+// 0.7.7: less standing and staring — little things on the spot, livelier waiting on a message,
+//        longer naps that sending / a reply no longer cut short, a much smaller lean at the input box.
 
 import { saveSettings, saveSettingsDebounced, getRequestHeaders, eventSource, event_types } from '../../../../script.js';
 
@@ -45,11 +47,11 @@ const ctx = () => SillyTavern.getContext();
 // eat:   meal speed after waking (< 1 = gobbles it up, > 1 = slowly)
 // fussy: dislikes rapid taps (💢, closeness is never lost)
 const PERSONALITIES = {
-    aegyo:   { name: '애교', speed: 72, idle: [1.5, 3.5], doze: 0.06, dozeLen: [3, 6],  tap: '♥',  climb: [0.16, 0.24], perch: [2, 5],   land: '♥',  send: '♥',  bump: '♥',     me: [0.60, 0.95], eat: 0.7 },
-    saechim: { name: '새침', speed: 55, idle: [2, 5],     doze: 0.10, dozeLen: [3, 7],  tap: '?',  climb: [0.07, 0.12], perch: [2, 5],   land: 'flick', send: 'glance', bump: 'flick', me: [0.15, 0.60], eat: 1, fussy: true },
-    neugut:  { name: '느긋', speed: 30, idle: [3, 6],     doze: 0.35, dozeLen: [6, 14], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: '하암', send: '♪',  bump: '?',     me: [0.15, 0.50], eat: 1.3 },
-    simsul:  { name: '심술', speed: 58, idle: [2, 4.5],   doze: 0.08, dozeLen: [3, 6],  tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: '흥',  bump: '💢',    me: [0.20, 0.60], eat: 1, fussy: true },
-    musim:   { name: '무심', speed: 42, idle: [3, 7],     doze: 0.12, dozeLen: [4, 9],  tap: '…',  climb: [0.08, 0.14], perch: [8, 16],  land: '…',  send: '…',  bump: 'aside', me: [0.05, 0.25], eat: 1 },
+    aegyo:   { name: '애교', speed: 72, idle: [0.8, 2],   doze: 0.06, dozeLen: [6, 12], tap: '♥',  climb: [0.16, 0.24], perch: [2, 5],   land: '♥',  send: '♥',  bump: '♥',     me: [0.60, 0.95], eat: 0.7 },
+    saechim: { name: '새침', speed: 55, idle: [1.2, 3],   doze: 0.10, dozeLen: [6, 12], tap: '?',  climb: [0.07, 0.12], perch: [2, 5],   land: 'flick', send: 'glance', bump: 'flick', me: [0.15, 0.60], eat: 1, fussy: true },
+    neugut:  { name: '느긋', speed: 30, idle: [2, 4],     doze: 0.35, dozeLen: [12, 24], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: '하암', send: '♪',  bump: '?',     me: [0.15, 0.50], eat: 1.3 },
+    simsul:  { name: '심술', speed: 58, idle: [1.2, 3],   doze: 0.08, dozeLen: [6, 11], tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: '흥',  bump: '💢',    me: [0.20, 0.60], eat: 1, fussy: true },
+    musim:   { name: '무심', speed: 42, idle: [2, 4.5],   doze: 0.12, dozeLen: [8, 16], tap: '…',  climb: [0.08, 0.14], perch: [8, 16],  land: '…',  send: '…',  bump: 'aside', me: [0.05, 0.25], eat: 1 },
 };
 
 // Built-in pets (original characters made for this project).
@@ -123,8 +125,10 @@ const LEVELS = [
     { name: '내편', min: 400, hearts: '♥♥♥♥' },
 ];
 const CLOSE = 50;               // closeness from which "친하면" reactions show (friends)
-const ME_SCALE = 0.5;           // "react to you" chance × this when it decides by itself
-const ME_REST = 6;              // s — not twice in a row within this
+const ME_SCALE = 0.3;           // "react to you" chance × this when it decides by itself
+const ME_REST = 15;             // s — not twice in a row within this
+const FIDGET_CHANCE = 0.3;      // "what next?" → a little something on the spot (look around, sway, stretch, hop…)
+const WAIT_FIDGET = [3.5, 6];   // s — waiting for a reply: a little something this often
 const RAPID_TAPS = 3, RAPID_WINDOW = 1.5;   // this many taps within this many seconds = 연타
 const REVISIT_DAYS = 3;         // away this long → a little bubble by the bed
 const TEARY_DAYS = 7, TEARY_CLOSE = 60;     // away this long and this close → teary when it sees you
@@ -1144,6 +1148,26 @@ class Actor {
         this.talk('level');
     }
 
+    /** A little something on the spot — needs no extra pictures (sits only if it has a 앉기 picture). */
+    startFidget() {
+        const kinds = ['scan', 'scan', 'sway', 'stretch', 'hop', 'hop'];
+        if (this.rec.look.roles?.sit?.length) kinds.push('sit', 'sit');
+        if (!this.plat && !this.isFull()) kinds.push('roll');
+        const k = kinds[Math.floor(Math.random() * kinds.length)];
+        if (k === 'roll') return this.setState('roll');
+        if (k === 'hop') return this.hopInPlace('idle');
+        this.fk = k;
+        this.setState('fidget');
+    }
+
+    /** A small hop straight up, landing where it stood (floor or the same message). */
+    hopInPlace(next) {
+        this.air = true; this.vy = rand(240, 320); this.vx = 0;
+        this.next = next;
+        this.sq = 0.92;
+        this.setState('jump');
+    }
+
     /** Stop and react to you (the person in front of the screen). */
     startMe() {
         const mid = (stage.left + stage.right) / 2;
@@ -1427,7 +1451,8 @@ class Actor {
             this.tiltT = 0;
             if (this.rec.personality?.base === 'musim') fx(this, '…');
         }
-        if (s === 'wait') { this.fxT = rand(0.4, 1.2); this.scanT = 0.6; }
+        if (s === 'wait') { this.fxT = rand(0.4, 1.2); this.scanT = 0.6; this.wvT = rand(2, 3.5); this.wsw = 0; }
+        if (s === 'fidget') { this.fxT = 0; this.tiltT = 0; this.fq = Math.random() < 0.35; this.until = { scan: rand(1.6, 2.4), sway: 1.8, stretch: 1.3, sit: rand(3, 6) }[this.fk] || 1.6; }
         if (s === 'watch') { this.fxT = 0; this.until = 2.8; }
         if (s === 'me') {
             this.fxT = 0;
@@ -1471,6 +1496,7 @@ class Actor {
         // stop and react to you now and then (friendlier = more often)
         if (performance.now() - this.lastMe > ME_REST * 1000 && Math.random() < byCloseness(this, ...this.p.me) * ME_SCALE) return this.startMe();
         if (full && !this.plat && Math.random() < 0.12) return this.setState('roll');   // 데굴데굴
+        if (Math.random() < FIDGET_CHANCE) return this.startFidget();   // a little something on the spot
         // hop up onto a message by itself
         if (ledgesOn() && Math.random() < byCloseness(this, ...this.p.climb)) {
             const t = this.pickClimb();
@@ -1618,7 +1644,7 @@ class Actor {
         this.waiting = true;
         this.tried = new WeakSet();
         this.talk('wait');
-        if (this.free()) this.setState('wait');
+        if (this.free() && this.state !== 'doze') this.setState('wait');   // a napping pet keeps napping (waits after)
     }
 
     endWait() {
@@ -1626,7 +1652,7 @@ class Actor {
         this.waiting = false;
         if (!this.free() && this.state !== 'wait') return;
         if (this.plat && this.plat === gen.target) return this.setState('watch');
-        if (this.state === 'wait' || this.state === 'doze') this.startLook('up', this.x);
+        if (this.state === 'wait') this.startLook('up', this.x);
     }
 
     /** Curious about the reply: put down while waiting, or the reply is taking long. */
@@ -1649,7 +1675,7 @@ class Actor {
 
     /** A long reply arrived: climb up and look at it, or look up at it from below. */
     watchReply(el) {
-        if (!this.free() || this.waiting) return;
+        if (!this.free() || this.waiting || this.state === 'doze') return;
         if (this.plat === el) return this.setState('watch');
         const p = platOf(el);
         if (p && this.climbTo(p, 'watch')) return;
@@ -1766,17 +1792,17 @@ class Actor {
                     if (k === 'aegyo') {                                 // 폴짝폴짝, can't wait
                         pose = this.role('happy', 'idle');
                         bob = Math.abs(Math.sin(this.t * Math.PI * 3)) * 7 * this.k;
-                        this.tiltT = d * 6;
+                        this.tiltT = d * 2;
                         if (this.fxT === 0 && this.t > 0.15) { this.fxT = 1; fx(this, '♪'); }
                     } else if (k === 'neugut') {                         // just woke up, a slow look
-                        this.tiltT = d * Math.min(6, this.t * 5);
+                        this.tiltT = d * Math.min(2, this.t * 2);
                         if (this.fxT === 0 && this.t > 0.8) { this.fxT = 1; fx(this, '?', 'tavvy-fx-small'); }
                     } else if (k === 'simsul') {                         // waits… 💢
-                        this.tiltT = d * 6;
+                        this.tiltT = d * 2;
                         if (this.fxT === 0 && this.t > 1.0) { this.fxT = 1; fx(this, '💢'); }
                         if (this.fxT === 1) pose = this.rp('angry');
                     } else {
-                        this.tiltT = d * 6;
+                        this.tiltT = d * 2;
                         if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '?', 'tavvy-fx-small'); }
                     }
                     if (this.t > this.until) { this.pk = null; this.setState('idle'); }
@@ -1858,7 +1884,7 @@ class Actor {
                     if (Math.abs(d) <= sp * dt) {
                         this.x = this.tx;
                         if (this.edge && this.plat) { this.edge = false; this.setState('edge'); this.until = rand(0.6, 1.1); }
-                        else { this.edge = false; this.setState('idle'); }
+                        else { this.edge = false; this.setState('idle'); this.until *= 0.6; }   // only a short stop after a walk
                         break;
                     }
                     this.x += Math.sign(d) * sp * dt;
@@ -1892,9 +1918,32 @@ class Actor {
                     pose = this.rp('climb');
                     if (this.t > 0.35) this.launch();
                     break;
+                case 'fidget': {                       // a little something on the spot
+                    breath = 1;
+                    if (this.food > 0 || this.mealPending) { this.sqT = 1; this.decide(); break; }   // food coming → eat
+                    const k = this.fk;
+                    if (k === 'scan') {                                  // 두리번
+                        pose = this.role('look', 'idle');
+                        this.tiltT = Math.sin(this.t * Math.PI * 1.3) * 4;
+                        if (this.fq && this.fxT === 0 && this.t > 0.8) { this.fxT = 1; fx(this, '?', 'tavvy-fx-small'); }
+                    } else if (k === 'sway') {                           // humming, swaying
+                        pose = this.role('happy', 'idle');
+                        this.tiltT = Math.sin(this.t * Math.PI * 2) * 5;
+                        if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '♪', 'tavvy-fx-small'); }
+                    } else if (k === 'stretch') {                        // 기지개
+                        this.tiltT = 0;
+                        this.sqT = this.t < 0.9 ? 1.12 : 1;
+                    } else if (k === 'sit') {                            // sits down for a bit (has a 앉기 picture)
+                        pose = this.role('sit', 'idle');
+                        breath = 0.8;
+                    }
+                    if (this.t > this.until) { this.sqT = 1; this.tiltT = 0; this.setState('idle'); this.until = rand(0.4, 1.2); }
+                    break;
+                }
                 case 'perch':                          // sitting on a message
                     breath = 0.8;
                     pose = this.role('sit', 'idle');
+                    if (!this.rec.look.roles?.sit?.length) this.tiltT = Math.sin(this.t * 1.1) * 3;   // no 앉기 picture: a lazy sway
                     if (this.t > this.until) this.decide();
                     break;
                 case 'edge':                           // at the end of a ledge: stop, look down… then off
@@ -1941,7 +1990,22 @@ class Actor {
                         }
                     }
                     if (!this.waiting || !gen.active) { this.waiting = false; this.setState('idle'); break; }
-                    if (this.p.perch === 'doze' && this.t > 6) this.setState('doze');   // 느긋쟁이 nods off while waiting
+                    if (this.p.perch === 'doze' && this.t > 6) { this.setState('doze'); break; }   // 느긋쟁이 nods off while waiting
+                    if (this.wsw > 0) {                                  // swaying while it waits
+                        this.wsw -= dt;
+                        this.tiltT = Math.sin(this.t * Math.PI * 2) * 4;
+                        pose = this.role('happy', 'idle');
+                    }
+                    this.wvT -= dt;
+                    if (this.wvT <= 0 && this.wsw <= 0) {               // not just standing there: a little something now and then
+                        this.wvT = rand(...WAIT_FIDGET);
+                        const r = Math.random(), [L, R] = this.range();
+                        const long = (performance.now() - gen.t0) / 1000 > 10;
+                        if (r < 0.3 && R - L > 50) { this.walkTo(clamp(this.x + (Math.random() < 0.5 ? -1 : 1) * rand(25, 70), L, R)); break; }
+                        if (r < 0.5) { this.hopInPlace('wait'); break; }
+                        if (r < 0.65 && long) { this.setState('doze'); this.until = rand(3, 6); break; }
+                        if (r < 0.85) { this.wsw = 1.6; fx(this, '♪', 'tavvy-fx-small'); }
+                    }
                     break;
                 }
                 case 'watch':                          // looking at the reply from on top of it
@@ -1950,7 +2014,10 @@ class Actor {
                     this.tiltT = (this.side ? this.dir : 1) * 6;
                     if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '?'); }
                     if (this.fxT === 1 && this.t > 1.4) { this.fxT = 2; fx(this, '!'); }
-                    if (this.t > this.until) this.setState('idle');
+                    if (this.t > this.until) {                          // seen it — then sit / nap / play up there
+                        const r = Math.random();
+                        this.setState(this.plat && r < 0.35 ? 'perch' : this.plat && r < 0.5 ? 'doze' : 'idle');
+                    }
                     break;
                 case 'sniff': {                        // a look toward the chat, "!" → food
                     breath = 1;
@@ -2240,7 +2307,7 @@ function tick(t) {
 }
 
 /* ---------- two pets meeting on the same floor / ledge ---------- */
-const BUMPABLE = ['idle', 'walk', 'doze', 'perch', 'look', 'wait', 'watch', 'edge'];
+const BUMPABLE = ['idle', 'walk', 'doze', 'perch', 'look', 'wait', 'watch', 'edge', 'fidget'];
 
 function bumpCheck() {
     for (let i = 0; i < actors.length; i++) {
@@ -2270,7 +2337,7 @@ function bumpCheck() {
  * Food (stage 4) — counting, the bowl, sparkles, backups
  * ===================================================================== */
 
-const EATABLE = ['idle', 'walk', 'eat', 'look', 'wait', 'watch', 'perch', 'edge', 'me', 'peekin', 'follow'];
+const EATABLE = ['idle', 'walk', 'eat', 'look', 'wait', 'watch', 'perch', 'edge', 'me', 'peekin', 'follow', 'fidget'];
 
 /** "2026-11-12" — the day starts at 6 a.m. */
 function dayKey(t = Date.now()) {
@@ -2876,7 +2943,7 @@ function onTyping() {
         if (!start && now < a.peekInNext) continue;
         a.peekInNext = now + rand(...PEEKIN_GAP) * 1000;
         const k = a.rec.personality?.base;
-        const okState = ['idle', 'walk', 'perch'].includes(a.state) || (a.state === 'doze' && k === 'neugut');
+        const okState = ['idle', 'walk', 'perch', 'fidget'].includes(a.state) || (a.state === 'doze' && k === 'neugut');
         if (!okState || Math.random() >= (start ? PEEKIN_CHANCE : PEEKIN_AGAIN)) continue;
         if (k === 'musim') { if (a.peekInSession === typing.session) continue; a.peekInSession = typing.session; }
         a.startPeekIn();
@@ -2899,7 +2966,7 @@ function checkIdle() {
     if (performance.now() - lastAct < IDLE_DOZE * 1000) return;
     for (const a of actors) {
         // one roll per quiet spell; a pet busy right then (eating, held…) gets its roll a little later
-        if (a.idleTried || !can(a, 'dozeWait') || !a.free() || a.waiting || !['idle', 'walk', 'perch', 'doze'].includes(a.state)) continue;
+        if (a.idleTried || !can(a, 'dozeWait') || !a.free() || a.waiting || !['idle', 'walk', 'perch', 'doze', 'fidget'].includes(a.state)) continue;
         a.idleTried = true;
         if (Math.random() >= IDLE_DOZE_CHANCE) continue;
         measurePlats();
@@ -3086,7 +3153,7 @@ function onMySend(id) {
         const x = r ? (r.left + r.right) / 2 : (stage.left + stage.right) / 2;
         measurePlats();
         for (const a of actors) {
-            if (!a.free() || Math.random() >= byCloseness(a, 0.3, 0.85)) continue;
+            if (!a.free() || a.state === 'doze' || Math.random() >= byCloseness(a, 0.3, 0.85)) continue;
             a.after = a.state === 'perch' ? 'idle' : a.waiting ? 'wait' : 'idle';
             a.startLook(a.p.send, x);
         }
