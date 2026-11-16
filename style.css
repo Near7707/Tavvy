@@ -1062,3 +1062,10 @@
 .tavvy-win .tw-fbtn.tw-fon { background: var(--tw-chip-bg); color: var(--tw-chip-fg); font-weight: 600; }
 .tavvy-win .tw-rsel { flex: none; width: auto; max-width: 52%; font-size: 13px; padding: 3px 6px; }
 @media (pointer: coarse) { .tavvy-win .tw-rsel { font-size: 16px; } }
+
+/* ---------- 0.8.1 ---------- */
+/* 키 맞추기 pictures are drawn finer than the 기본 picture; let them be smooth even on a pixel pet */
+.tavvy-pixel .tavvy-body img.tavvy-smooth { image-rendering: auto; }
+.tavvy-win .tw-sheet-ref { margin: 8px 0; }
+.tavvy-win .tw-sheet-ref select { max-width: 55%; }
+@media (pointer: coarse) { .tavvy-win .tw-sheet-ref select { font-size: 16px; } }

@@ -216,6 +216,7 @@ const ROLE_GROUPS = [
         { key: 'aside', name: '등 돌리기', fb: 'walk' },
         { key: 'fluster', name: '당황', fb: 'idle' },
         { key: 'wave', name: '손 흔들기', fb: 'happy' },
+        { key: 'pat', name: '톡톡', fb: 'jump', note: '클릭·탭하면 폴짝 뛰는 동안 나와요' },
     ] },
     { key: 'rest', name: '쉬기·먹기', roles: [
         { key: 'sit', name: '앉기', fb: 'idle' },
@@ -234,6 +235,12 @@ const STEP_ROLES = { walk: '걸음에 맞춰 넘어가요', eat: '한 입 먹을
 const FRAME_FPS = { slow: 2.5, normal: 5, fast: 9 };
 const SPEED_NAMES = { slow: '느리게', normal: '보통', fast: '빠르게' };
 const FRAMES_MAX = 8;            // pictures in one action at most
+// 키 맞추기 (0.8.1): a picture fitted to the 기본 picture carries three almost-invisible pixels in its top-left
+// corner (alpha 7, 11, then m). Such a picture is drawn at the 기본 picture's scale ÷ m instead of being
+// squeezed into its box. Kept inside the picture so pet files, cards and copies keep it with no extra data.
+const FIT_MARK = [7, 11];
+const FIT_M_MAX = 8;
+const FIT_MAX_PX = 1600;
 
 // speech lines (6-2)
 const TALK_MOMENTS = [
@@ -519,6 +526,27 @@ function imgUrl(path) {
     if (path.startsWith('builtin:')) return BASE + 'assets/pets/' + path.slice(8);
     if (/^(https?:|data:|\/)/.test(path)) return path;
     return '/' + path;
+}
+
+/** Is this picture a 키 맞추기 one? { w, h, m } once known, null if not (or not yet — it is checked once, in the background). */
+const fits = new Map();
+function fitOf(src) {
+    if (!src) return null;
+    if (fits.has(src)) return fits.get(src);
+    fits.set(src, null);
+    if (src.startsWith(BASE)) return null;                                  // built-in pets never are
+    loadImage(src).then((im) => {
+        const n = FIT_MARK.length + 1;
+        if (im.naturalWidth < n) return;
+        const cv = document.createElement('canvas');
+        cv.width = n; cv.height = 1;
+        const g = cv.getContext('2d', { willReadFrequently: true });
+        g.drawImage(im, 0, 0, n, 1, 0, 0, n, 1);
+        const d = g.getImageData(0, 0, n, 1).data;
+        const m = d[(n - 1) * 4 + 3];
+        if (FIT_MARK.every((a, i) => d[i * 4 + 3] === a) && m >= 1 && m <= FIT_M_MAX) fits.set(src, { w: im.naturalWidth, h: im.naturalHeight, m });
+    }).catch(() => { /* stays a normal picture */ });
+    return null;
 }
 
 function loadImage(src) {
@@ -1536,7 +1564,7 @@ class Actor {
             const top = stage.floorY - this.y - this.h;
             this.grab.x = clamp(down.x - left, 0, this.w);
             this.grab.y = clamp(down.y - top, 0, this.h);
-            this.held = true; this.air = false; this.next = null;
+            this.held = true; this.air = false; this.next = null; this.patJump = false;
             this.spin = 0;
             this.setState('held');
             this.ptr.x = e?.clientX ?? down.x; this.ptr.y = e?.clientY ?? down.y;
@@ -1599,7 +1627,7 @@ class Actor {
         const close = closenessOf(this.rec) >= CLOSE;
         const soft = can(this, 'soft');
         const rapid = pp.fussy && this.taps.length >= RAPID_TAPS;
-        if (!this.air) { this.air = true; this.vy = 300; this.vx = 0; this.next = 'idle'; }
+        if (!this.air) { this.air = true; this.vy = 300; this.vx = 0; this.next = 'idle'; this.patJump = true; }
         if (rapid) return fx(this, '💢');   // 연타 싫어! (closeness is not lost)
         patPet(this.rec);
         this.talk('pat');
@@ -1626,6 +1654,7 @@ class Actor {
     land(impact) {
         this.air = false;
         this.climbJump = false;
+        this.patJump = false;
         this.leftPlat = null;
         this.vy = 0; this.vx = 0;
         this.body.style.transformOrigin = '';
@@ -2022,7 +2051,7 @@ class Actor {
                 }
             }
             if (!landed && this.y <= 0) { const impact = -this.vy; this.y = 0; this.land(impact); }
-            pose = this.state === 'fall' ? this.rp('fall') : this.state === 'appear' ? this.rp('appear') : this.climbJump ? this.rp('climb') : this.rp('jump');
+            pose = this.state === 'fall' ? this.rp('fall') : this.state === 'appear' ? this.rp('appear') : this.climbJump ? this.rp('climb') : this.patJump ? this.rp('pat') : this.rp('jump');
         } else if (!this.trackPlat()) {
             // its ledge went away this frame (falling or gone off the top)
             if (this.state === 'off') return;
@@ -2565,10 +2594,23 @@ class Actor {
         }
         const src = imgUrl(list[i % list.length]);
         if (src !== this.curSrc) { this.img.src = src; this.curSrc = src; }
+        this.placeImg(fitOf(src));
         const f = opt.facing || look.facing;                                      // each picture may face its own way
         const flip = (f === 'left' || f === 'right') && (f === 'right' ? this.dir < 0 : this.dir > 0);
         this.img.classList.toggle('tavvy-flip', flip);
         if (this.sayEl) this.placeSay();
+    }
+
+    /** A 키 맞추기 picture: its own size at the 기본 picture's scale, standing on the box's bottom middle. */
+    placeImg(fit) {
+        const key = fit ? `${fit.w}|${fit.h}|${fit.m}|${this.w}|${this.h}|${this.k}` : '';
+        if (key === this.fitKey) return;
+        this.fitKey = key;
+        const st = this.img.style;
+        this.img.classList.toggle('tavvy-smooth', !!fit && fit.m > 1);
+        if (!fit) { st.cssText = ''; return; }
+        const W = fit.w * this.k / fit.m, H = fit.h * this.k / fit.m;
+        Object.assign(st, { position: 'absolute', maxWidth: 'none', maxHeight: 'none', width: W.toFixed(1) + 'px', height: H.toFixed(1) + 'px', left: ((this.w - W) / 2).toFixed(1) + 'px', top: (this.h - H).toFixed(1) + 'px' });
     }
 
     /** A picture for this action, or what stands in for it (ROLE_DEFS fallbacks, ending at 기본). */
@@ -5558,7 +5600,7 @@ function onWinInput(e) {
     if (f === 'importfile' && e.type === 'change') return importPicked(t);
     if (f === 'rolefile' && e.type === 'change') return addRoleFrames(t);
     if (f === 'sheetfile' && e.type === 'change') return sheetPicked(t);
-    if ((t.dataset?.sheetpick != null || t.dataset?.sheetrow != null) && e.type === 'change') return onSheetInput(t);
+    if ((t.dataset?.sheetpick != null || t.dataset?.sheetrow != null || t.dataset?.sheetref != null) && e.type === 'change') return onSheetInput(t);
     if (t.dataset?.ro && e.type === 'change') return setRoleOpt(t.dataset.ro, t.value);
     if ((f === 'crop' || f === 'bg' || f === 'bgtol') && e.type === 'change' && win.form?.file) { showBgRow(''); return redoUploadPreview(); }
     if (f === 'bg' && e.type === 'change') return showBgRow('');
@@ -5822,7 +5864,7 @@ async function sheetPicked(input) {
         done: (cuts) => {
             if (curPet() !== p) return;
             const rows = cuts ? cuts.map(c => c.row ?? 0) : [0];
-            win.sheet = { pet: p, file, cuts, rows, picks: rows.map(() => ''), imgs: null };
+            win.sheet = { pet: p, file, cuts, rows, picks: rows.map(() => ''), imgs: null, ref: -1 };
             drawRoles();
             redoSheet();
         },
@@ -5856,7 +5898,7 @@ function sheetFit(p, sh) {
     const count = {}, fit = [];
     sh.picks.forEach((k, i) => {
         if (!k) return;
-        count[k] ??= p.look.roles[k]?.length || 0;
+        count[k] ??= k === 'idle' ? 0 : (p.look.roles[k]?.length || 0);   // 기본 is replaced, not added to
         if (count[k] < FRAMES_MAX) { count[k]++; fit[i] = true; } else fit[i] = false;
     });
     return fit;
@@ -5867,6 +5909,7 @@ function sheetHtml() {
 <div class="tw-cap">어느 동작에 넣을까요?</div>
 <div class="tw-sub">그림 아래 칸을 눌러 동작을 골라요. 줄 옆 칸으로 그 줄 전부를 한 번에 고를 수도 있어요. 고르지 않은 그림은 넣지 않고, 이미 그림이 있는 동작에는 뒤에 붙어요.</div>
 <div class="tw-sheet"></div>
+<div class="tw-sheet-ref"></div>
 <label class="tw-check"><input type="checkbox" data-f="rolecrop" checked> 투명 여백 자르기</label>
 ${bgHtml('role')}
 <div class="tw-row"><div class="tw-btn tw-btn-main" data-act="sheetok"></div><div class="tw-btn" data-act="sheetno">취소</div></div>
@@ -5894,10 +5937,11 @@ function drawSheet() {
     const over = {};
     sh.picks.forEach((k, i) => { if (k && fit[i] === false) over[k] = (over[k] || 0) + 1; });
     const warn = Object.entries(over).map(([k, n]) => {
-        const room = FRAMES_MAX - (p.look.roles[k]?.length || 0);
+        const room = FRAMES_MAX - (k === 'idle' ? 0 : (p.look.roles[k]?.length || 0));
         return `${esc(ROLE_DEFS[k]?.name || k)}: ${room > 0 ? `${room}장만 더 들어가요` : '이미 가득 찼어요'} (흐린 ${n}장은 빠져요)`;
     });
     if (warn.length) box.insertAdjacentHTML('beforeend', `<div class="tw-sheet-warn">${warn.join('<br>')}</div>`);
+    drawSheetRef(p, sh);
     const n = fit.filter(Boolean).length;
     const ok = win.body.querySelector('[data-act="sheetok"]');
     if (ok) ok.innerHTML = `<i class="fa-solid fa-check"></i> 넣기 (${n}장)`;
@@ -5907,6 +5951,7 @@ function onSheetInput(t) {
     const sh = win.sheet;
     if (!sh) return;
     if (t.dataset.sheetpick != null) sh.picks[Number(t.dataset.sheetpick)] = ROLE_DEFS[t.value] ? t.value : '';
+    if (t.dataset.sheetref != null) sh.ref = Number(t.value) >= 0 && Number(t.value) < sh.picks.length ? Number(t.value) : -1;
     if (t.dataset.sheetrow != null && t.value) {
         const r = Number(t.dataset.sheetrow), v = t.value === '-' ? '' : (ROLE_DEFS[t.value] ? t.value : '');
         sh.rows.forEach((x, i) => { if (x === r) sh.picks[i] = v; });
@@ -5926,6 +5971,11 @@ async function confirmSheet() {
     busy = true;
     const uploaded = [];
     try {
+        if (!groups.has('idle') && sh.ref >= 0 && sh.imgs[sh.ref]) {          // 키 맞추기: the whole sheet, to the 기본 picture
+            say('키 맞추는 중…');
+            const fitted = await fitSheet(p, sh.imgs[sh.ref], [...groups.values()].flat());
+            for (const [k, imgs] of groups) groups.set(k, imgs.map(im => fitted.get(im)));
+        }
         say(`그림 ${total}장 올리는 중…`);
         const paths = new Map();
         for (const [k, imgs] of groups) {
@@ -5942,7 +5992,7 @@ async function confirmSheet() {
         if (curPet() !== p || win.sheet !== sh) throw new Error('창이 바뀌었어요');
         win.sheet = null;
         const saved = await changeRoles(p, (look) => {
-            for (const [k, list] of paths) look.roles[k] = [...(look.roles[k] || []), ...list].slice(0, FRAMES_MAX);
+            for (const [k, list] of paths) look.roles[k] = [...(k === 'idle' ? [] : (look.roles[k] || [])), ...list].slice(0, FRAMES_MAX);   // 기본 is replaced
         });
         const names = [...paths.keys()].map(k => ROLE_DEFS[k]?.name || k).join(' · ');
         say((saved ? `${total}장 넣었어요: ${names}` : '넣었지만 저장이 늦어지고 있어요.'));
@@ -5953,6 +6003,63 @@ async function confirmSheet() {
     } finally {
         busy = false;
     }
+}
+
+/** Under the sheet: 기본 picked → it replaces the old one; otherwise pick a picture to match heights by. */
+function drawSheetRef(p, sh) {
+    const box = win.body.querySelector('.tw-sheet-ref');
+    if (!box) return;
+    if (sh.picks.includes('idle')) {
+        box.innerHTML = '<div class="tw-sub">기본으로 고른 그림이 원래 기본 그림을 바꿔요. 같은 시트 그림끼리는 크기가 딱 맞아요.</div>';
+        return;
+    }
+    const opts = sh.picks.map((_, i) => `<option value="${i}"${sh.ref === i ? ' selected' : ''}>${i + 1}번 그림</option>`).join('');
+    box.innerHTML = `<div class="tw-row"><span class="tw-cap tw-grow">키 맞추기</span><select data-sheetref="1"><option value="-1"${sh.ref < 0 ? ' selected' : ''}>맞추지 않음</option>${opts}</select></div>
+<div class="tw-sub">서 있는 그림 번호를 고르면, 그 그림 속 키가 지금 기본 그림 속 키와 같아지게 시트 전체를 맞춰 넣어요.</div>`;
+}
+
+async function canvasOf(src) {
+    const im = await loadImage(src);
+    const cv = document.createElement('canvas');
+    cv.width = im.naturalWidth; cv.height = im.naturalHeight;
+    const g = cv.getContext('2d', { willReadFrequently: true });
+    g.drawImage(im, 0, 0);
+    return { cv, g, w: cv.width, h: cv.height };
+}
+
+/**
+ * 키 맞추기: scale every picture of the sheet by one factor, so that the reference picture's figure is as
+ * tall as the figure in the 기본 picture. The results are drawn at the 기본 picture's scale (not squeezed
+ * into its box — a lying-down picture may be wider), which FIT_MARK tells the pet.
+ * Returns Map(old picture → new picture).
+ */
+async function fitSheet(p, refImg, imgs) {
+    const base = await canvasOf(imgUrl(p.look.roles.idle[0]));
+    const bb = opaqueBox(base.g, base.w, base.h);
+    const ref = await canvasOf(refImg.dataUrl);
+    const rb = opaqueBox(ref.g, ref.w, ref.h);
+    if (!bb || !rb) throw new Error('기준 그림이 비어 있어요');
+    const k = bb.sh / rb.sh;                                   // sheet px → 기본 px
+    const big = Math.max(...imgs.map(im => Math.max(im.w, im.h))) * k;
+    let m = k < 1 ? clamp(Math.round(1 / k), 1, FIT_M_MAX) : 1;   // drawn m× finer than the 기본 picture, so it stays sharp
+    while (m > 1 && big * m > FIT_MAX_PX) m--;
+    const out = new Map();
+    for (const im of new Set(imgs)) {
+        const c = await canvasOf(im.dataUrl);
+        const w = Math.max(FIT_MARK.length + 1, Math.round(c.w * k * m)), h = Math.max(1, Math.round(c.h * k * m));
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        const g = cv.getContext('2d');
+        g.imageSmoothingEnabled = true;
+        g.imageSmoothingQuality = 'high';
+        g.drawImage(c.cv, 0, 0, w, h);
+        const mark = g.createImageData(FIT_MARK.length + 1, 1);
+        [...FIT_MARK, m].forEach((a, i) => { mark.data[i * 4 + 3] = a; });
+        g.putImageData(mark, 0, 0);
+        const dataUrl = cv.toDataURL('image/png');
+        out.set(im, { base64: dataUrl.split(',')[1], dataUrl, w, h });
+    }
+    return out;
 }
 
 /** Upload ready pictures into one action's slot. */
