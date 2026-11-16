@@ -273,11 +273,12 @@ const DASH_SPEED = 650;          // px/s — 휙휙
 const DASH_HOLD = [0.4, 1.1];    // s — a stop between darts
 const GHOST_GAP = 0.045;         // s — one afterimage this often while darting
 
-/** The ways this pet gets about on the screen (always at least one). */
+/** The ways this pet gets about on the screen (0.8.2: may be none — each one is 끔 in the 행동 tab). */
 function movesOf(rec) {
-    const m = (Array.isArray(rec?.moves) ? rec.moves : []).filter(k => MOVES[k]);
-    return m.length ? [...new Set(m)] : ['wall'];
+    if (!Array.isArray(rec?.moves)) return ['wall'];
+    return Object.keys(MOVES).filter(k => rec.moves.includes(k));
 }
+const SCREEN_SCALE = 0.8;        // 0.8.2: getting about on the screen a little less often than before (p.wall × this)
 const TALK_GAP = 8;              // s — ordinary lines not closer together than this
 const SAY_MS = 2600;             // how long a speech bubble stays
 const LINE_MAX = 40;             // characters in one line
@@ -365,10 +366,23 @@ function fillDefaults(target, defaults) {
     }
 }
 
+/** 0.8.2: the one '화면 돌아다니기' setting ('screen') becomes 오르기 / 날기 / 휙휙 rows — the ways it had keep its 빈도. */
+function splitScreen(p) {
+    if (!p || typeof p !== 'object') return;
+    const off = Array.isArray(p.off) && p.off.includes('screen');
+    const f = p.freq && typeof p.freq === 'object' ? p.freq.screen : undefined;
+    if (!off && f === undefined) return;
+    const on = movesOf(p);
+    if (off) { p.moves = []; p.off = p.off.filter(k => k !== 'screen'); }
+    else { p.moves = on; for (const m of on) if (p.freq[m] === undefined) p.freq[m] = f; }
+    if (p.freq) delete p.freq.screen;
+}
+
 function migrate(r) {
     fillDefaults(r.settings ??= {}, defaultSettings());
     for (const p of r.pets) {
         if (!p || typeof p !== 'object') continue;
+        splitScreen(p);
         if (Array.isArray(p.lines)) p.lines = p.lines.length ? { play: p.lines.filter(x => typeof x === 'string') } : {};   // was a plain list (always empty)
         const blank = newPetRecord({ id: p.id, name: p.name, personality: 'aegyo', look: {} });
         delete blank.createdAt; delete blank.lastVisit; delete blank.home;
@@ -889,7 +903,9 @@ function unlocksFor(rec) {
 
 /** Everyday behaviours with an 끔 / 드물게 / 보통 / 자주 choice in the 행동 tab (walking and eating always stay). */
 const BASIC_ACTS = [
-    { key: 'screen', name: '화면 돌아다니기' },
+    { key: 'wall',   name: '화면 오르기' },     // 0.8.2: was one row '화면 돌아다니기' ('screen') + chips in 꾸미기
+    { key: 'fly',    name: '날기' },
+    { key: 'dash',   name: '휙휙' },
     { key: 'climb',  name: '말풍선 오르기' },
     { key: 'doze',   name: '졸기' },
     { key: 'fidget', name: '제자리 놀기' },
@@ -934,7 +950,7 @@ const paceOf = (rec) => (PACES.find(x => x[0] === rec?.pace) || PACES[1])[2];
 /** Anything changed from the preset (빈도, 반응, 걸음)? */
 function customised(rec) {
     const r = rec?.personality?.react || {};
-    return (rec?.off?.length || 0) > 0 || Object.keys(rec?.freq || {}).length > 0 || (rec?.pace && rec.pace !== 'norm')
+    return (rec?.off?.length || 0) > 0 || Object.keys(rec?.freq || {}).length > 0 || (rec?.pace && rec.pace !== 'norm') || movesOf(rec).join() !== 'wall'
         || Object.values(r).some(k => PERSONALITIES[k]);
 }
 
@@ -1087,7 +1103,6 @@ class Actor {
         this.meal = null;            // { post: 'nod' | 'feast' | null, big }
         this.afterMeal = null;       // a reply to climb up and look at once it has eaten
         this.fullNow = false;        // became full during this meal → nods off afterwards
-        this.slowT = 0;              // s — walking slowly after a big meal
         this.spin = 0;               // deg — rolling over (full)
         this.reunion = null;         // { away, skip, long, teary } — the greeting after being woken
         this.gq = null; this.gi = 0; this.gfx = false;   // greeting steps / which one / its effect shown
@@ -1291,9 +1306,22 @@ class Actor {
     }
 
     /** 화면 오르기 (0.7.12): straight up the screen from where it stands on the floor, back to you. */
-    startWall() {
+    /** 오르기 / 날기 / 휙휙 — each with its own 빈도, sharing one chance between the ones that are on (or none). */
+    pickMove() {
         const list = movesOf(this.rec);
-        const m = list[Math.floor(Math.random() * list.length)];
+        if (!list.length) return null;
+        let r = Math.random();
+        const each = (this.p.wall || 0) * SCREEN_SCALE / list.length;
+        for (const m of list) {
+            const c = chance(this, m, each);
+            if (r < c) return m;
+            r -= c;
+        }
+        return null;
+    }
+
+    startWall(m) {
+        if (!MOVES[m]) { const list = movesOf(this.rec); m = list[Math.floor(Math.random() * list.length)] || 'wall'; }
         this.y = 0;
         if (m === 'wall') return this.setState('stroll');
         this.fmode = m;                                           // 날기 / 휙휙
@@ -1775,7 +1803,10 @@ class Actor {
         if (full && !this.plat && Math.random() < chance(this, 'roll', 0.12)) return this.setState('roll');   // 데굴데굴
         if (full && Math.random() < FULL_TUMMY) { this.fk = 'tummy'; return this.setState('fidget'); }   // 배 통통 ♪
         if (Math.random() < chance(this, 'fidget', FIDGET_CHANCE)) return this.startFidget();   // a little something on the spot
-        if (!this.plat && !this.waiting && root?.settings?.stroll !== false && stageIsChat() && Math.random() < chance(this, 'screen', this.p.wall || 0)) return this.startWall();
+        if (!this.plat && !this.waiting && root?.settings?.stroll !== false && stageIsChat()) {
+            const m = this.pickMove();
+            if (m) return this.startWall(m);
+        }
         // hop up onto a message by itself
         if (ledgesOn() && Math.random() < chance(this, 'climb', byCloseness(this, ...this.p.climb))) {
             const t = this.pickClimb();
@@ -2009,7 +2040,6 @@ class Actor {
         let pose = this.role('idle');
 
         if (this.state !== 'tuck' && this.scale < 1) this.scale = Math.min(1, this.scale + dt * 4);
-        if (this.slowT > 0) this.slowT -= dt;
         if (this.eatT > 0) this.eatT -= dt;
 
         if (this.wallOn && (this.held || this.air)) this.endWall();   // picked up / tapped off the wall or screen
@@ -2160,7 +2190,7 @@ class Actor {
                 case 'walk': {
                     if (this.food > 0) { this.edge = false; this.setState('eat'); break; }
                     const d = this.tx - this.x;
-                    const sp = (this.p.speed * paceOf(this.rec)) * (this.slowT > 0 ? 0.6 : 1);
+                    const sp = this.p.speed * paceOf(this.rec);          // 0.8.2: no more slow steps after a big meal (felt unnatural)
                     if (Math.abs(d) <= sp * dt) {
                         this.x = this.tx;
                         if (this.edge && this.plat) { this.edge = false; this.setState('edge'); this.until = rand(0.6, 1.1); }
@@ -2428,7 +2458,6 @@ class Actor {
                     this.fxT -= dt;
                     if (this.fxT <= 0) { this.fxT = 1.1; fx(this, 'Z', 'tavvy-fx-z'); }
                     if (this.t > this.until) {
-                        this.slowT = 8;
                         const n = this.after || 'idle'; this.after = 'idle';
                         if (n === 'dance') this.setState('dance'); else this.mealDone();
                     }
@@ -2697,9 +2726,35 @@ function tick(t) {
         if (ox !== stage.ox || oy !== stage.oy) placeBed();
     }
     for (const a of [...actors]) a.step(dt);
-    if (actors.length > 1) bumpCheck();
+    if (actors.length > 1) { bumpCheck(); apartCheck(dt); }
     if (sparkles.length) stepSparkles(dt);
     if (actors.length) raf = requestAnimationFrame(tick);
+}
+
+/* ---------- 0.8.2: two pets standing right on top of each other → one walks a few steps off ---------- */
+const APART_NEAR = 1 / 3;       // × the smaller width — closer than this counts as "on top of each other"
+const APART_WAIT = 1.5;         // s of that before one of them moves
+
+function apartCheck(dt) {
+    for (const a of actors) {
+        let other = null;
+        if (a.state === 'idle' && !a.air && !a.held && !a.gone) {
+            other = actors.find(b => b !== a && !b.air && !b.held && !b.gone && b.plat === a.plat && b.state !== 'walk'
+                && Math.abs(a.x - b.x) < Math.min(a.w, b.w) * APART_NEAR);
+        }
+        a.stackT = other ? (a.stackT || 0) + dt : 0;
+        if (a.stackT < APART_WAIT) continue;
+        a.stackT = 0;
+        if (other) other.stackT = 0;
+        const [L, R] = a.range();
+        let away = a.x === other.x ? (Math.random() < 0.5 ? -1 : 1) : Math.sign(a.x - other.x);
+        const far = Math.max(a.w, other.w) * rand(0.8, 1.3);
+        let tx = clamp(a.x + away * far, L, Math.max(L, R));
+        if (Math.abs(tx - a.x) < far * 0.5) { away = -away; tx = clamp(a.x + away * far, L, Math.max(L, R)); }   // a wall that side
+        if (Math.abs(tx - a.x) <= 8) continue;
+        a.dir = away; a.tx = tx; a.edge = false;
+        a.setState('walk');
+    }
 }
 
 /* ---------- two pets meeting on the same floor / ledge ---------- */
@@ -3913,7 +3968,7 @@ function journalHtml(p) {
 
 /** One behaviour in the 행동 tab: 끔 / 드물게 / 보통 / 자주 (or just 끔 / 켬). */
 function freqRow(p, u) {
-    const off = isOff(p, u.key);
+    const off = MOVES[u.key] ? !movesOf(p).includes(u.key) : isOff(p, u.key);
     const cur = off ? 'off' : (FREQ_X[p.freq?.[u.key]] ? p.freq[u.key] : 'norm');
     const opts = NO_FREQ.includes(u.key) ? [['off', '끔'], ['norm', '켬']] : FREQS;
     return `<div class="tw-frow${off ? ' tw-frow-off' : ''}"><span class="tw-fname">${esc(u.name)}</span><span class="tw-fseg">${opts.map(([k, n]) =>
@@ -3926,7 +3981,11 @@ function setFreq(key, v) {
     if (!p || readOnly) return;
     const off = new Set(Array.isArray(p.off) ? p.off : []);
     const freq = { ...(p.freq || {}) };
-    if (v === 'off') off.add(key); else off.delete(key);
+    if (MOVES[key]) {                                    // ways to get about: 끔 = not one of its ways
+        const on = new Set(movesOf(p));
+        if (v === 'off') on.delete(key); else on.add(key);
+        p.moves = Object.keys(MOVES).filter(k => on.has(k));
+    } else if (v === 'off') off.add(key); else off.delete(key);
     if (v === 'rare' || v === 'often') freq[key] = v; else if (v !== 'off') delete freq[key];
     p.off = [...off];
     p.freq = freq;
@@ -3956,20 +4015,11 @@ async function resetActs() {
     const p = curPet();
     if (!p || readOnly) return;
     if (!await confirmBox('행동 빈도·걸음·반응 모습을 모두 기본 성격대로 되돌릴까요?')) return;
-    p.off = []; p.freq = {}; p.pace = 'norm';
+    p.off = []; p.freq = {}; p.pace = 'norm'; p.moves = ['wall'];
     if (p.personality) p.personality.react = {};
     saveSoon();
     renderPanel();
     say('기본 성격대로 되돌렸어요.');
-}
-
-/** The ways to get about, ticked in 꾸미기 — saved right away. */
-function setMoves() {
-    const p = curPet();
-    if (!p || readOnly) return;
-    p.moves = movesPicked();
-    if (win.form?.kind === 'edit') win.form.base.moves = p.moves.join(',');
-    saveSoon();
 }
 
 function actsHtml(p) {
@@ -4330,9 +4380,6 @@ function petHtml(p) {
   <label class="tw-label">이름 <input data-f="name" maxlength="20"></label>
   <label class="tw-label">기본 성격 <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
   <div class="tw-sub">성격을 바꾸면 행동은 바로 바뀌어요. 친밀도와 기록은 그대로예요.</div>
-  <div class="tw-cap">화면에서 움직이는 방식</div>
-  <div class="tw-moves">${Object.entries(MOVES).map(([k, v]) => `<label class="tw-mv"><input type="checkbox" data-mv="${k}"> ${v}</label>`).join('')}</div>
-  <div class="tw-sub">여러 개 고르면 화면에 올라갈 때마다 그중 하나를 골라요. 누르면 바로 저장돼요.</div>
   <label class="tw-label">크기 (${device() === 'phone' ? '폰' : 'PC'})
     <div class="tw-row"><input type="number" inputmode="numeric" min="${SIZE_MIN}" max="${SIZE_MAX}" step="1" value="${petSize(p)}" data-size="${esc(p.id)}" class="tw-num"><span class="tw-sub" data-sizeval="${esc(p.id)}">${sizeLabel(p, petSize(p))}</span></div>
   </label>
@@ -4357,14 +4404,12 @@ function petHtml(p) {
 function fillEdit(p) {
     const cur = lookKeyOf(p);
     win.form = { kind: 'edit', id: p.id, look: cur, file: null, prep: null,
-        base: { name: p.name, pers: p.personality?.base || 'aegyo', facing: p.look?.facing || 'front', squish: String(Math.round((p.look?.squish ?? 0.5) * 10) / 10), look: cur, moves: movesOf(p).join(',') } };
+        base: { name: p.name, pers: p.personality?.base || 'aegyo', facing: p.look?.facing || 'front', squish: String(Math.round((p.look?.squish ?? 0.5) * 10) / 10), look: cur } };
     const b = win.form.base, box = win.body;
     box.querySelector('[data-f="name"]').value = b.name;
     box.querySelector('[data-f="pers"]').value = b.pers;
     box.querySelector('[data-f="facing"]').value = b.facing;
     box.querySelector('[data-f="squish"]').value = b.squish;
-    const mv = movesOf(p);
-    box.querySelectorAll('[data-mv]').forEach(c => { c.checked = mv.includes(c.dataset.mv); });
     drawLookGrid();
     showSquish();
 }
@@ -4939,12 +4984,6 @@ async function uploadLook(name, facing, squish) {
     return { id, name, kind: 'single', facing, squish, roles: { idle: [path] }, roleOpts: {}, baseline: 0, createdAt: Date.now() };
 }
 
-/** Ways to get about ticked in 꾸미기 (in MOVES order; none → 오르기). */
-function movesPicked() {
-    const on = [...(win?.body?.querySelectorAll('[data-mv]') || [])].filter(c => c.checked).map(c => c.dataset.mv);
-    return movesOf({ moves: Object.keys(MOVES).filter(k => on.includes(k)) });
-}
-
 function formValues() {
     const box = win.body;
     const v = (k) => box.querySelector(`[data-f="${k}"]`)?.value ?? '';
@@ -4953,7 +4992,6 @@ function formValues() {
         pers: PERSONALITIES[v('pers')] ? v('pers') : 'aegyo',
         facing: ['front', 'left', 'right'].includes(v('facing')) ? v('facing') : 'front',
         squish: Math.round(clamp(Number(v('squish')) || 0, 0, 1) * 10) / 10,
-        moves: movesPicked(),
     };
 }
 
@@ -5392,6 +5430,8 @@ function cleanPet(src, look) {
     if (Array.isArray(src.personality?.traits)) rec.personality.traits = src.personality.traits.filter(x => typeof x === 'string').slice(0, 10);
     if (isObj(src.lines)) for (const [k, v] of Object.entries(src.lines)) if (/^[a-zA-Z]{1,20}$/.test(k)) { const l = strList(v, 30); if (l.length) rec.lines[k] = l; }
     if (TALK_FREQ[src.talkFreq]) rec.talkFreq = src.talkFreq;
+    src = { ...src, off: Array.isArray(src.off) ? [...src.off] : src.off, freq: isObj(src.freq) ? { ...src.freq } : src.freq };
+    splitScreen(src);                                   // a pet file from before 0.8.2
     rec.moves = movesOf(src);
     const actKey = (k) => BASIC_ACTS.some(b => b.key === k) || UNLOCKS.some(u => u.key === k);
     if (Array.isArray(src.off)) rec.off = src.off.filter(actKey);
@@ -5591,16 +5631,13 @@ function onWinInput(e) {
     if (t.matches?.('[data-size]')) return onSizeInput(t, e.type === 'change');
     const f = t.dataset?.f;
     if (f === 'squish') return showSquish();
-    if (t.dataset?.mv != null && e.type === 'change') {          // keep at least one way ticked
-        if (!win.body.querySelector('[data-mv]:checked')) t.checked = true;
-        return setMoves();
-    }
     if (t.dataset?.react != null && e.type === 'change') return setReact(t.dataset.react, t.value);
     if (f === 'file' && e.type === 'change') return onFilePicked(t);
     if (f === 'importfile' && e.type === 'change') return importPicked(t);
     if (f === 'rolefile' && e.type === 'change') return addRoleFrames(t);
     if (f === 'sheetfile' && e.type === 'change') return sheetPicked(t);
     if ((t.dataset?.sheetpick != null || t.dataset?.sheetrow != null || t.dataset?.sheetref != null) && e.type === 'change') return onSheetInput(t);
+    if (t.dataset?.sheetscale != null && win.sheet) { win.sheet.scale = clamp(Number(t.value) || 100, 50, 200) / 100; return placeFitPreview(win.sheet); }
     if (t.dataset?.ro && e.type === 'change') return setRoleOpt(t.dataset.ro, t.value);
     if ((f === 'crop' || f === 'bg' || f === 'bgtol') && e.type === 'change' && win.form?.file) { showBgRow(''); return redoUploadPreview(); }
     if (f === 'bg' && e.type === 'change') return showBgRow('');
@@ -5864,7 +5901,7 @@ async function sheetPicked(input) {
         done: (cuts) => {
             if (curPet() !== p) return;
             const rows = cuts ? cuts.map(c => c.row ?? 0) : [0];
-            win.sheet = { pet: p, file, cuts, rows, picks: rows.map(() => ''), imgs: null, ref: -1 };
+            win.sheet = { pet: p, file, cuts, rows, picks: rows.map(() => ''), imgs: null, ref: 'auto', scale: 1, boxes: null, base: null };
             drawRoles();
             redoSheet();
         },
@@ -5882,6 +5919,8 @@ async function redoSheet() {
         const imgs = await prepareFrames([sh.file], crop, tol, sh.cuts);
         if (win.sheet !== sh) return;
         sh.imgs = imgs;
+        await measureSheet(sh);
+        if (win.sheet !== sh) return;
         say('');
     } catch (e) {
         if (win.sheet === sh) say('그림을 읽지 못했어요: ' + (e.message || e));
@@ -5951,7 +5990,11 @@ function onSheetInput(t) {
     const sh = win.sheet;
     if (!sh) return;
     if (t.dataset.sheetpick != null) sh.picks[Number(t.dataset.sheetpick)] = ROLE_DEFS[t.value] ? t.value : '';
-    if (t.dataset.sheetref != null) sh.ref = Number(t.value) >= 0 && Number(t.value) < sh.picks.length ? Number(t.value) : -1;
+    if (t.dataset.sheetref != null) {
+        const n = Number(t.value);
+        sh.ref = t.value === 'auto' ? 'auto' : (Number.isInteger(n) && n >= 0 && n < sh.picks.length ? n : -1);
+        sh.scale = 1;
+    }
     if (t.dataset.sheetrow != null && t.value) {
         const r = Number(t.dataset.sheetrow), v = t.value === '-' ? '' : (ROLE_DEFS[t.value] ? t.value : '');
         sh.rows.forEach((x, i) => { if (x === r) sh.picks[i] = v; });
@@ -5971,9 +6014,10 @@ async function confirmSheet() {
     busy = true;
     const uploaded = [];
     try {
-        if (!groups.has('idle') && sh.ref >= 0 && sh.imgs[sh.ref]) {          // 키 맞추기: the whole sheet, to the 기본 picture
+        const ri = sheetRefIndex(sh);
+        if (!groups.has('idle') && ri >= 0 && sh.imgs[ri]) {                   // 키 맞추기: the whole sheet, to the 기본 picture
             say('키 맞추는 중…');
-            const fitted = await fitSheet(p, sh.imgs[sh.ref], [...groups.values()].flat());
+            const fitted = await fitSheet(p, sh.imgs[ri], [...groups.values()].flat(), sh.scale || 1);
             for (const [k, imgs] of groups) groups.set(k, imgs.map(im => fitted.get(im)));
         }
         say(`그림 ${total}장 올리는 중…`);
@@ -6005,7 +6049,47 @@ async function confirmSheet() {
     }
 }
 
-/** Under the sheet: 기본 picked → it replaces the old one; otherwise pick a picture to match heights by. */
+/** 키 맞추기: the figure boxes of the sheet pictures and of the 기본 picture (for 자동 and the preview). */
+async function measureSheet(sh) {
+    try {
+        const p = sh.pet;
+        const base = await canvasOf(imgUrl(p.look.roles.idle[0]));
+        const bb = opaqueBox(base.g, base.w, base.h);
+        const boxes = [];
+        for (const im of sh.imgs) {
+            const c = await canvasOf(im.dataUrl);
+            boxes.push(opaqueBox(c.g, c.w, c.h));
+        }
+        sh.base = bb ? { box: bb, url: imgUrl(p.look.roles.idle[0]), w: base.w, h: base.h } : null;
+        sh.boxes = boxes;
+    } catch (e) {
+        console.warn('[Tavvy] could not measure the sheet', e);
+        sh.base = null; sh.boxes = null;
+    }
+}
+
+/** The picture to match heights by: the chosen number, or (자동) the one shaped most like the 기본 picture. -1 = none. */
+function sheetRefIndex(sh) {
+    if (sh.ref !== 'auto') return sh.ref;
+    if (!sh.base || !sh.boxes) return -1;
+    const want = sh.base.box.sw / sh.base.box.sh;
+    let best = -1, bestD = Infinity;
+    sh.boxes.forEach((b, i) => {
+        if (!b) return;
+        const d = Math.abs(Math.log((b.sw / b.sh) / want));
+        if (d < bestD) { bestD = d; best = i; }
+    });
+    return best;
+}
+
+/** sheet px → 기본 px for the reference picture (× the 막대). */
+function sheetK(sh, i) {
+    const b = sh.boxes?.[i];
+    if (!b || !sh.base) return 0;
+    return sh.base.box.sh / b.sh * (sh.scale || 1);
+}
+
+/** Under the sheet: 기본 picked → it replaces the old one; otherwise 키 맞추기 with a preview over the 기본 picture. */
 function drawSheetRef(p, sh) {
     const box = win.body.querySelector('.tw-sheet-ref');
     if (!box) return;
@@ -6013,9 +6097,32 @@ function drawSheetRef(p, sh) {
         box.innerHTML = '<div class="tw-sub">기본으로 고른 그림이 원래 기본 그림을 바꿔요. 같은 시트 그림끼리는 크기가 딱 맞아요.</div>';
         return;
     }
+    const ri = sheetRefIndex(sh);
+    const autoName = sh.ref === 'auto' && ri >= 0 ? ` (${ri + 1}번)` : '';
     const opts = sh.picks.map((_, i) => `<option value="${i}"${sh.ref === i ? ' selected' : ''}>${i + 1}번 그림</option>`).join('');
-    box.innerHTML = `<div class="tw-row"><span class="tw-cap tw-grow">키 맞추기</span><select data-sheetref="1"><option value="-1"${sh.ref < 0 ? ' selected' : ''}>맞추지 않음</option>${opts}</select></div>
-<div class="tw-sub">서 있는 그림 번호를 고르면, 그 그림 속 키가 지금 기본 그림 속 키와 같아지게 시트 전체를 맞춰 넣어요.</div>`;
+    const pct = Math.round((sh.scale || 1) * 100);
+    box.innerHTML = `<div class="tw-row"><span class="tw-cap tw-grow">키 맞추기</span><select data-sheetref="1"><option value="auto"${sh.ref === 'auto' ? ' selected' : ''}>자동${autoName}</option><option value="-1"${sh.ref === -1 ? ' selected' : ''}>맞추지 않음</option>${opts}</select></div>
+<div class="tw-sub">기본 그림과 가장 닮은 그림(보통 서 있는 그림)을 찾아, 그 그림 속 키가 기본 그림 속 키와 같아지게 시트 전체를 맞춰 넣어요. 어긋나 보이면 다른 번호를 고르거나 막대로 맞춰요.</div>`
+        + (ri >= 0 && sheetK(sh, ri) > 0 ? `<div class="tw-fitprev"><img class="tw-fit-base" alt=""><img class="tw-fit-ref" alt=""></div>
+<div class="tw-row"><span class="tw-sub">크기</span><input type="range" min="50" max="200" step="5" value="${pct}" data-sheetscale="1" class="tw-grow"><span class="tw-sub tw-fitpct">${pct}%</span></div>
+<div class="tw-sub">흐린 그림이 지금 기본 그림이에요.</div>` : '');
+    placeFitPreview(sh);
+}
+
+/** Both pictures in the preview, standing on the same ground, at the scale they will have on screen. */
+function placeFitPreview(sh) {
+    const box = win.body.querySelector('.tw-fitprev');
+    const ri = sheetRefIndex(sh);
+    if (!box || ri < 0 || !sh.base) return;
+    const H = 150, u = H / sh.base.h;                       // preview px per 기본 px
+    const k = sheetK(sh, ri), ref = sh.imgs[ri];
+    const bi = box.querySelector('.tw-fit-base'), fi = box.querySelector('.tw-fit-ref');
+    if (bi.getAttribute('src') !== sh.base.url) bi.src = sh.base.url;
+    if (fi.getAttribute('src') !== ref.dataUrl) fi.src = ref.dataUrl;
+    bi.style.width = (sh.base.w * u).toFixed(1) + 'px'; bi.style.height = H + 'px';
+    fi.style.width = (ref.w * k * u).toFixed(1) + 'px'; fi.style.height = (ref.h * k * u).toFixed(1) + 'px';
+    const pct = win.body.querySelector('.tw-fitpct');
+    if (pct) pct.textContent = Math.round((sh.scale || 1) * 100) + '%';
 }
 
 async function canvasOf(src) {
@@ -6033,13 +6140,13 @@ async function canvasOf(src) {
  * into its box — a lying-down picture may be wider), which FIT_MARK tells the pet.
  * Returns Map(old picture → new picture).
  */
-async function fitSheet(p, refImg, imgs) {
+async function fitSheet(p, refImg, imgs, scale = 1) {
     const base = await canvasOf(imgUrl(p.look.roles.idle[0]));
     const bb = opaqueBox(base.g, base.w, base.h);
     const ref = await canvasOf(refImg.dataUrl);
     const rb = opaqueBox(ref.g, ref.w, ref.h);
     if (!bb || !rb) throw new Error('기준 그림이 비어 있어요');
-    const k = bb.sh / rb.sh;                                   // sheet px → 기본 px
+    const k = bb.sh / rb.sh * scale;                           // sheet px → 기본 px (× the 막대)
     const big = Math.max(...imgs.map(im => Math.max(im.w, im.h))) * k;
     let m = k < 1 ? clamp(Math.round(1 / k), 1, FIT_M_MAX) : 1;   // drawn m× finer than the 기본 picture, so it stays sharp
     while (m > 1 && big * m > FIT_MAX_PX) m--;

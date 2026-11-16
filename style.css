@@ -1035,20 +1035,6 @@
     animation: tavvy-ghost .32s linear forwards;
 }
 @keyframes tavvy-ghost { from { opacity: .45; } to { opacity: 0; } }
-.tavvy-win .tw-moves { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
-.tavvy-win .tw-mv {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 13px;
-    padding: 4px 12px;
-    border-radius: 99px;
-    border: 1px solid var(--tw-line);
-    cursor: pointer;
-    user-select: none;
-}
-.tavvy-win .tw-mv input { margin: 0; accent-color: var(--tw-accent); }
-.tavvy-win .tw-mv:has(input:checked) { background: var(--tw-chip-bg); color: var(--tw-chip-fg); border-color: transparent; }
 
 /* 0.8.0: free settings in the 행동 tab (빈도 · 걸음 · 반응 모습) */
 .tavvy-win .tw-preset { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; font-size: 13px; }
@@ -1069,3 +1055,7 @@
 .tavvy-win .tw-sheet-ref { margin: 8px 0; }
 .tavvy-win .tw-sheet-ref select { max-width: 55%; }
 @media (pointer: coarse) { .tavvy-win .tw-sheet-ref select { font-size: 16px; } }
+.tavvy-win .tw-fitprev { position: relative; height: 160px; margin: 8px 0 4px; border-radius: 12px; background: var(--tw-field); overflow: hidden; }
+.tavvy-win .tw-fitprev img { position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%); max-width: none; max-height: none; object-fit: fill; }
+.tavvy-win .tw-fitprev .tw-fit-base { z-index: 1; opacity: .4; filter: grayscale(.4); }
+.tavvy-win .tw-sheet-ref input[type="range"] { margin: 0 8px; }
