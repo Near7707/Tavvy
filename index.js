@@ -23,6 +23,8 @@
 // 0.7.5: cut a picture by hand when uploading; split a sheet into frames (find them, or rows × columns).
 // 0.7.6: share one sheet out to several actions; frames move both ways.
 // 0.7.8: 벽 오르기 · 화면 산책 — goes up a side of the chat and strolls anywhere on the screen.
+// 0.7.9: a full tummy no longer means sleeping the day away (and doesn't stop 벽 오르기);
+//        two new speech moments — when a reply comes in, when I send a message.
 // 0.7.7: less standing and staring — little things on the spot, livelier waiting on a message,
 //        longer naps that sending / a reply no longer cut short, a much smaller lean at the input box.
 
@@ -233,11 +235,16 @@ const TALK_MOMENTS = [
     { key: 'wait', name: '답 기다릴 때', ex: '언제 와?' },
     { key: 'level', name: '단계 오를 때', ex: '우리 더 친해졌다!' },
     { key: 'reunion', name: '오랜만에 만났을 때', ex: '{{user}}, 보고 싶었어!' },
+    { key: 'reply', name: '답이 왔을 때', ex: '오, 왔다!' },
+    { key: 'sent', name: '내가 보냈을 때', ex: '잘 보냈어?' },
 ];
 const TALK_FREQ = { off: '끔', some: '가끔', often: '자주' };
 const TALK_CHANCE = { some: 0.35, often: 0.7 };          // a moment comes → says something
 const TALK_PLAY = { some: 0.05, often: 0.12 };           // each "what next?" while playing alone
 const TALK_ALWAYS = ['level', 'reunion'];                // these always speak (unless 끔)
+const TALK_HALF = ['reply', 'sent'];                     // messages come often → half the usual chance
+const FULL_DOZE = 0.1;           // full tummy: this much more likely to nod off …
+const FULL_DOZE_LEN = 1.1;       // … and naps this much longer
 const TALK_GAP = 8;              // s — ordinary lines not closer together than this
 const SAY_MS = 2600;             // how long a speech bubble stays
 const LINE_MAX = 40;             // characters in one line
@@ -1507,7 +1514,7 @@ class Actor {
         this.aside = false; this.cheering = false;
         this.sqT = 1;
         if (s === 'idle') { this.until = rand(...this.p.idle); this.tiltT = 0; }
-        if (s === 'doze') { this.until = rand(...this.p.dozeLen) * (this.isFull() ? 1.4 : 1); this.fxT = 0.6; }
+        if (s === 'doze') { this.until = rand(...this.p.dozeLen) * (this.isFull() ? FULL_DOZE_LEN : 1); this.fxT = 0.6; }
         if (s === 'sniff') { this.fxT = 0; this.tiltT = 0; this.until = 0.75; }
         if (s === 'eat') { this.eatIdle = 0; this.tiltT = 0; if (this.side && this.eatFrom != null && Math.abs(this.eatFrom - this.x) > 8) this.dir = this.eatFrom > this.x ? 1 : -1; }
         if (s === 'nod') { this.until = 2.6; this.fxT = 0.5; }
@@ -1580,13 +1587,13 @@ class Actor {
         if (gen.active && this.waiting) return this.setState('wait');
         const full = this.isFull();
         const r = Math.random();
-        const dz = this.p.doze + (full ? 0.25 : 0);
+        const dz = this.p.doze + (full ? FULL_DOZE : 0);
         if (r < dz) return this.setState('doze');
         // stop and react to you now and then (friendlier = more often)
         if (performance.now() - this.lastMe > ME_REST * 1000 && Math.random() < byCloseness(this, ...this.p.me) * ME_SCALE) return this.startMe();
         if (full && !this.plat && Math.random() < 0.12) return this.setState('roll');   // 데굴데굴
         if (Math.random() < FIDGET_CHANCE) return this.startFidget();   // a little something on the spot
-        if (!this.plat && !full && !this.waiting && root?.settings?.stroll !== false && stageIsChat() && Math.random() < (this.p.wall || 0)) return this.startWall();
+        if (!this.plat && !this.waiting && root?.settings?.stroll !== false && stageIsChat() && Math.random() < (this.p.wall || 0)) return this.startWall();
         // hop up onto a message by itself
         if (ledgesOn() && Math.random() < byCloseness(this, ...this.p.climb)) {
             const t = this.pickClimb();
@@ -2397,7 +2404,8 @@ class Actor {
         const now = performance.now();
         if (!always) {
             if (now - (this.lastTalk || -1e9) < TALK_GAP * 1000) return false;
-            if (Math.random() >= (moment === 'play' ? TALK_PLAY[freq] : TALK_CHANCE[freq])) return false;
+            const ch = moment === 'play' ? TALK_PLAY[freq] : TALK_CHANCE[freq] * (TALK_HALF.includes(moment) ? 0.5 : 1);
+            if (Math.random() >= ch) return false;
         }
         this.lastTalk = now;
         this.speak(list[Math.floor(Math.random() * list.length)]);
@@ -3286,7 +3294,9 @@ function onReplyReceived(id, type) {
     const eaters = COUNT_TYPES.includes(type) ? (onCounted(id) || []) : [];
     if (!actors.length || !['normal', undefined, '', 'regenerate', 'swipe'].includes(type)) return;
     const m = ctx().chat?.[id];
-    if (!m || m.is_user || String(m.mes || '').length < WATCH_MIN_CHARS) return;
+    if (!m || m.is_user) return;
+    setTimeout(() => { for (const a of actors) if (canChat(a)) a.talk('reply'); }, 700);   // "오, 왔다!"
+    if (String(m.mes || '').length < WATCH_MIN_CHARS) return;
     const key = `${id}:${m.swipe_id ?? 0}:${String(m.mes).length}`;
     if (watched.has(key)) return;
     watched.add(key);
@@ -3303,6 +3313,9 @@ function onReplyReceived(id, type) {
     }, 250);
 }
 
+/** Awake enough to say something about a message (not napping, not going to bed). */
+const canChat = (a) => !['off', 'doze', 'sleepy', 'tuck', 'wave', 'appear'].includes(a.state);
+
 /** I sent a message: a short look toward my new message. */
 function onMySend(id) {
     if (!actors.length) return;
@@ -3316,6 +3329,7 @@ function onMySend(id) {
             a.after = a.state === 'perch' ? 'idle' : a.waiting ? 'wait' : 'idle';
             a.startLook(a.p.send, x);
         }
+        for (const a of actors) if (canChat(a)) a.talk('sent');
     }, 120);
 }
 
@@ -5826,6 +5840,7 @@ const TALK_PROMPT_MOMENTS = {
     wake: '깨워서 침대에서 나왔을 때', sleep: '재워서 침대로 들어갈 때', pat: '쓰다듬어 줄 때',
     meal: '밥(채팅 메시지)을 다 먹었을 때', play: '혼자 놀고 있을 때', wait: '상대의 답을 기다릴 때',
     level: '사람과 한 단계 더 친해졌을 때', reunion: '며칠 만에 다시 만났을 때',
+    reply: '상대(캐릭터)의 답이 막 도착했을 때', sent: '사람이 방금 메시지를 보냈을 때',
 };
 
 /** Ask the chosen connection (or the current one). Returns the text of the answer. */
