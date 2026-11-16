@@ -70,8 +70,8 @@
     position: absolute;
     left: 0;
     top: 0;
-    width: 46px;
-    height: 46px;
+    width: 37px;
+    height: 37px;
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -92,12 +92,12 @@
 #tavvy-bed[hidden] { display: none; }
 #tavvy-bed:hover { opacity: 1; }
 #tavvy-bed.tavvy-dragging { cursor: grabbing; opacity: 1; }
-.tavvy-bed-icon { font-size: 22px; line-height: 1; }
+.tavvy-bed-icon { font-size: 18px; line-height: 1; }
 .tavvy-bed-z {
     position: absolute;
-    right: 5px;
-    top: 2px;
-    font-size: 11px;
+    right: 4px;
+    top: 1px;
+    font-size: 9px;
     font-weight: bold;
     color: var(--SmartThemeBodyColor, #ddd);
     opacity: .8;

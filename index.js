@@ -28,6 +28,8 @@
 // 0.7.10: 벽 오르기 much more often for now (to watch it) — to be tuned.
 // 0.7.11: on the screen it climbs (mostly straight up and down, pull by pull) instead of walking around;
 //         a full tummy is just cute now (pats its tummy ♪, rolls) — no extra naps, no slow walking.
+// 0.7.12: no more going up a side wall — it starts climbing the screen right where it stands and climbs
+//         back down the same way; never naps up on the screen (only on the floor / a message); a smaller bed.
 // 0.7.7: less standing and staring — little things on the spot, livelier waiting on a message,
 //        longer naps that sending / a reply no longer cut short, a much smaller lean at the input box.
 
@@ -136,7 +138,6 @@ const ME_SCALE = 0.3;           // "react to you" chance × this when it decides
 const ME_REST = 15;             // s — not twice in a row within this
 const FIDGET_CHANCE = 0.3;      // "what next?" → a little something on the spot (look around, sway, stretch, hop…)
 const WAIT_FIDGET = [3.5, 6];   // s — waiting for a reply: a little something this often
-const WALL_SLIP = 0.2;          // chance to slide back down halfway up a wall
 const STROLL_TIME = [8, 20];    // s — climbing about on the screen this long
 const RAPID_TAPS = 3, RAPID_WINDOW = 1.5;   // this many taps within this many seconds = 연타
 const REVISIT_DAYS = 3;         // away this long → a little bubble by the bed
@@ -197,7 +198,7 @@ const ROLE_GROUPS = [
         { key: 'fall', name: '떨어짐', fb: 'surprise' },
         { key: 'climb', name: '말풍선 오르기', fb: 'jump' },
         { key: 'roll', name: '구르기', fb: 'idle' },
-        { key: 'wall', name: '벽 오르기', fb: 'walk' },
+        { key: 'wall', name: '화면 오르기', fb: 'walk' },
     ] },
     { key: 'react', name: '반응', roles: [
         { key: 'happy', name: '기쁨', fb: 'idle' },
@@ -286,7 +287,7 @@ function defaultSettings() {
         bedPos: { phone: null, pc: null },     // floating bed button position per device
         stageMode: 'chat',                     // 'chat' = whole chat (messages are ledges) / 'floor' = floor only
         lineLedges: true,                      // flat / document chat style: borders between messages are ledges
-        stroll: true,                          // 벽 오르기 · 화면 산책
+        stroll: true,                          // 화면 오르기
         badge: true,                           // number of waiting messages on the bed
         heartMode: 'both',                     // closeness shown as 'both' (♥♥ 친구) / 'hearts' / 'name' / 'hide'
         winTheme: 'theme',                     // the Tavvy window: 'theme' (follow SillyTavern) / 'cream' / 'white' / 'night'
@@ -1076,7 +1077,7 @@ class Actor {
 
     /** Free to react to things (not held, flying, hidden, leaving…). */
     free() {
-        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear', 'greet', 'sniff', 'eat', 'nod', 'dance', 'roll', 'resist', 'gift', 'sleepy', 'wallup', 'stroll'].includes(this.state);
+        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear', 'greet', 'sniff', 'eat', 'nod', 'dance', 'roll', 'resist', 'gift', 'sleepy', 'stroll'].includes(this.state);
     }
 
     /** Can a sparkle reaching it be eaten right now? (dozing → piled beside it; held / flying → waits nearby) */
@@ -1179,21 +1180,10 @@ class Actor {
         this.setState('fidget');
     }
 
-    /** 벽 오르기: walk to the nearer side of the chat, then up it. */
+    /** 화면 오르기 (0.7.12): straight up the screen from where it stands on the floor, back to you. */
     startWall() {
-        this.wallSide = this.x - stage.left < stage.right - this.x ? -1 : 1;
-        const [L, R] = this.range();
-        this.walkTo(this.wallSide < 0 ? L : R);
-        this.toWall = true;
-    }
-
-    /** On a wall: x by the wall, turned sideways (unless it has its own 벽 오르기 picture). */
-    wallPose() {
-        const own = this.rec.look.roles?.wall?.length;
-        this.wallOn = true;
-        this.body.style.transformOrigin = '50% 50%';
-        this.tiltT = own ? 0 : this.wallSide < 0 ? 90 : -90;
-        this.dir = this.wallSide < 0 ? -1 : 1;                  // sideways picture: facing up the wall
+        this.y = 0;
+        this.setState('stroll');
     }
 
     /** Back to normal standing (left the wall / the screen). */
@@ -1208,11 +1198,11 @@ class Actor {
     strollTop() { return Math.max(this.h, stage.floorY - (stage.chatTop || 0) - this.h - 4); }
 
     /** Pick somewhere new on the screen to stroll to. */
-    strollPick() {
+    strollPick(up) {
         const L = stage.left + this.w / 2, R = Math.max(L, stage.right - this.w / 2);
         const lo = this.h * 1.2, hi = Math.max(lo, this.strollTop());
         const nearEdge = this.x - L < this.w * 1.5 || R - this.x < this.w * 1.5;
-        if (Math.random() < (nearEdge ? 0.5 : 0.25)) {           // now and then a little way sideways (away from a side)
+        if (!up && Math.random() < (nearEdge ? 0.5 : 0.25)) {           // now and then a little way sideways (away from a side)
             const side = this.x - L < this.w * 1.5 ? 1 : R - this.x < this.w * 1.5 ? -1 : Math.random() < 0.5 ? -1 : 1;
             this.sx = clamp(this.x + side * rand(this.w, this.w * 2.5), L, R);
             this.sy = clamp(this.y + rand(-0.3, 0.3) * this.h, lo, hi);
@@ -1225,14 +1215,12 @@ class Actor {
         this.sp = 0; this.spLen = rand(0.8, 2.5); this.cph = 0; this.slipT = 0;
     }
 
-    /** End of a stroll: drop, go back down the wall, or step onto a message. */
+    /** End of a stroll: drop, climb back down to the floor, or step onto a message. */
     strollEnd() {
         const r = Math.random();
-        if (r < 0.35) {                                          // back to the wall, then down
-            this.sgoal = 'wall';
-            this.wallSide = this.x - stage.left < stage.right - this.x ? -1 : 1;
-            this.sx = this.wallSide < 0 ? stage.left + this.h / 2 : stage.right - this.h / 2;
-            this.sy = this.y; this.sp = 0; this.spLen = 0;
+        if (r < 0.35) {                                          // climb straight back down (still showing its back)
+            this.sgoal = 'down';
+            this.sx = this.x; this.sy = 0; this.sp = 0; this.spLen = 0;
             return;
         }
         if (r < 0.65 && ledgesOn()) {                           // over a message, then onto it
@@ -1525,8 +1513,7 @@ class Actor {
 
     setState(s) {
         if (this.big && s !== this.state) this.endBig();
-        if (s !== 'walk') this.toWall = false;
-        if (this.wallOn && s !== 'wallup' && s !== 'stroll') this.endWall();
+        if (this.wallOn && s !== 'stroll') this.endWall();
         this.state = s; this.t = 0;
         this.aside = false; this.cheering = false;
         this.sqT = 1;
@@ -1552,20 +1539,13 @@ class Actor {
         if (s === 'wait') { this.fxT = rand(0.4, 1.2); this.scanT = 0.6; this.wvT = rand(2, 3.5); this.wsw = 0; }
         if (s === 'fidget') { this.fxT = 0; this.tiltT = 0; this.fq = Math.random() < 0.35; this.until = { scan: rand(1.6, 2.4), sway: 1.8, stretch: 1.3, sit: rand(3, 6), tummy: 1.8 }[this.fk] || 1.6; }
         if (s === 'watch') { this.fxT = 0; this.until = 2.8; }
-        if (s === 'wallup') {                       // 벽 오르기 (wdir: 1 up · -1 down · -2 sliding)
-            this.wallPose();
-            this.plat = null; this.pr = null;
-            this.wdir = 1; this.wph = 0;
-            this.wtop = rand(Math.min(this.h * 2, this.strollTop()), this.strollTop());
-            this.slipAt = Math.random() < WALL_SLIP ? this.wtop * rand(0.3, 0.7) : null;
-        }
         if (s === 'stroll') {                       // 화면 산책
             this.wallOn = true;
             this.plat = null; this.pr = null;
             this.body.style.transformOrigin = '50% 50%';
             this.tiltT = 0; this.wph = 0;
-            this.until = rand(...STROLL_TIME); this.snap = 0; this.sgoal = null;
-            this.strollPick();
+            this.until = rand(...STROLL_TIME); this.sgoal = null;
+            this.strollPick(this.y < this.h);           // from the floor: straight up first
         }
         if (s === 'me') {
             this.fxT = 0;
@@ -2000,7 +1980,6 @@ class Actor {
                     if (Math.abs(d) <= sp * dt) {
                         this.x = this.tx;
                         if (this.edge && this.plat) { this.edge = false; this.setState('edge'); this.until = rand(0.6, 1.1); }
-                        else if (this.toWall) { this.edge = false; this.setState('wallup'); }   // at the wall → up it
                         else { this.edge = false; this.setState('idle'); this.until *= 0.6; }   // only a short stop after a walk
                         break;
                     }
@@ -2035,50 +2014,9 @@ class Actor {
                     pose = this.rp('climb');
                     if (this.t > 0.35) this.launch();
                     break;
-                case 'wallup': {                       // 벽 오르기
-                    const own = this.rec.look.roles?.wall?.length;
-                    const wx = this.wallSide < 0 ? stage.left + this.h / 2 : stage.right - this.h / 2;
-                    this.x += (wx - this.x) * Math.min(1, dt * 8);
-                    pose = this.rp('wall');
-                    const vs = this.p.speed * 0.55;
-                    if (this.wdir === -2) {                              // sliding down
-                        this.y -= 240 * dt;
-                        shiver = Math.sin(this.clock * 40) * 1.2;
-                        pose = this.rp('fall');
-                    } else {
-                        this.y += this.wdir * vs * dt;
-                        waddle = Math.sin(this.clock * 14) * (own ? 2 : 4);   // 바들바들
-                        this.wph += dt;
-                        if (this.wph > 0.28) { this.wph = 0; this.frame++; }
-                    }
-                    if (this.wdir === 1 && this.slipAt != null && this.y >= this.slipAt) { this.wdir = -2; this.slipAt = null; fx(this, '💦', 'tavvy-fx-small'); }
-                    if (this.wdir === 1 && this.y >= this.wtop) { this.setState('stroll'); break; }   // off the wall, onto the screen
-                    if (this.wdir < 0 && this.y <= 0) {                  // back on the floor
-                        const slid = this.wdir === -2;
-                        this.y = 0;
-                        const [L, R] = this.range();
-                        this.x = clamp(this.x, L, Math.max(L, R));
-                        this.endWall();
-                        this.sq = 0.85;
-                        if (!slid) { this.setState('idle'); break; }
-                        const k = this.rec.personality?.base;           // slipped: how it takes it
-                        if (k === 'neugut') { this.setState('nod'); break; }
-                        this.setState('idle');
-                        fx(this, { aegyo: '?', saechim: '!', simsul: '💢', musim: '…' }[k] || '?');
-                    }
-                    break;
-                }
                 case 'stroll': {                       // 화면 산책 — anywhere on the screen, stays put while scrolling
                     const top = this.strollTop();
                     if (this.y > top) this.y = top;                      // keyboard came up etc.
-                    if (this.snap > 0) {                                 // napping up there
-                        this.snap -= dt;
-                        breath = 0.6;
-                        pose = this.role('sleep', 'idle');
-                        this.fxT -= dt;
-                        if (this.fxT <= 0) { this.fxT = 1.5; fx(this, 'Z', 'tavvy-fx-z'); }
-                        break;
-                    }
                     pose = this.rp('wall');
                     if (this.slipT > 0) {                                // slipped: slides down a little, holds on again
                         this.slipT -= dt;
@@ -2109,11 +2047,18 @@ class Actor {
                         break;
                     }
                     this.tiltT = 0; this.sqT = 1;
-                    if (this.sgoal === 'wall') { this.setState('wallup'); this.wdir = -1; this.dir = -this.dir; this.slipAt = null; break; }   // head down the wall
+                    if (this.sgoal === 'down') {                         // back on the floor
+                        this.y = 0;
+                        const [L, R] = this.range();
+                        this.x = clamp(this.x, L, Math.max(L, R));
+                        this.endWall();
+                        this.sq = 0.85;
+                        this.setState('idle');
+                        break;
+                    }
                     if (this.sgoal === 'drop') { this.strollDrop(); break; }
                     breath = 1;                                          // stopped for a moment
                     this.sp += dt;
-                    if (this.sp > 0.3 && this.sp - dt <= 0.3 && Math.random() < (this.rec.personality?.base === 'neugut' ? 0.3 : 0.1)) { this.snap = rand(4, 10); this.fxT = 0.6; break; }
                     if (this.sp > this.spLen) {
                         if (this.t > this.until) this.strollEnd();
                         else this.strollPick();
@@ -2848,7 +2793,7 @@ async function restoreBackup(day) {
 
 let bed = null;
 let bedBusy = false;
-const BED_SIZE = 46;
+const BED_SIZE = 37;
 
 function ensureBed() {
     if (bed) return bed;
@@ -4153,7 +4098,7 @@ function settingsHtml() {
     </select>
   </label>
   <label class="tw-check"><input type="checkbox" data-s="lineLedges"> 줄 모양 채팅에서 메시지 사이 경계선도 발판으로 쓰기</label>
-  <label class="tw-check"><input type="checkbox" data-s="stroll"> 벽을 올라 화면 위를 산책하기</label>
+  <label class="tw-check"><input type="checkbox" data-s="stroll"> 화면을 올라 돌아다니기</label>
   <label class="tw-check"><input type="checkbox" data-s="badge"> 재워 둔 동안 침대에 쌓인 밥 수 보기</label>
   <label class="tw-label">친밀도 표시
     <select data-s="heartMode">
