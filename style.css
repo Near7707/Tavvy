@@ -1049,3 +1049,16 @@
 }
 .tavvy-win .tw-mv input { margin: 0; accent-color: var(--tw-accent); }
 .tavvy-win .tw-mv:has(input:checked) { background: var(--tw-chip-bg); color: var(--tw-chip-fg); border-color: transparent; }
+
+/* 0.8.0: free settings in the 행동 tab (빈도 · 걸음 · 반응 모습) */
+.tavvy-win .tw-preset { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; font-size: 13px; }
+.tavvy-win .tw-freqs { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.tavvy-win .tw-frow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tavvy-win .tw-fname { font-size: 13px; flex: 1 1 auto; min-width: 0; }
+.tavvy-win .tw-frow-off .tw-fname { text-decoration: line-through; color: var(--tw-sub); }
+.tavvy-win .tw-fseg { display: inline-flex; flex: none; border: 1px solid var(--tw-line); border-radius: 99px; overflow: hidden; }
+.tavvy-win .tw-fbtn { font-size: 12px; padding: 4px 9px; cursor: pointer; user-select: none; color: var(--tw-sub); white-space: nowrap; }
+.tavvy-win .tw-fbtn + .tw-fbtn { border-left: 1px solid var(--tw-line); }
+.tavvy-win .tw-fbtn.tw-fon { background: var(--tw-chip-bg); color: var(--tw-chip-fg); font-weight: 600; }
+.tavvy-win .tw-rsel { flex: none; width: auto; max-width: 52%; font-size: 13px; padding: 3px 6px; }
+@media (pointer: coarse) { .tavvy-win .tw-rsel { font-size: 16px; } }

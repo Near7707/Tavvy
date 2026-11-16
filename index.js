@@ -33,6 +33,7 @@
 // 0.7.13: ways to get about on the screen, chosen per pet — 오르기 (climb) / 날기 (float in soft curves) /
 //         휙휙 (dart, stop, dart, leaving afterimages); closeness stages renamed.
 // 0.7.14: the ways to get about save as soon as they're ticked; 행동 tab switches to turn behaviours on / off per pet.
+// 0.8.0: the personality is a preset — 빈도 (끔/드물게/보통/자주) per behaviour, 걸음 빠르기, and which personality's reaction shows at each moment.
 // 0.7.7: less standing and staring — little things on the spot, livelier waiting on a message,
 //        longer naps that sending / a reply no longer cut short, a much smaller lean at the input box.
 
@@ -325,11 +326,13 @@ function newPetRecord({ id, name, personality, look }) {
         name,
         createdAt: now,
         look,                                         // images, facing, size, softness
-        personality: { base: personality, traits: [] },
+        personality: { base: personality, traits: [], react: {} },   // react: moment → which personality's reaction (missing = base)
         lines: {},                                    // speech lines per moment: { wake: ['…'], … }
         talkFreq: 'some',                             // how often it speaks: 'off' / 'some' / 'often'
         moves: ['wall'],                              // how it gets about on the screen (MOVES keys)
-        off: [],                                      // behaviours switched off in the 행동 tab (BASIC_ACTS / UNLOCKS keys)
+        off: [],                                      // (kept as is) switched off = 끔 in the 행동 tab
+        freq: {},                                     // how often, per behaviour: 'rare' / 'often' (missing = 보통)
+        pace: 'norm',                                 // walking pace: 'slow' / 'norm' / 'fast'                                      // behaviours switched off in the 행동 tab (BASIC_ACTS / UNLOCKS keys)
         dates: [],                                    // special days: [{ id, kind, md: 'MM-DD', msg }]
         metOn: true,                                  // celebrate the day we met every year
         celebrated: {},                               // date id ('met' for the day we met) → the day it was last celebrated
@@ -850,17 +853,62 @@ function levelLabel(rec, k = levelOf(rec)) {
 
 /** The unlockable behaviours that exist for this pet's personality. */
 function unlocksFor(rec) {
-    const k = rec?.personality?.base;
-    return UNLOCKS.filter(u => (!u.only || u.only === k) && (!u.not || u.not !== k));
+    // 선물 = an 애교 "나 보며 반응"; 마음이 풀린 반응 = needs at least one reaction that isn't 애교
+    const meK = kindOf(rec, 'me');
+    const allAegyo = REACT_MOMENTS.every(m => kindOf(rec, m.key) === 'aegyo');
+    return UNLOCKS.filter(u => (u.only !== 'aegyo' || meK === 'aegyo') && (u.not !== 'aegyo' || !allAegyo));
 }
 
-/** Everyday behaviours that may be switched off in the 행동 tab (the rest — walking, napping, eating — always stay). */
+/** Everyday behaviours with an 끔 / 드물게 / 보통 / 자주 choice in the 행동 tab (walking and eating always stay). */
 const BASIC_ACTS = [
     { key: 'screen', name: '화면 돌아다니기' },
     { key: 'climb',  name: '말풍선 오르기' },
+    { key: 'doze',   name: '졸기' },
+    { key: 'fidget', name: '제자리 놀기' },
     { key: 'roll',   name: '구르기' },
     { key: 'me',     name: '나 보며 반응' },
 ];
+// 0.8.0: the personality is a preset — how often each thing happens and which reaction shows can be set freely.
+const FREQS = [['off', '끔'], ['rare', '드물게'], ['norm', '보통'], ['often', '자주']];
+const FREQ_X = { rare: 0.5, norm: 1, often: 2 };
+const NO_FREQ = ['soft'];       // on / off only (it changes how a reaction looks, not how often)
+const PACES = [['slow', '느리게', 0.7], ['norm', '보통', 1], ['fast', '빠르게', 1.35]];
+const REACT_MOMENTS = [         // moments whose reaction may come from another personality
+    { key: 'wake', name: '깨울 때' },
+    { key: 'pat',  name: '쓰다듬을 때' },
+    { key: 'me',   name: '나 보며 반응' },
+    { key: 'eat',  name: '밥 먹을 때' },
+    { key: 'land', name: '착지·부딪힐 때' },
+    { key: 'send', name: '내가 보낼 때' },
+    { key: 'bed',  name: '재울 때' },
+];
+
+/** Which personality's reaction this pet uses at moment m (who = actor or record). */
+function kindOf(who, m) {
+    const rec = who?.rec || who;
+    const r = rec?.personality?.react?.[m];
+    if (PERSONALITIES[r]) return r;
+    const b = rec?.personality?.base;
+    return PERSONALITIES[b] ? b : 'aegyo';
+}
+const persOf = (who, m) => PERSONALITIES[kindOf(who, m)];
+
+/** How often: 0 (끔) / 0.5 / 1 / 2. */
+function fr(who, key) {
+    const rec = who?.rec || who;
+    if (isOff(rec, key)) return 0;
+    return FREQ_X[rec?.freq?.[key]] ?? 1;
+}
+/** A chance p scaled by the behaviour's 빈도 (never quite certain unless it already was). */
+const chance = (who, key, p) => (p >= 1 ? p * Math.min(1, fr(who, key)) : Math.min(0.95, p * fr(who, key)));
+const paceOf = (rec) => (PACES.find(x => x[0] === rec?.pace) || PACES[1])[2];
+
+/** Anything changed from the preset (빈도, 반응, 걸음)? */
+function customised(rec) {
+    const r = rec?.personality?.react || {};
+    return (rec?.off?.length || 0) > 0 || Object.keys(rec?.freq || {}).length > 0 || (rec?.pace && rec.pace !== 'norm')
+        || Object.values(r).some(k => PERSONALITIES[k]);
+}
 
 /** Switched off for this pet in the 행동 tab? */
 function isOff(who, key) {
@@ -1141,10 +1189,10 @@ class Actor {
         if (!take.n) return this.setState('idle');
         const tier = mealTier(take.n);
         this.meal = { post: tier === 'feast' ? 'feast' : tier === 'bowl' ? 'nod' : null, big: false,
-            nap: this.p.perch === 'doze' && (tier === 'bowl' || tier === 'feast') };   // 느긋: nods off halfway, then finishes
+            nap: persOf(this, 'eat').perch === 'doze' && (tier === 'bowl' || tier === 'feast') };   // 느긋: nods off halfway, then finishes
         this.reunionMeal = true;
         if (take.becameFull) this.fullNow = true;
-        spawnMeal(this, take, tier, this.p.eat || 1);
+        spawnMeal(this, take, tier, persOf(this, 'eat').eat || 1);
         this.setState('eat');
     }
 
@@ -1170,7 +1218,7 @@ class Actor {
 
     /** The end of the first meal after waking, by personality. true = it set what happens next. */
     afterReunionMeal() {
-        const k = this.rec.personality?.base;
+        const k = kindOf(this, 'eat');
         const mid = (stage.left + stage.right) / 2;
         if (k === 'saechim') {                                  // done eating → a sly look at you
             this.after = this.fullNow ? 'doze' : 'idle';
@@ -1356,13 +1404,13 @@ class Actor {
         if (this.side && Math.abs(mid - this.x) > 8) this.dir = mid >= this.x ? 1 : -1;
         this.lastMe = performance.now();
         const bigOk = performance.now() - (bigAt.get(this.rec.id) ?? -Infinity) > BIG_REST * 1000;
-        if (bigOk && can(this, 'gift') && Math.random() < GIFT_CHANCE) { bigAt.set(this.rec.id, performance.now()); return this.startGift(); }     // 내편 애교: a little present
+        if (bigOk && can(this, 'gift') && Math.random() < chance(this, 'gift', GIFT_CHANCE)) { bigAt.set(this.rec.id, performance.now()); return this.startGift(); }     // 내편 애교: a little present
         this.meHeart = Math.random() < 0.55;
         this.setState('me');
     }
 
     endMe() {
-        const k = this.rec.personality?.base;
+        const k = kindOf(this, 'me');
         if (k === 'neugut') return this.setState('doze');                     // ♪ … and nods off
         if (k === 'musim' && !can(this, 'soft') && this.stepAside((stage.left + stage.right) / 2)) return;   // "…" and backs off a few steps
         this.setState('idle');
@@ -1385,7 +1433,7 @@ class Actor {
 
     /** You started writing (or are still at it): a peek at the input box. */
     startPeekIn() {
-        const k = this.rec.personality?.base;
+        const k = kindOf(this, 'me');
         const r = $id('send_textarea')?.getBoundingClientRect();
         const x = r && r.width > 0 ? (r.left + r.right) / 2 : (stage.left + stage.right) / 2;
         const d = Math.abs(x - this.x) < 30 ? (this.side ? this.dir : 1) : x > this.x ? 1 : -1;
@@ -1406,13 +1454,13 @@ class Actor {
         const near = Math.max(110, this.h * FOLLOW_NEAR);
         if (Math.hypot(hand.x - this.x, hand.y - cy) > near) return false;
         if (Math.abs(hand.x - this.x) < this.w / 2 && hand.y > this.foot() - this.h && hand.y < this.foot()) return false;   // on the pet itself (a pat)
-        if (this.rec.personality?.base === 'musim' && this.followedOnce) return false;          // 무심: only the first time
+        if (kindOf(this, 'me') === 'musim' && this.followedOnce) return false;          // 무심: only the first time
         this.followNext = now + 3000;
-        return Math.random() < FOLLOW_CHANCE;
+        return Math.random() < chance(this, 'follow', FOLLOW_CHANCE);
     }
 
     startFollow() {
-        const k = this.rec.personality?.base;
+        const k = kindOf(this, 'me');
         this.followedOnce = true;
         this.fstep = Math.random() < (k === 'aegyo' ? 0.5 : k === 'simsul' ? FOLLOW_STEP : 0);   // 새침·느긋·무심 only look
         this.setState('follow');
@@ -1444,7 +1492,7 @@ class Actor {
     startGreet() {
         const plan = this.reunion || {};
         this.reunion = null;
-        const k = this.rec.personality?.base;
+        const k = kindOf(this, 'wake');
         const q = [];
         const greets = k !== 'musim' && !plan.skip;             // 무심 never greets; lots of food soon after → straight to it
         if (greets) q.push({ k: 'scan', d: 0.7 });
@@ -1547,15 +1595,15 @@ class Actor {
         const now = performance.now();
         this.taps = this.taps.filter(t => now - t < RAPID_WINDOW * 1000);
         this.taps.push(now);
-        const k = this.rec.personality?.base;
+        const k = kindOf(this, 'pat'), pp = PERSONALITIES[k];
         const close = closenessOf(this.rec) >= CLOSE;
         const soft = can(this, 'soft');
-        const rapid = this.p.fussy && this.taps.length >= RAPID_TAPS;
+        const rapid = pp.fussy && this.taps.length >= RAPID_TAPS;
         if (!this.air) { this.air = true; this.vy = 300; this.vx = 0; this.next = 'idle'; }
         if (rapid) return fx(this, '💢');   // 연타 싫어! (closeness is not lost)
         patPet(this.rec);
         this.talk('pat');
-        fx(this, k === 'simsul' && soft ? '♥' : this.p.tap);                                // 내편 심술: no 💢, just ♥
+        fx(this, k === 'simsul' && soft ? '♥' : pp.tap);                                // 내편 심술: no 💢, just ♥
         const later = (fn) => setTimeout(() => { if (!this.gone && !this.held) fn(); }, 650);
         if (k === 'saechim' && close) later(() => fx(this, '♥', 'tavvy-fx-small'));      // 친하면 작은 ♥
         if (k === 'simsul' && !soft) {
@@ -1592,19 +1640,19 @@ class Actor {
         if (this.landReact) {
             this.landReact = false;
             this.after = n;
-            return this.startLook(this.p.land, this.x + this.dir * 40);
+            return this.startLook(persOf(this, 'land').land, this.x + this.dir * 40);
         }
         if (this.bumpReact) {
             this.bumpReact = false;
             const o = this.bumpWith; this.bumpWith = null;
             const ox = o && !o.gone ? o.x : this.x + this.dir * 40;
-            if (this.p.bump === 'aside') {                // 무심: "…" and steps out of the way
+            if (persOf(this, 'land').bump === 'aside') {                // 무심: "…" and steps out of the way
                 fx(this, '…');
                 if (this.stepAside(ox)) return;
                 return this.setState(n);
             }
             this.after = n;
-            return this.startLook(this.p.bump, ox);
+            return this.startLook(persOf(this, 'land').bump, ox);
         }
         this.setState(n);
     }
@@ -1658,10 +1706,10 @@ class Actor {
             this.fxT = 0;
             const close = closenessOf(this.rec) >= CLOSE;
             this.until = can(this, 'soft')
-                ? { saechim: 1.2, neugut: 1.5, simsul: 1.1, musim: 1.1 }[this.rec.personality?.base] || 1.0
-                : { aegyo: 1.0, saechim: close ? 1.9 : 1.1, neugut: 1.4, simsul: close ? 1.5 : 1.0, musim: 0.8 }[this.rec.personality?.base] || 1.2;
+                ? { saechim: 1.2, neugut: 1.5, simsul: 1.1, musim: 1.1 }[kindOf(this, 'me')] || 1.0
+                : { aegyo: 1.0, saechim: close ? 1.9 : 1.1, neugut: 1.4, simsul: close ? 1.5 : 1.0, musim: 0.8 }[kindOf(this, 'me')] || 1.2;
         }
-        const k = this.rec.personality?.base;
+        const k = kindOf(this, 'me');
         if (s === 'peekin') { this.fxT = 0; this.until = { aegyo: 1.5, neugut: 1.8, simsul: 1.7 }[k] || 1.4; }
         if (s === 'follow') { this.fxT = 0; this.fstepped = false; this.until = { saechim: 1.3, simsul: 1.6, musim: 0.9 }[k] || 3; }
         if (s === 'resist') { this.fxT = 0; this.until = 1.0; this.tiltT = 0; }
@@ -1691,16 +1739,16 @@ class Actor {
         if (gen.active && this.waiting) return this.setState('wait');
         const full = this.isFull();
         const r = Math.random();
-        const dz = this.p.doze + (full ? FULL_DOZE : 0);
+        const dz = chance(this, 'doze', this.p.doze + (full ? FULL_DOZE : 0));
         if (r < dz) return this.setState('doze');
         // stop and react to you now and then (friendlier = more often)
-        if (!isOff(this, 'me') && performance.now() - this.lastMe > ME_REST * 1000 && Math.random() < byCloseness(this, ...this.p.me) * ME_SCALE) return this.startMe();
-        if (full && !this.plat && !isOff(this, 'roll') && Math.random() < 0.12) return this.setState('roll');   // 데굴데굴
+        if (performance.now() - this.lastMe > ME_REST * 1000 && Math.random() < chance(this, 'me', byCloseness(this, ...this.p.me) * ME_SCALE)) return this.startMe();
+        if (full && !this.plat && Math.random() < chance(this, 'roll', 0.12)) return this.setState('roll');   // 데굴데굴
         if (full && Math.random() < FULL_TUMMY) { this.fk = 'tummy'; return this.setState('fidget'); }   // 배 통통 ♪
-        if (Math.random() < FIDGET_CHANCE) return this.startFidget();   // a little something on the spot
-        if (!this.plat && !this.waiting && !isOff(this, 'screen') && root?.settings?.stroll !== false && stageIsChat() && Math.random() < (this.p.wall || 0)) return this.startWall();
+        if (Math.random() < chance(this, 'fidget', FIDGET_CHANCE)) return this.startFidget();   // a little something on the spot
+        if (!this.plat && !this.waiting && root?.settings?.stroll !== false && stageIsChat() && Math.random() < chance(this, 'screen', this.p.wall || 0)) return this.startWall();
         // hop up onto a message by itself
-        if (ledgesOn() && !isOff(this, 'climb') && Math.random() < byCloseness(this, ...this.p.climb)) {
+        if (ledgesOn() && Math.random() < chance(this, 'climb', byCloseness(this, ...this.p.climb))) {
             const t = this.pickClimb();
             if (t && this.climbTo(t, 'perch')) return;
         }
@@ -1734,7 +1782,7 @@ class Actor {
         let list = this.reachable();
         if (!list.length) return null;
         // 친구: likes your messages
-        if (can(this, 'myBubble') && Math.random() < MY_BUBBLE) {
+        if (can(this, 'myBubble') && Math.random() < chance(this, 'myBubble', MY_BUBBLE)) {
             const mine = list.filter(p => p.user);
             if (mine.length) list = mine;
         }
@@ -1901,7 +1949,7 @@ class Actor {
     goToBed(done) {
         if (['resist', 'wave', 'tuck'].includes(this.state)) return;   // already on its way (keeps the first callback)
         // 단짝: doesn't want to go yet — digs its feet in for a second
-        const resist = can(this, 'resist') && !this.held && !this.air && this.state !== 'off' && Math.random() < RESIST_CHANCE;
+        const resist = can(this, 'resist') && !this.held && !this.air && this.state !== 'off' && Math.random() < chance(this, 'resist', RESIST_CHANCE);
         if (this.held) { this.held = false; this.el.classList.remove('tavvy-held'); this.body.style.transformOrigin = ''; }
         this.onGone = done;
         this.waiting = false;
@@ -1989,7 +2037,7 @@ class Actor {
                     if (this.t > this.until) this.decide();
                     break;
                 case 'peekin': {                       // 관심: you are writing — a peek at the input box
-                    const k = this.rec.personality?.base, d = this.pk?.d || 1;
+                    const k = kindOf(this, 'me'), d = this.pk?.d || 1;
                     breath = 1;
                     pose = this.role('look', 'idle');
                     if (k === 'aegyo') {                                 // 폴짝폴짝, can't wait
@@ -2012,7 +2060,7 @@ class Actor {
                     break;
                 }
                 case 'follow': {                       // 관심: looking at your hand / finger
-                    const k = this.rec.personality?.base;
+                    const k = kindOf(this, 'me');
                     const d = hand.x >= this.x ? 1 : -1;
                     const now = performance.now();
                     breath = 1;
@@ -2042,7 +2090,7 @@ class Actor {
                     break;
                 }
                 case 'resist': {                       // 단짝: doesn't want to go to bed yet (도리도리)
-                    const k = this.rec.personality?.base, d = this.side ? this.dir : 1;
+                    const k = kindOf(this, 'bed'), d = this.side ? this.dir : 1;
                     pose = k === 'simsul' ? this.rp('angry') : k === 'saechim' ? this.rp('flick') : k === 'musim' ? this.role('idle') : this.rp('fluster');
                     if (k === 'saechim') this.tiltT = this.t < 0.15 ? 0 : -d * 10;              // 홱
                     else if (k === 'musim') this.tiltT = Math.sin(this.t * 10) * 4;
@@ -2083,7 +2131,7 @@ class Actor {
                 case 'walk': {
                     if (this.food > 0) { this.edge = false; this.setState('eat'); break; }
                     const d = this.tx - this.x;
-                    const sp = this.p.speed * (this.slowT > 0 ? 0.6 : 1);
+                    const sp = (this.p.speed * paceOf(this.rec)) * (this.slowT > 0 ? 0.6 : 1);
                     if (Math.abs(d) <= sp * dt) {
                         this.x = this.tx;
                         if (this.edge && this.plat) { this.edge = false; this.setState('edge'); this.until = rand(0.6, 1.1); }
@@ -2153,7 +2201,7 @@ class Actor {
                     // 날기: drifts toward the next point, turning in soft curves, bobbing a little
                     const near = this.fgoal ? 2 : this.h * 0.5;
                     if (dist <= near) { this.flyArrive(); break; }
-                    const spd = Math.max(45, this.p.speed * 1.2) * Math.min(1, dist / (this.h * 1.2) + (this.fgoal ? 0.15 : 0.35));
+                    const spd = Math.max(45, (this.p.speed * paceOf(this.rec)) * 1.2) * Math.min(1, dist / (this.h * 1.2) + (this.fgoal ? 0.15 : 0.35));
                     const k = Math.min(1, dt * 1.8);
                     this.fvx += (dx / dist * spd - this.fvx) * k;
                     this.fvy += (dy / dist * spd - this.fvy) * k;
@@ -2189,7 +2237,7 @@ class Actor {
                             if (dy > 0 && Math.random() < CLIMB_SLIP) { this.slipT = 0.3; if (Math.random() < 0.4) fx(this, '💦', 'tavvy-fx-small'); break; }
                         }
                         const moving = ph < CLIMB_PULL * 0.65;
-                        const sp = this.p.speed * 0.6 * 1.55;            // same average pace as before, in pulls
+                        const sp = (this.p.speed * paceOf(this.rec)) * 0.6 * 1.55;            // same average pace as before, in pulls
                         if (moving) {
                             const m = Math.min(dist, sp * dt);
                             this.x += dx / dist * m; this.y += dy / dist * m;
@@ -2368,7 +2416,7 @@ class Actor {
                 }
                 case 'me': {                           // reacting to you
                     breath = 1;
-                    const k = this.rec.personality?.base, close = closenessOf(this.rec) >= CLOSE, d = this.side ? this.dir : 1;
+                    const k = kindOf(this, 'me'), close = closenessOf(this.rec) >= CLOSE, d = this.side ? this.dir : 1;
                     pose = this.role('look', 'idle');
                     if (k !== 'aegyo' && can(this, 'soft')) {           // 내편: one layer softer
                         if (k === 'saechim') {                           // no turning away — a small ♥ right away
@@ -3090,7 +3138,7 @@ function revisitBubble() {
     }
     if (!best) return;
     const n = Math.floor(bestAway / 86400e3);
-    const line = (REVISIT_LINES[best.personality?.base] || REVISIT_LINES.aegyo)(n);
+    const line = (REVISIT_LINES[kindOf(best, 'wake')] || REVISIT_LINES.aegyo)(n);
     showBubble(residents().length > 1 ? `${best.name}: ${line}` : line);
 }
 
@@ -3128,7 +3176,7 @@ function pendingDays(rec) {
         if (rec.celebrated?.[it.id] === occ) continue;             // once a day
         const n = it.kind === 'met' ? Number(occ.slice(0, 4)) - Number(it.since.slice(0, 4)) : 0;
         const lines = SPECIAL_LINES[it.kind];
-        let text = String(it.msg || '').trim() || (lines[rec.personality?.base] || lines.aegyo).replace('{n}', n);
+        let text = String(it.msg || '').trim() || (lines[kindOf(rec, 'wake')] || lines.aegyo).replace('{n}', n);
         if (late > 0) text = '늦었지만… ' + text;
         out.push({ id: it.id, occ, late, text });
     }
@@ -3225,8 +3273,9 @@ function bedWiggle() {
     if (!bed || bed.hidden || actors.length || document.hidden) return;
     const now = performance.now();
     if (now < wiggleAt) return;
-    if (!residents().some(p => bowlCount(p) > 0 && can(p, 'bedWiggle'))) return;
-    wiggleAt = now + rand(...WIGGLE_GAP) * 1000;
+    const who = residents().filter(p => bowlCount(p) > 0 && can(p, 'bedWiggle'));
+    if (!who.length) return;
+    wiggleAt = now + rand(...WIGGLE_GAP) * 1000 / Math.max(...who.map(p => fr(p, 'bedWiggle')));
     const icon = bed.querySelector('.tavvy-bed-icon');
     icon.classList.remove('tavvy-wiggle');
     void icon.offsetWidth;
@@ -3248,9 +3297,9 @@ function onTyping() {
         if (!can(a, 'peekInput') || a.held || a.air || a.waiting) continue;
         if (!start && now < a.peekInNext) continue;
         a.peekInNext = now + rand(...PEEKIN_GAP) * 1000;
-        const k = a.rec.personality?.base;
+        const k = kindOf(a, 'me');
         const okState = ['idle', 'walk', 'perch', 'fidget'].includes(a.state) || (a.state === 'doze' && k === 'neugut');
-        if (!okState || Math.random() >= (start ? PEEKIN_CHANCE : PEEKIN_AGAIN)) continue;
+        if (!okState || Math.random() >= chance(a, 'peekInput', start ? PEEKIN_CHANCE : PEEKIN_AGAIN)) continue;
         if (k === 'musim') { if (a.peekInSession === typing.session) continue; a.peekInSession = typing.session; }
         a.startPeekIn();
     }
@@ -3274,7 +3323,7 @@ function checkIdle() {
         // one roll per quiet spell; a pet busy right then (eating, held…) gets its roll a little later
         if (a.idleTried || !can(a, 'dozeWait') || !a.free() || a.waiting || !['idle', 'walk', 'perch', 'doze', 'fidget'].includes(a.state)) continue;
         a.idleTried = true;
-        if (Math.random() >= IDLE_DOZE_CHANCE) continue;
+        if (Math.random() >= chance(a, 'dozeWait', IDLE_DOZE_CHANCE)) continue;
         measurePlats();
         a.startSleepy();
     }
@@ -3466,7 +3515,7 @@ function onMySend(id) {
         for (const a of actors) {
             if (!a.free() || a.state === 'doze' || Math.random() >= byCloseness(a, 0.3, 0.85)) continue;
             a.after = a.state === 'perch' ? 'idle' : a.waiting ? 'wait' : 'idle';
-            a.startLook(a.p.send, x);
+            a.startLook(persOf(a, 'send').send, x);
         }
         for (const a of actors) if (canChat(a)) a.talk('sent');
     }, 120);
@@ -3820,22 +3869,56 @@ function journalHtml(p) {
 <div class="tw-moments">${journalMoments(p).map(m => `<div><span>${esc(m.day)}</span><b>${esc(m.name)}</b></div>`).join('')}</div>`;
 }
 
-/** Behaviours by closeness step: learned ones by name, the rest "???". */
-/** One behaviour in the 행동 tab with its on / off switch. */
-function actSwitch(p, u) {
-    const on = !isOff(p, u.key);
-    return `<label class="tw-act tw-act-sw${on ? ' tw-act-on' : ''}"><input type="checkbox" data-acton="${u.key}"${on ? ' checked' : ''}> ${esc(u.name)}</label>`;
+/** One behaviour in the 행동 tab: 끔 / 드물게 / 보통 / 자주 (or just 끔 / 켬). */
+function freqRow(p, u) {
+    const off = isOff(p, u.key);
+    const cur = off ? 'off' : (FREQ_X[p.freq?.[u.key]] ? p.freq[u.key] : 'norm');
+    const opts = NO_FREQ.includes(u.key) ? [['off', '끔'], ['norm', '켬']] : FREQS;
+    return `<div class="tw-frow${off ? ' tw-frow-off' : ''}"><span class="tw-fname">${esc(u.name)}</span><span class="tw-fseg">${opts.map(([k, n]) =>
+        `<span class="tw-fbtn${cur === k ? ' tw-fon' : ''}" data-freq="${u.key}" data-fv="${k}">${n}</span>`).join('')}</span></div>`;
 }
 
-/** Switch a behaviour on / off for the pet on screen (saved right away). */
-function setActOn(key, on) {
+/** 끔 / 드물게 / 보통 / 자주 for the pet on screen (saved right away). */
+function setFreq(key, v) {
     const p = curPet();
     if (!p || readOnly) return;
     const off = new Set(Array.isArray(p.off) ? p.off : []);
-    if (on) off.delete(key); else off.add(key);
+    const freq = { ...(p.freq || {}) };
+    if (v === 'off') off.add(key); else off.delete(key);
+    if (v === 'rare' || v === 'often') freq[key] = v; else if (v !== 'off') delete freq[key];
     p.off = [...off];
+    p.freq = freq;
     saveSoon();
     renderPanel();
+}
+
+function setPace(v) {
+    const p = curPet();
+    if (!p || readOnly || !PACES.some(x => x[0] === v)) return;
+    p.pace = v;
+    saveSoon();
+    renderPanel();
+}
+
+function setReact(m, v) {
+    const p = curPet();
+    if (!p || readOnly || !REACT_MOMENTS.some(x => x.key === m)) return;
+    p.personality.react ??= {};
+    if (PERSONALITIES[v]) p.personality.react[m] = v; else delete p.personality.react[m];
+    saveSoon();
+    renderPanel();
+}
+
+/** Back to how the preset (기본 성격) does it. */
+async function resetActs() {
+    const p = curPet();
+    if (!p || readOnly) return;
+    if (!await confirmBox('행동 빈도·걸음·반응 모습을 모두 기본 성격대로 되돌릴까요?')) return;
+    p.off = []; p.freq = {}; p.pace = 'norm';
+    if (p.personality) p.personality.react = {};
+    saveSoon();
+    renderPanel();
+    say('기본 성격대로 되돌렸어요.');
 }
 
 /** The ways to get about, ticked in 꾸미기 — saved right away. */
@@ -3856,12 +3939,23 @@ function actsHtml(p) {
         if (!items.length) return '';
         const open = lv >= k;
         const head = hide ? '' : `<div class="tw-cap">${esc(levelLabel(p, k))}${open ? '' : ' <span class="tw-sub">· 아직이에요</span>'}</div>`;
-        return head + `<div class="tw-acts">${items.map(u => open
-            ? actSwitch(p, u)
-            : '<span class="tw-act"><i class="fa-solid fa-lock"></i> ???</span>').join('')}</div>`;
+        return head + (open
+            ? `<div class="tw-freqs">${items.map(u => freqRow(p, u)).join('')}</div>`
+            : `<div class="tw-acts">${items.map(() => '<span class="tw-act"><i class="fa-solid fa-lock"></i> ???</span>').join('')}</div>`);
     }).join('');
-    const basic = `<div class="tw-cap">평소 행동</div><div class="tw-acts">${BASIC_ACTS.map(u => actSwitch(p, u)).join('')}</div>`;
-    return `<div class="tw-sub">누르면 켜고 끌 수 있어요. 끈 행동은 이 펫만 안 해요.</div>${basic}${groups}<div class="tw-sub" style="margin-top:10px">친해질수록 새 행동이 하나씩 열려요. 열린 행동도 늘 하는 건 아니고 가끔 해요.</div>`;
+    const baseName = persName(p);
+    const head = `<div class="tw-preset"><span>기본 성격 <span class="tw-chip">${esc(baseName)}</span>${customised(p) ? ' <span class="tw-sub">· 직접 고친 곳 있음</span>' : ''}</span>`
+        + (customised(p) ? '<div class="tw-btn tw-btn-small" data-act="actreset">처음대로</div>' : '') + '</div>'
+        + '<div class="tw-sub">처음엔 기본 성격대로 움직여요. 아래에서 빈도와 반응을 마음대로 바꿀 수 있어요. 누르면 바로 저장돼요.</div>';
+    const pace = p.pace || 'norm';
+    const basic = `<div class="tw-cap">평소 행동</div><div class="tw-freqs">${BASIC_ACTS.map(u => freqRow(p, u)).join('')}`
+        + `<div class="tw-frow"><span class="tw-fname">걸음 빠르기</span><span class="tw-fseg">${PACES.map(([k, n]) =>
+            `<span class="tw-fbtn${pace === k ? ' tw-fon' : ''}" data-pace="${k}">${n}</span>`).join('')}</span></div></div>`;
+    const react = p.personality?.react || {};
+    const reacts = `<div class="tw-cap">반응 모습</div><div class="tw-sub">순간마다 어느 성격처럼 반응할지 골라요. 섞어 써도 돼요.</div><div class="tw-freqs">${REACT_MOMENTS.map(m =>
+        `<div class="tw-frow"><span class="tw-fname">${esc(m.name)}</span><select class="tw-rsel" data-react="${m.key}"><option value="">기본 (${esc(baseName)})</option>${Object.entries(PERSONALITIES).map(([k, v]) =>
+            `<option value="${k}"${react[m.key] === k ? ' selected' : ''}>${esc(v.name)}</option>`).join('')}</select></div>`).join('')}</div>`;
+    return `${head}${basic}${groups}<div class="tw-sub" style="margin:6px 0 4px">친해질수록 새 행동이 하나씩 열려요.</div>${reacts}`;
 }
 
 /* ---------- window ---------- */
@@ -4192,7 +4286,7 @@ function petHtml(p) {
 <div class="tw-pane" data-pane="talk">${talkHtml(p)}</div>
 <div class="tw-pane tw-form" data-pane="edit">
   <label class="tw-label">이름 <input data-f="name" maxlength="20"></label>
-  <label class="tw-label">성격 <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
+  <label class="tw-label">기본 성격 <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
   <div class="tw-sub">성격을 바꾸면 행동은 바로 바뀌어요. 친밀도와 기록은 그대로예요.</div>
   <div class="tw-cap">화면에서 움직이는 방식</div>
   <div class="tw-moves">${Object.entries(MOVES).map(([k, v]) => `<label class="tw-mv"><input type="checkbox" data-mv="${k}"> ${v}</label>`).join('')}</div>
@@ -4251,7 +4345,7 @@ function newHtml() {
   <div class="tw-lookgrid"></div>
   ${uploadHtml()}
   <div class="tw-uploadopts" hidden>${facingHtml()}</div>
-  <label class="tw-label">성격 <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
+  <label class="tw-label">기본 성격 <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
   <div class="tw-btn tw-btn-main tw-wide" data-act="create">만들기</div>
   <div class="tw-msg"></div>
 </div>`;
@@ -4989,6 +5083,8 @@ function petCore(p) {
         talkFreq: p.talkFreq,
         moves: movesOf(p),
         off: [...(p.off || [])],
+        freq: structuredClone(p.freq || {}),
+        pace: p.pace || 'norm',
         dates: structuredClone(p.dates || []).map(d => ({ ...d, id: 'd' + Math.random().toString(36).slice(2, 9) })),
         metOn: p.metOn,
         sounds: structuredClone(p.sounds || {}),
@@ -5255,7 +5351,11 @@ function cleanPet(src, look) {
     if (isObj(src.lines)) for (const [k, v] of Object.entries(src.lines)) if (/^[a-zA-Z]{1,20}$/.test(k)) { const l = strList(v, 30); if (l.length) rec.lines[k] = l; }
     if (TALK_FREQ[src.talkFreq]) rec.talkFreq = src.talkFreq;
     rec.moves = movesOf(src);
-    if (Array.isArray(src.off)) rec.off = src.off.filter(k => BASIC_ACTS.some(b => b.key === k) || UNLOCKS.some(u => u.key === k));
+    const actKey = (k) => BASIC_ACTS.some(b => b.key === k) || UNLOCKS.some(u => u.key === k);
+    if (Array.isArray(src.off)) rec.off = src.off.filter(actKey);
+    if (isObj(src.freq)) for (const [k, v] of Object.entries(src.freq)) if (actKey(k) && (v === 'rare' || v === 'often')) rec.freq[k] = v;
+    if (PACES.some(x => x[0] === src.pace)) rec.pace = src.pace;
+    if (isObj(src.personality?.react)) for (const m of REACT_MOMENTS) if (PERSONALITIES[src.personality.react[m.key]]) rec.personality.react[m.key] = src.personality.react[m.key];
     if (Array.isArray(src.dates)) {
         rec.dates = src.dates.filter(d => isObj(d) && /^\d\d-\d\d$/.test(d.md)).slice(0, 30)
             .map(d => ({ id: 'd' + Math.random().toString(36).slice(2, 9), kind: String(d.kind || 'other').slice(0, 20), md: d.md, msg: String(d.msg || '').slice(0, LINE_MAX) }));
@@ -5391,6 +5491,11 @@ function onWinClick(e) {
     if (act === 'bedfind') return findBed();
     if (act === 'restore') return restoreBackup(win.body.querySelector('[data-live="backups"]').value);
     if (act === 'savetalk') return saveTalk();
+    if (act === 'actreset') return resetActs();
+    const fq = t.closest('[data-freq]');
+    if (fq) return setFreq(fq.dataset.freq, fq.dataset.fv);
+    const pc = t.closest('[data-pace]');
+    if (pc) return setPace(pc.dataset.pace);
     if (act === 'aifill') return aiFill();
     if (act === 'adddate') return addDateRow();
     if (act === 'rolesback') { win.roleEdit = null; return drawRoles(); }
@@ -5448,7 +5553,7 @@ function onWinInput(e) {
         if (!win.body.querySelector('[data-mv]:checked')) t.checked = true;
         return setMoves();
     }
-    if (t.dataset?.acton && e.type === 'change') return setActOn(t.dataset.acton, t.checked);
+    if (t.dataset?.react != null && e.type === 'change') return setReact(t.dataset.react, t.value);
     if (f === 'file' && e.type === 'change') return onFilePicked(t);
     if (f === 'importfile' && e.type === 'change') return importPicked(t);
     if (f === 'rolefile' && e.type === 'change') return addRoleFrames(t);
