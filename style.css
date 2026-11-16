@@ -630,6 +630,9 @@
 }
 .tavvy-win .tw-act-on { border: 1px solid transparent; background: var(--tw-good-bg); color: var(--tw-good-fg); }
 .tavvy-win .tw-act i { font-size: 10px; }
+.tavvy-win .tw-act-sw { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+.tavvy-win .tw-act-sw input { margin: 0; accent-color: var(--tw-accent); }
+.tavvy-win .tw-act-sw:not(.tw-act-on) { text-decoration: line-through; }
 
 .tavvy-win .tw-movebox { margin: 8px 0 10px; padding: 10px 12px; border: 1px dashed var(--tw-line); border-radius: 12px; display: flex; flex-direction: column; gap: 8px; }
 .tavvy-win .tw-danger { margin-top: 22px; padding-top: 12px; border-top: 1px solid var(--tw-line); display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }

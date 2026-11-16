@@ -32,6 +32,7 @@
 //         back down the same way; never naps up on the screen (only on the floor / a message); a smaller bed.
 // 0.7.13: ways to get about on the screen, chosen per pet — 오르기 (climb) / 날기 (float in soft curves) /
 //         휙휙 (dart, stop, dart, leaving afterimages); closeness stages renamed.
+// 0.7.14: the ways to get about save as soon as they're ticked; 행동 tab switches to turn behaviours on / off per pet.
 // 0.7.7: less standing and staring — little things on the spot, livelier waiting on a message,
 //        longer naps that sending / a reply no longer cut short, a much smaller lean at the input box.
 
@@ -328,6 +329,7 @@ function newPetRecord({ id, name, personality, look }) {
         lines: {},                                    // speech lines per moment: { wake: ['…'], … }
         talkFreq: 'some',                             // how often it speaks: 'off' / 'some' / 'often'
         moves: ['wall'],                              // how it gets about on the screen (MOVES keys)
+        off: [],                                      // behaviours switched off in the 행동 tab (BASIC_ACTS / UNLOCKS keys)
         dates: [],                                    // special days: [{ id, kind, md: 'MM-DD', msg }]
         metOn: true,                                  // celebrate the day we met every year
         celebrated: {},                               // date id ('met' for the day we met) → the day it was last celebrated
@@ -852,11 +854,25 @@ function unlocksFor(rec) {
     return UNLOCKS.filter(u => (!u.only || u.only === k) && (!u.not || u.not !== k));
 }
 
-/** Has this pet (actor or record) learned behaviour `key`? */
+/** Everyday behaviours that may be switched off in the 행동 tab (the rest — walking, napping, eating — always stay). */
+const BASIC_ACTS = [
+    { key: 'screen', name: '화면 돌아다니기' },
+    { key: 'climb',  name: '말풍선 오르기' },
+    { key: 'roll',   name: '구르기' },
+    { key: 'me',     name: '나 보며 반응' },
+];
+
+/** Switched off for this pet in the 행동 tab? */
+function isOff(who, key) {
+    const rec = who?.rec || who;
+    return Array.isArray(rec?.off) && rec.off.includes(key);
+}
+
+/** Has this pet (actor or record) learned behaviour `key` (and not had it switched off)? */
 function can(who, key) {
     const rec = who?.rec || who;
     const u = unlocksFor(rec).find(x => x.key === key);
-    return !!u && levelOf(rec) >= u.lv;
+    return !!u && levelOf(rec) >= u.lv && !isOff(rec, key);
 }
 
 /* ---------- you: typing, idle time, where your hand is ---------- */
@@ -1190,7 +1206,7 @@ class Actor {
     startFidget() {
         const kinds = ['scan', 'scan', 'sway', 'stretch', 'hop', 'hop'];
         if (this.rec.look.roles?.sit?.length) kinds.push('sit', 'sit');
-        if (!this.plat && !this.isFull()) kinds.push('roll');
+        if (!this.plat && !this.isFull() && !isOff(this, 'roll')) kinds.push('roll');
         const k = kinds[Math.floor(Math.random() * kinds.length)];
         if (k === 'roll') return this.setState('roll');
         if (k === 'hop') return this.hopInPlace('idle');
@@ -1678,13 +1694,13 @@ class Actor {
         const dz = this.p.doze + (full ? FULL_DOZE : 0);
         if (r < dz) return this.setState('doze');
         // stop and react to you now and then (friendlier = more often)
-        if (performance.now() - this.lastMe > ME_REST * 1000 && Math.random() < byCloseness(this, ...this.p.me) * ME_SCALE) return this.startMe();
-        if (full && !this.plat && Math.random() < 0.12) return this.setState('roll');   // 데굴데굴
+        if (!isOff(this, 'me') && performance.now() - this.lastMe > ME_REST * 1000 && Math.random() < byCloseness(this, ...this.p.me) * ME_SCALE) return this.startMe();
+        if (full && !this.plat && !isOff(this, 'roll') && Math.random() < 0.12) return this.setState('roll');   // 데굴데굴
         if (full && Math.random() < FULL_TUMMY) { this.fk = 'tummy'; return this.setState('fidget'); }   // 배 통통 ♪
         if (Math.random() < FIDGET_CHANCE) return this.startFidget();   // a little something on the spot
-        if (!this.plat && !this.waiting && root?.settings?.stroll !== false && stageIsChat() && Math.random() < (this.p.wall || 0)) return this.startWall();
+        if (!this.plat && !this.waiting && !isOff(this, 'screen') && root?.settings?.stroll !== false && stageIsChat() && Math.random() < (this.p.wall || 0)) return this.startWall();
         // hop up onto a message by itself
-        if (ledgesOn() && Math.random() < byCloseness(this, ...this.p.climb)) {
+        if (ledgesOn() && !isOff(this, 'climb') && Math.random() < byCloseness(this, ...this.p.climb)) {
             const t = this.pickClimb();
             if (t && this.climbTo(t, 'perch')) return;
         }
@@ -3805,6 +3821,32 @@ function journalHtml(p) {
 }
 
 /** Behaviours by closeness step: learned ones by name, the rest "???". */
+/** One behaviour in the 행동 tab with its on / off switch. */
+function actSwitch(p, u) {
+    const on = !isOff(p, u.key);
+    return `<label class="tw-act tw-act-sw${on ? ' tw-act-on' : ''}"><input type="checkbox" data-acton="${u.key}"${on ? ' checked' : ''}> ${esc(u.name)}</label>`;
+}
+
+/** Switch a behaviour on / off for the pet on screen (saved right away). */
+function setActOn(key, on) {
+    const p = curPet();
+    if (!p || readOnly) return;
+    const off = new Set(Array.isArray(p.off) ? p.off : []);
+    if (on) off.delete(key); else off.add(key);
+    p.off = [...off];
+    saveSoon();
+    renderPanel();
+}
+
+/** The ways to get about, ticked in 꾸미기 — saved right away. */
+function setMoves() {
+    const p = curPet();
+    if (!p || readOnly) return;
+    p.moves = movesPicked();
+    if (win.form?.kind === 'edit') win.form.base.moves = p.moves.join(',');
+    saveSoon();
+}
+
 function actsHtml(p) {
     const lv = levelOf(p);
     const hide = (root?.settings?.heartMode || 'both') === 'hide';
@@ -3815,10 +3857,11 @@ function actsHtml(p) {
         const open = lv >= k;
         const head = hide ? '' : `<div class="tw-cap">${esc(levelLabel(p, k))}${open ? '' : ' <span class="tw-sub">· 아직이에요</span>'}</div>`;
         return head + `<div class="tw-acts">${items.map(u => open
-            ? `<span class="tw-act tw-act-on">${esc(u.name)}</span>`
+            ? actSwitch(p, u)
             : '<span class="tw-act"><i class="fa-solid fa-lock"></i> ???</span>').join('')}</div>`;
     }).join('');
-    return `${groups}<div class="tw-sub" style="margin-top:10px">친해질수록 새 행동이 하나씩 열려요. 열린 행동도 늘 하는 건 아니고 가끔 해요.</div>`;
+    const basic = `<div class="tw-cap">평소 행동</div><div class="tw-acts">${BASIC_ACTS.map(u => actSwitch(p, u)).join('')}</div>`;
+    return `<div class="tw-sub">누르면 켜고 끌 수 있어요. 끈 행동은 이 펫만 안 해요.</div>${basic}${groups}<div class="tw-sub" style="margin-top:10px">친해질수록 새 행동이 하나씩 열려요. 열린 행동도 늘 하는 건 아니고 가끔 해요.</div>`;
 }
 
 /* ---------- window ---------- */
@@ -4153,7 +4196,7 @@ function petHtml(p) {
   <div class="tw-sub">성격을 바꾸면 행동은 바로 바뀌어요. 친밀도와 기록은 그대로예요.</div>
   <div class="tw-cap">화면에서 움직이는 방식</div>
   <div class="tw-moves">${Object.entries(MOVES).map(([k, v]) => `<label class="tw-mv"><input type="checkbox" data-mv="${k}"> ${v}</label>`).join('')}</div>
-  <div class="tw-sub">여러 개 고르면 화면에 올라갈 때마다 그중 하나를 골라요.</div>
+  <div class="tw-sub">여러 개 고르면 화면에 올라갈 때마다 그중 하나를 골라요. 누르면 바로 저장돼요.</div>
   <label class="tw-label">크기 (${device() === 'phone' ? '폰' : 'PC'})
     <div class="tw-row"><input type="number" inputmode="numeric" min="${SIZE_MIN}" max="${SIZE_MAX}" step="1" value="${petSize(p)}" data-size="${esc(p.id)}" class="tw-num"><span class="tw-sub" data-sizeval="${esc(p.id)}">${sizeLabel(p, petSize(p))}</span></div>
   </label>
@@ -4381,8 +4424,7 @@ function formDirty() {
     const b = f.base;
     return f.look !== b.look || !!f.file
         || val('name') !== b.name || val('pers') !== b.pers || val('facing') !== b.facing
-        || String(Number(val('squish'))) !== String(Number(b.squish))
-        || movesPicked().join(',') !== b.moves;
+        || String(Number(val('squish'))) !== String(Number(b.squish));
 }
 
 function pickLook(key) {
@@ -4809,7 +4851,6 @@ async function saveEdit() {
         if (look) { p.look.roles = look.roles; p.look.roleOpts = look.roleOpts || {}; p.look.kind = look.kind; p.look.baseline = look.baseline; }
         p.look.facing = v.facing;
         p.look.squish = v.squish;
-        p.moves = v.moves;
         const ok = await saveNow();
         if (!ok) saveSoon();
         // pictures only this pet had (e.g. added to a built-in look) and nothing uses any more
@@ -4947,6 +4988,7 @@ function petCore(p) {
         lines: structuredClone(p.lines || {}),
         talkFreq: p.talkFreq,
         moves: movesOf(p),
+        off: [...(p.off || [])],
         dates: structuredClone(p.dates || []).map(d => ({ ...d, id: 'd' + Math.random().toString(36).slice(2, 9) })),
         metOn: p.metOn,
         sounds: structuredClone(p.sounds || {}),
@@ -5213,6 +5255,7 @@ function cleanPet(src, look) {
     if (isObj(src.lines)) for (const [k, v] of Object.entries(src.lines)) if (/^[a-zA-Z]{1,20}$/.test(k)) { const l = strList(v, 30); if (l.length) rec.lines[k] = l; }
     if (TALK_FREQ[src.talkFreq]) rec.talkFreq = src.talkFreq;
     rec.moves = movesOf(src);
+    if (Array.isArray(src.off)) rec.off = src.off.filter(k => BASIC_ACTS.some(b => b.key === k) || UNLOCKS.some(u => u.key === k));
     if (Array.isArray(src.dates)) {
         rec.dates = src.dates.filter(d => isObj(d) && /^\d\d-\d\d$/.test(d.md)).slice(0, 30)
             .map(d => ({ id: 'd' + Math.random().toString(36).slice(2, 9), kind: String(d.kind || 'other').slice(0, 20), md: d.md, msg: String(d.msg || '').slice(0, LINE_MAX) }));
@@ -5403,8 +5446,9 @@ function onWinInput(e) {
     if (f === 'squish') return showSquish();
     if (t.dataset?.mv != null && e.type === 'change') {          // keep at least one way ticked
         if (!win.body.querySelector('[data-mv]:checked')) t.checked = true;
-        return;
+        return setMoves();
     }
+    if (t.dataset?.acton && e.type === 'change') return setActOn(t.dataset.acton, t.checked);
     if (f === 'file' && e.type === 'change') return onFilePicked(t);
     if (f === 'importfile' && e.type === 'change') return importPicked(t);
     if (f === 'rolefile' && e.type === 'change') return addRoleFrames(t);
