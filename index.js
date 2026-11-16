@@ -278,7 +278,7 @@ function movesOf(rec) {
     if (!Array.isArray(rec?.moves)) return ['wall'];
     return Object.keys(MOVES).filter(k => rec.moves.includes(k));
 }
-const SCREEN_SCALE = 0.8;        // 0.8.2: getting about on the screen a little less often than before (p.wall × this)
+const SCREEN_SCALE = 0.5;        // 0.8.3: getting about on the screen less often than before (p.wall × this; 0.8.2 had 0.8)
 const TALK_GAP = 8;              // s — ordinary lines not closer together than this
 const SAY_MS = 2600;             // how long a speech bubble stays
 const LINE_MAX = 40;             // characters in one line
@@ -2733,7 +2733,7 @@ function tick(t) {
 
 /* ---------- 0.8.2: two pets standing right on top of each other → one walks a few steps off ---------- */
 const APART_NEAR = 1 / 3;       // × the smaller width — closer than this counts as "on top of each other"
-const APART_WAIT = 1.5;         // s of that before one of them moves
+const APART_WAIT = 1.0;         // s of that before one of them moves
 
 function apartCheck(dt) {
     for (const a of actors) {
@@ -5584,6 +5584,9 @@ function onWinClick(e) {
     if (act === 'addframe') return win.body.querySelector('[data-f="rolefile"]')?.click();
     if (act === 'pendok') return confirmRolePend();
     if (act === 'pendno') { win.rolePend = null; return drawRolePend(); }
+    if (act === 'refit') return openRefit();
+    if (act === 'refitok') return confirmRefit();
+    if (act === 'refitno') return closeRefit();
     if (act === 'sheetall') return win.body.querySelector('[data-f="sheetfile"]')?.click();
     if (act === 'sheetok') return confirmSheet();
     if (act === 'sheetno') { win.sheet = null; return drawRoles(); }
@@ -5637,6 +5640,7 @@ function onWinInput(e) {
     if (f === 'rolefile' && e.type === 'change') return addRoleFrames(t);
     if (f === 'sheetfile' && e.type === 'change') return sheetPicked(t);
     if ((t.dataset?.sheetpick != null || t.dataset?.sheetrow != null || t.dataset?.sheetref != null) && e.type === 'change') return onSheetInput(t);
+    if (t.dataset?.fitmode != null || t.dataset?.fitscale != null) return onFitInput(t, e.type === 'change');
     if (t.dataset?.sheetscale != null && win.sheet) { win.sheet.scale = clamp(Number(t.value) || 100, 50, 200) / 100; return placeFitPreview(win.sheet); }
     if (t.dataset?.ro && e.type === 'change') return setRoleOpt(t.dataset.ro, t.value);
     if ((f === 'crop' || f === 'bg' || f === 'bgtol') && e.type === 'change' && win.form?.file) { showBgRow(''); return redoUploadPreview(); }
@@ -5721,9 +5725,15 @@ function roleEditHtml(p, key) {
 </div>
 <div class="tw-cap">그림 ${list.length}/${FRAMES_MAX} <span class="tw-sub">· 여러 장이면 차례로 넘어가요</span></div>
 <div class="tw-frames">${frames}${add}</div>
+${list.length && key !== 'idle' ? `<div class="tw-row"><div class="tw-btn tw-btn-small" data-act="refit"><i class="fa-solid fa-up-down"></i> 키 맞추기</div><span class="tw-sub">넣어 둔 그림 크기를 기본 그림에 맞춰요</span></div>
+<div class="tw-refit" hidden>
+  <div class="tw-refitbox"></div>
+  <div class="tw-row"><div class="tw-btn" data-act="refitok"><i class="fa-solid fa-check"></i> 바꾸기</div><div class="tw-btn" data-act="refitno">취소</div></div>
+</div>` : ''}
 <div class="tw-rolepend" hidden>
   <div class="tw-cap">미리보기 <span class="tw-sub">· 이대로 넣을까요?</span></div>
   <div class="tw-frames tw-pendframes"></div>
+  <div class="tw-pendfit"></div>
   <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="pendcut"><i class="fa-solid fa-crop-simple"></i> 자르기 · 나누기</div><span class="tw-sub tw-cutnote"></span></div>
   <div class="tw-row"><div class="tw-btn" data-act="pendok"><i class="fa-solid fa-check"></i> 넣기</div><div class="tw-btn" data-act="pendno">취소</div></div>
 </div>
@@ -5756,6 +5766,7 @@ function drawRoles() {
     stopPreview();
     const keep = win.body.scrollTop;
     win.rolePend = null;                                           // an unconfirmed preview never survives a redraw
+    win.refit = null;
     if (win.sheet && win.sheet.pet !== p) win.sheet = null;
     if (win.sheet) {                                                // a sheet waiting to be shared out
         pane.innerHTML = sheetHtml();
@@ -5826,8 +5837,9 @@ async function addRoleFrames(input) {
     const use = files.slice(0, Math.max(0, space));
     if (!use.length) return say(`한 동작에는 그림을 ${FRAMES_MAX}장까지 넣을 수 있어요.`);
     const skipped = files.length - use.length;
-    if (bgTolOf('role') > 0 || use.length === 1) {                   // look first (and one picture can be cut or split there)
-        win.rolePend = { pet: p, key, files: use, skipped, imgs: null, cuts: null, sheet: false };
+    if (bgTolOf('role') > 0 || use.length === 1 || key !== 'idle') {   // look first (one picture can be cut or split there; 키 맞추기)
+        closeRefit();
+        win.rolePend = { pet: p, key, files: use, skipped, imgs: null, cuts: null, sheet: false, fit: null };
         return redoRolePreview();
     }
     const crop = win.body.querySelector('[data-f="rolecrop"]')?.checked !== false;
@@ -5853,6 +5865,12 @@ async function redoRolePreview() {
         const imgs = await prepareFrames(pend.files, crop, tol, pend.cuts);
         if (win.rolePend !== pend) return;
         pend.imgs = imgs;
+        if (pend.key !== 'idle') {                                   // 키 맞추기 (keeps the choice when made again)
+            const F = { pet: pend.pet, imgs, mode: pend.fit?.mode || 'auto', scale: pend.fit?.scale || 1 };
+            await measureFit(F);
+            if (win.rolePend !== pend) return;
+            pend.fit = F;
+        }
         say('');
     } catch (e) {
         if (win.rolePend === pend) { win.rolePend = null; say('그림을 읽지 못했어요: ' + (e.message || e)); }
@@ -5871,6 +5889,8 @@ function drawRolePend() {
     if (note) note.textContent = !pend?.cuts ? '' : pend.sheet ? `${pend.cuts.length}장으로 나눴어요` : '직접 자른 부분만 써요';
     box.querySelector('.tw-pendframes').innerHTML = pend?.imgs
         ? pend.imgs.map((im, i) => `<div class="tw-frame"><img class="tw-checker" src="${im.dataUrl}" alt=""><span>${i + 1}</span></div>`).join('') : '';
+    const fb = box.querySelector('.tw-pendfit');
+    if (fb) { fb.innerHTML = ''; if (pend?.fit) drawFit(); }
     if (pend?.imgs) box.scrollIntoView?.({ block: 'nearest' });
 }
 
@@ -5880,7 +5900,13 @@ async function confirmRolePend() {
     if (curPet() !== pend.pet || win.roleEdit !== pend.key) { win.rolePend = null; return drawRolePend(); }
     busy = true;
     try {
-        await putRoleFrames(pend.pet, pend.key, pend.imgs, pend.skipped);
+        let imgs;
+        try {
+            imgs = await fittedImgs(pend.fit, pend.imgs);
+        } catch (e) {
+            return say('키를 맞추지 못했어요: ' + (e.message || e));
+        }
+        await putRoleFrames(pend.pet, pend.key, imgs, pend.skipped);
     } finally {
         busy = false;
     }
@@ -6146,13 +6172,17 @@ async function fitSheet(p, refImg, imgs, scale = 1) {
     const ref = await canvasOf(refImg.dataUrl);
     const rb = opaqueBox(ref.g, ref.w, ref.h);
     if (!bb || !rb) throw new Error('기준 그림이 비어 있어요');
-    const k = bb.sh / rb.sh * scale;                           // sheet px → 기본 px (× the 막대)
+    return fitWithK(imgs, bb.sh / rb.sh * scale);              // sheet px → 기본 px (× the 막대)
+}
+
+/** Draw pictures at k (picture px → 기본 px) with the FIT_MARK. Returns Map(old picture → new picture). */
+async function fitWithK(imgs, k) {
     const big = Math.max(...imgs.map(im => Math.max(im.w, im.h))) * k;
     let m = k < 1 ? clamp(Math.round(1 / k), 1, FIT_M_MAX) : 1;   // drawn m× finer than the 기본 picture, so it stays sharp
     while (m > 1 && big * m > FIT_MAX_PX) m--;
     const out = new Map();
     for (const im of new Set(imgs)) {
-        const c = await canvasOf(im.dataUrl);
+        const c = await cleanCanvas(im.dataUrl);
         const w = Math.max(FIT_MARK.length + 1, Math.round(c.w * k * m)), h = Math.max(1, Math.round(c.h * k * m));
         const cv = document.createElement('canvas');
         cv.width = w; cv.height = h;
@@ -6167,6 +6197,220 @@ async function fitSheet(p, refImg, imgs, scale = 1) {
         out.set(im, { base64: dataUrl.split(',')[1], dataUrl, w, h });
     }
     return out;
+}
+
+/* ---- 0.8.3: 키 맞추기 for pictures put in one action at a time, and for pictures already in ---- */
+
+const FIT_LIKE = 0.4;            // |log(shape ratio)| under this = shaped like the 기본 picture → 자동 matches heights
+
+/** A picture on a canvas with its 키 맞추기 mark wiped (so it doesn't count as part of the figure). fm = its m, or 0. */
+async function cleanCanvas(src) {
+    const c = await canvasOf(src);
+    const n = FIT_MARK.length + 1;
+    c.fm = 0;
+    if (c.w >= n) {
+        const d = c.g.getImageData(0, 0, n, 1).data;
+        if (FIT_MARK.every((a, i) => d[i * 4 + 3] === a) && d[(n - 1) * 4 + 3] >= 1) { c.fm = d[(n - 1) * 4 + 3]; c.g.clearRect(0, 0, n, 1); }
+    }
+    return c;
+}
+
+/**
+ * A fit state F = { pet, imgs: [{ dataUrl, w, h }], mode: 'auto' | 'fit' | 'off', scale, base, boxes, cur }.
+ * cur[i] = the scale (picture px → 기본 px) picture i is shown at now: squeezed into the pet's box, or its mark.
+ */
+async function measureFit(F) {
+    try {
+        const url = imgUrl(F.pet.look.roles.idle[0]);
+        const base = await cleanCanvas(url);
+        const bb = opaqueBox(base.g, base.w, base.h);
+        F.boxes = []; F.cur = [];
+        for (const im of F.imgs) {
+            const c = await cleanCanvas(im.dataUrl);
+            F.boxes.push(opaqueBox(c.g, c.w, c.h));
+            F.cur.push(c.fm ? 1 / c.fm : Math.min(base.w / c.w, base.h / c.h));
+        }
+        F.base = bb ? { box: bb, url, w: base.w, h: base.h } : null;
+    } catch (e) {
+        console.warn('[Tavvy] could not measure for 키 맞추기', e);
+        F.base = null; F.boxes = null;
+    }
+}
+
+/** The picture most like the 기본 picture in shape, and how alike (log ratio, 0 = same). */
+function fitRef(F) {
+    if (!F.base || !F.boxes) return { i: -1, d: Infinity };
+    const want = F.base.box.sw / F.base.box.sh;
+    let i = -1, d = Infinity;
+    F.boxes.forEach((b, j) => {
+        if (!b) return;
+        const dj = Math.abs(Math.log((b.sw / b.sh) / want));
+        if (dj < d) { d = dj; i = j; }
+    });
+    return { i, d };
+}
+
+/** Does 키 맞추기 match heights (true) or keep today's size (false)? */
+const fitMatches = (F) => F.mode === 'fit' || (F.mode === 'auto' && fitRef(F).d < FIT_LIKE);
+
+/** picture px → 기본 px for the result, or 0 = leave the pictures as they are. */
+function fitKOf(F) {
+    const { i } = fitRef(F);
+    if (F.mode === 'off' || i < 0) return 0;
+    const k = fitMatches(F) ? F.base.box.sh / F.boxes[i].sh : F.cur[i];
+    return k * (F.scale || 1);
+}
+
+/** Nothing would change: plain pictures kept at the size they already show at. */
+const fitIdle = (F) => !fitKOf(F) || (!fitMatches(F) && (F.scale || 1) === 1 && F.cur.every((k, i) => Math.abs(k - Math.min(F.base.w / F.imgs[i].w, F.base.h / F.imgs[i].h)) < 1e-6));
+
+function fitHtml(F) {
+    if (!F.base || !F.boxes) return F.boxes === undefined ? '<div class="tw-sub">크기 재는 중…</div>' : '';
+    const like = fitRef(F).d < FIT_LIKE;
+    const pct = Math.round((F.scale || 1) * 100);
+    const k = fitKOf(F);
+    return `<div class="tw-row"><span class="tw-cap tw-grow">키 맞추기</span><select data-fitmode="1">
+  <option value="auto"${F.mode === 'auto' ? ' selected' : ''}>자동 (${like ? '키 맞춤' : '지금 크기'})</option>
+  <option value="fit"${F.mode === 'fit' ? ' selected' : ''}>기본 그림과 키 같게</option>
+  <option value="off"${F.mode === 'off' ? ' selected' : ''}>맞추지 않음</option></select></div>
+<div class="tw-sub">${F.mode === 'off' ? '펫 칸에 맞춰 줄여 넣어요 (예전 방식).' : like || F.mode === 'fit' ? '그림 속 키가 기본 그림 속 키와 같아지게 맞춰요.' : '기본 그림과 모양이 달라서(누운 그림 등) 지금 보이는 크기에서 시작해요. 막대로 맞춰요.'}</div>`
+        + (k > 0 ? `<div class="tw-fitprev"><img class="tw-fit-base" alt=""><img class="tw-fit-ref" alt=""></div>
+<div class="tw-row"><span class="tw-sub">크기</span><input type="range" min="30" max="200" step="5" value="${pct}" data-fitscale="1" class="tw-grow"><span class="tw-sub tw-fitpct">${pct}%</span></div>
+<div class="tw-sub">흐린 그림이 지금 기본 그림이에요.</div>` : '');
+}
+
+/** The preview: the reference picture over the 기본 picture, standing on the same ground, at screen scale. */
+function placeFitPrev(box, base, ref, k, scale) {
+    if (!box || !base || !ref || !(k > 0)) return;
+    const H = 150, u = H / base.h;
+    const bi = box.querySelector('.tw-fit-base'), fi = box.querySelector('.tw-fit-ref');
+    if (bi.getAttribute('src') !== base.url) bi.src = base.url;
+    if (fi.getAttribute('src') !== ref.dataUrl) fi.src = ref.dataUrl;
+    bi.style.width = (base.w * u).toFixed(1) + 'px'; bi.style.height = H + 'px';
+    fi.style.width = (ref.w * k * u).toFixed(1) + 'px'; fi.style.height = (ref.h * k * u).toFixed(1) + 'px';
+    const pct = box.parentElement?.querySelector('.tw-fitpct');
+    if (pct) pct.textContent = Math.round((scale || 1) * 100) + '%';
+}
+
+/** The fit state showing now (the waiting new pictures, or 다시 맞추기) and its box. */
+function curFit() {
+    if (win?.rolePend?.fit) return { F: win.rolePend.fit, box: win.body.querySelector('.tw-pendfit') };
+    if (win?.refit) return { F: win.refit, box: win.body.querySelector('.tw-refitbox') };
+    return null;
+}
+
+function drawFit() {
+    const c = curFit();
+    if (!c?.box) return;
+    c.box.innerHTML = fitHtml(c.F);
+    placeFit();
+}
+
+function placeFit() {
+    const c = curFit();
+    if (!c?.box) return;
+    const { i } = fitRef(c.F);
+    placeFitPrev(c.box.querySelector('.tw-fitprev'), c.F.base, c.F.imgs[i], fitKOf(c.F), c.F.scale);
+}
+
+function onFitInput(t, change) {
+    const c = curFit();
+    if (!c) return;
+    if (t.dataset.fitmode != null) {
+        if (!change) return;
+        c.F.mode = ['auto', 'fit', 'off'].includes(t.value) ? t.value : 'auto';
+        c.F.scale = 1;
+        return drawFit();
+    }
+    c.F.scale = clamp(Number(t.value) || 100, 30, 200) / 100;
+    placeFit();
+}
+
+/** The pictures as they will go in: fitted if 키 맞추기 says so. */
+async function fittedImgs(F, imgs) {
+    if (!F || fitIdle(F)) return imgs;
+    say('키 맞추는 중…');
+    const out = await fitWithK(imgs, fitKOf(F));
+    return imgs.map(im => out.get(im));
+}
+
+/** 다시 맞추기: the pictures already in this action, fitted again (or put back to squeezed-in). */
+async function openRefit() {
+    const p = curPet(), key = win.roleEdit;
+    const list = p?.look.roles[key];
+    if (!list?.length || key === 'idle') return;
+    win.rolePend = null; drawRolePend();
+    const F = { pet: p, key, imgs: [], mode: 'auto', scale: 1 };
+    win.refit = F;
+    const box = win.body.querySelector('.tw-refit');
+    if (box) box.hidden = false;
+    drawFit();
+    try {
+        for (const path of list) {
+            const c = await canvasOf(imgUrl(path));
+            F.imgs.push({ dataUrl: imgUrl(path), w: c.w, h: c.h, path });
+        }
+        await measureFit(F);
+    } catch (e) {
+        if (win.refit === F) { win.refit = null; if (box) box.hidden = true; say('그림을 읽지 못했어요: ' + (e.message || e)); }
+        return;
+    }
+    if (win.refit !== F) return;
+    // 자동 starts from the size they show at now: a picture fitted before keeps its size
+    drawFit();
+    box?.scrollIntoView?.({ block: 'nearest' });
+}
+
+function closeRefit() {
+    win.refit = null;
+    const box = win.body.querySelector('.tw-refit');
+    if (box) box.hidden = true;
+}
+
+async function confirmRefit() {
+    const F = win.refit, p = curPet();
+    if (!F?.boxes || busy || !p || F.pet !== p || win.roleEdit !== F.key) return;
+    if (readOnly) return say(readOnlyReason);
+    const was = F.cur.map((k, i) => Math.abs(k - Math.min(F.base.w / F.imgs[i].w, F.base.h / F.imgs[i].h)) > 1e-6);   // already fitted
+    let imgs;
+    busy = true;
+    const uploaded = [];
+    try {
+        if (F.mode === 'off') {                                   // back to squeezed into the box: just drop the mark
+            if (!was.some(Boolean)) { closeRefit(); return say('바꿀 게 없어요.'); }
+            imgs = [];
+            for (const im of F.imgs) {
+                const c = await cleanCanvas(im.dataUrl);
+                const dataUrl = c.cv.toDataURL('image/png');
+                imgs.push({ base64: dataUrl.split(',')[1], dataUrl, w: c.w, h: c.h });
+            }
+        } else {
+            if (fitIdle(F)) { closeRefit(); return say('바꿀 게 없어요.'); }
+            imgs = await fittedImgs(F, F.imgs);
+        }
+        say('그림 올리는 중…');
+        const res = await Promise.allSettled(imgs.map((im) => {
+            const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+            return uploadFile(`tavvy_role_${id}.png`, im.base64);
+        }));
+        for (const r of res) if (r.status === 'fulfilled') uploaded.push(r.value);
+        const bad = res.find(r => r.status === 'rejected');
+        if (bad) throw bad.reason;
+        if (curPet() !== p || win.roleEdit !== F.key || win.refit !== F) throw new Error('창이 바뀌었어요');
+        const olds = F.imgs.map(im => im.path);
+        win.refit = null;
+        const ok = await changeRoles(p, (look) => {
+            const cur = look.roles[F.key] || [];
+            look.roles[F.key] = cur.map(f => { const j = olds.indexOf(f); return j >= 0 ? uploaded[j] : f; });
+        });
+        say(ok ? '크기를 맞췄어요.' : '바꿨지만 저장이 늦어지고 있어요.');
+    } catch (e) {
+        console.error('[Tavvy] refit failed', e);
+        for (const f of uploaded) if (!fileInUse(f)) deleteFile(f);
+        say('크기를 바꾸지 못했어요: ' + (e.message || e));
+    } finally {
+        busy = false;
+    }
 }
 
 /** Upload ready pictures into one action's slot. */

@@ -1059,3 +1059,6 @@
 .tavvy-win .tw-fitprev img { position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%); max-width: none; max-height: none; object-fit: fill; }
 .tavvy-win .tw-fitprev .tw-fit-base { z-index: 1; opacity: .4; filter: grayscale(.4); }
 .tavvy-win .tw-sheet-ref input[type="range"] { margin: 0 8px; }
+
+/* 0.8.3: 키 맞추기 for one action's pictures */
+.tavvy-win .tw-pendfit:not(:empty), .tavvy-win .tw-refit { margin: 6px 0 8px; }
