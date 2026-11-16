@@ -1021,3 +1021,28 @@
     .tavvy-win .tw-sheet-head select { font-size: 16px; }
 }
 .tavvy-win .tw-frames { gap: 10px 16px; }
+
+/* 0.7.13: ways to get about on the screen */
+.tavvy-ghost {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none !important;
+    z-index: 0;
+    animation: tavvy-ghost .32s linear forwards;
+}
+@keyframes tavvy-ghost { from { opacity: .45; } to { opacity: 0; } }
+.tavvy-win .tw-moves { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
+.tavvy-win .tw-mv {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 13px;
+    padding: 4px 12px;
+    border-radius: 99px;
+    border: 1px solid var(--tw-line);
+    cursor: pointer;
+    user-select: none;
+}
+.tavvy-win .tw-mv input { margin: 0; accent-color: var(--tw-accent); }
+.tavvy-win .tw-mv:has(input:checked) { background: var(--tw-chip-bg); color: var(--tw-chip-fg); border-color: transparent; }

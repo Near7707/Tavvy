@@ -30,6 +30,8 @@
 //         a full tummy is just cute now (pats its tummy ♪, rolls) — no extra naps, no slow walking.
 // 0.7.12: no more going up a side wall — it starts climbing the screen right where it stands and climbs
 //         back down the same way; never naps up on the screen (only on the floor / a message); a smaller bed.
+// 0.7.13: ways to get about on the screen, chosen per pet — 오르기 (climb) / 날기 (float in soft curves) /
+//         휙휙 (dart, stop, dart, leaving afterimages); closeness stages renamed.
 // 0.7.7: less standing and staring — little things on the spot, livelier waiting on a message,
 //        longer naps that sending / a reply no longer cut short, a much smaller lean at the input box.
 
@@ -127,9 +129,9 @@ const BACKUP_KEEP = 7;          // daily backups kept on the server
 // closeness (stage 5): points = messages eaten (mine + theirs) + pat points.
 // The thresholds sit at closeness 0 / 25 / 50 / 75 / 100, straight lines in between. Never saved — always worked out.
 const LEVELS = [
-    { name: '처음', min: 0,   hearts: '♡' },
-    { name: '관심', min: 30,  hearts: '♥' },
-    { name: '친구', min: 100, hearts: '♥♥' },
+    { name: '아는 사이', min: 0,   hearts: '♡' },
+    { name: '친구', min: 30,  hearts: '♥' },
+    { name: '친한 친구', min: 100, hearts: '♥♥' },
     { name: '단짝', min: 220, hearts: '♥♥♥' },
     { name: '내편', min: 400, hearts: '♥♥♥♥' },
 ];
@@ -151,7 +153,7 @@ const REVISIT_LINES = {
     musim:   (n) => `…${n}일.`,
 };
 
-// unlocked behaviours (stage 6-1). lv = closeness level needed (1 관심 · 2 친구 · 3 단짝 · 4 내편).
+// unlocked behaviours (stage 6-1). lv = closeness level needed (1 친구 · 2 친한 친구 · 3 단짝 · 4 내편).
 // only / not = personality. Never saved — worked out from the level every time.
 const UNLOCKS = [
     { key: 'peekInput', lv: 1, name: '입력창 기웃' },
@@ -199,6 +201,8 @@ const ROLE_GROUPS = [
         { key: 'climb', name: '말풍선 오르기', fb: 'jump' },
         { key: 'roll', name: '구르기', fb: 'idle' },
         { key: 'wall', name: '화면 오르기', fb: 'walk' },
+        { key: 'fly', name: '날기', fb: 'jump' },
+        { key: 'dash', name: '휙휙', fb: 'fly' },
     ] },
     { key: 'react', name: '반응', roles: [
         { key: 'happy', name: '기쁨', fb: 'idle' },
@@ -252,6 +256,19 @@ const FULL_DOZE_LEN = 1;         // … nor longer ones
 const FULL_TUMMY = 0.1;          // full tummy: pats its tummy ♪ now and then
 const CLIMB_PULL = 0.55;         // s — one pull up the screen (moving, then a short hold)
 const CLIMB_SLIP = 0.05;         // chance per pull to slip down a little
+
+// 0.7.13: ways to get about on the screen (펫마다 고름; several → one of them each time)
+const MOVES = { wall: '오르기', fly: '날기', dash: '휙휙' };
+const FLY_TILT = 12;             // ° — leaning into where it floats
+const DASH_SPEED = 650;          // px/s — 휙휙
+const DASH_HOLD = [0.4, 1.1];    // s — a stop between darts
+const GHOST_GAP = 0.045;         // s — one afterimage this often while darting
+
+/** The ways this pet gets about on the screen (always at least one). */
+function movesOf(rec) {
+    const m = (Array.isArray(rec?.moves) ? rec.moves : []).filter(k => MOVES[k]);
+    return m.length ? [...new Set(m)] : ['wall'];
+}
 const TALK_GAP = 8;              // s — ordinary lines not closer together than this
 const SAY_MS = 2600;             // how long a speech bubble stays
 const LINE_MAX = 40;             // characters in one line
@@ -310,6 +327,7 @@ function newPetRecord({ id, name, personality, look }) {
         personality: { base: personality, traits: [] },
         lines: {},                                    // speech lines per moment: { wake: ['…'], … }
         talkFreq: 'some',                             // how often it speaks: 'off' / 'some' / 'often'
+        moves: ['wall'],                              // how it gets about on the screen (MOVES keys)
         dates: [],                                    // special days: [{ id, kind, md: 'MM-DD', msg }]
         metOn: true,                                  // celebrate the day we met every year
         celebrated: {},                               // date id ('met' for the day we met) → the day it was last celebrated
@@ -1077,7 +1095,7 @@ class Actor {
 
     /** Free to react to things (not held, flying, hidden, leaving…). */
     free() {
-        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear', 'greet', 'sniff', 'eat', 'nod', 'dance', 'roll', 'resist', 'gift', 'sleepy', 'stroll'].includes(this.state);
+        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear', 'greet', 'sniff', 'eat', 'nod', 'dance', 'roll', 'resist', 'gift', 'sleepy', 'stroll', 'fly'].includes(this.state);
     }
 
     /** Can a sparkle reaching it be eaten right now? (dozing → piled beside it; held / flying → waits nearby) */
@@ -1182,8 +1200,72 @@ class Actor {
 
     /** 화면 오르기 (0.7.12): straight up the screen from where it stands on the floor, back to you. */
     startWall() {
+        const list = movesOf(this.rec);
+        const m = list[Math.floor(Math.random() * list.length)];
         this.y = 0;
-        this.setState('stroll');
+        if (m === 'wall') return this.setState('stroll');
+        this.fmode = m;                                           // 날기 / 휙휙
+        this.setState('fly');
+    }
+
+    /** 날기 · 휙휙: somewhere new on the screen (the first one: up off the floor). */
+    flyPick(first) {
+        const L = stage.left + this.w / 2, R = Math.max(L, stage.right - this.w / 2);
+        const lo = this.h * 1.2, hi = Math.max(lo, this.strollTop());
+        if (first) {
+            this.sx = clamp(this.x + rand(-1, 1) * this.w, L, R);
+            this.sy = clamp(rand(this.h * 1.6, this.h * 4), lo, hi);
+        } else {
+            this.sx = rand(L, R);
+            this.sy = rand(lo, hi);
+            if (Math.hypot(this.sx - this.x, this.sy - this.y) < this.h * 1.5) this.sy = clamp(this.y + (this.y + this.h * 2 <= hi ? 2 : -2) * this.h, lo, hi);
+        }
+    }
+
+    /** End of 날기 · 휙휙: settle on the floor, onto a message, or (now and then) just let go. */
+    flyEnd() {
+        const r = Math.random();
+        if (r < 0.15) return this.strollDrop();
+        if (r < 0.55 && ledgesOn()) {
+            const ok = plats.filter(p => p.right - p.left > this.w * 1.2 && p.top > (stage.chatTop || 0) + this.h && p.top < stage.floorY - this.h);
+            if (ok.length) {
+                const p = ok[Math.floor(Math.random() * ok.length)];
+                this.fgoal = 'perch';
+                this.sx = clamp(this.x, p.left + this.w * 0.6, p.right - this.w * 0.6);
+                this.sy = Math.min(this.strollTop(), stage.floorY - p.top + this.h * 0.3);
+                return;
+            }
+        }
+        this.fgoal = 'land';
+        const [L, R] = this.range();
+        this.sx = clamp(this.x, L, Math.max(L, R));
+        this.sy = 0;
+    }
+
+    /** Got where it was going (날기 · 휙휙). */
+    flyArrive() {
+        if (this.fgoal === 'land') {
+            this.y = 0;
+            const [L, R] = this.range();
+            this.x = clamp(this.x, L, Math.max(L, R));
+            this.endWall();
+            this.sq = this.fmode === 'dash' ? 0.8 : 0.9;
+            this.setState('idle');
+            return;
+        }
+        if (this.fgoal === 'perch') return this.strollDrop();   // just above the message → caught by it
+        if (this.t > this.until) this.flyEnd(); else this.flyPick(false);
+    }
+
+    /** 휙휙: a fading copy of itself left behind. */
+    ghost() {
+        if (!layer || !this.el.isConnected) return;
+        const g = this.el.cloneNode(true);
+        g.className = 'tavvy-ghost';
+        g.removeAttribute('id');
+        layer.insertBefore(g, this.el);
+        g.addEventListener('animationend', () => g.remove());
+        setTimeout(() => g.remove(), 800);
     }
 
     /** Back to normal standing (left the wall / the screen). */
@@ -1191,7 +1273,7 @@ class Actor {
         this.wallOn = false;
         this.tilt = 0; this.tiltv = 0; this.tiltT = 0;
         this.body.style.transformOrigin = '';
-        this.sgoal = null;
+        this.sgoal = null; this.fgoal = null;
     }
 
     /** Highest a pet may go on the screen (feet height above the floor). */
@@ -1513,7 +1595,7 @@ class Actor {
 
     setState(s) {
         if (this.big && s !== this.state) this.endBig();
-        if (this.wallOn && s !== 'stroll') this.endWall();
+        if (this.wallOn && s !== 'stroll' && s !== 'fly') this.endWall();
         this.state = s; this.t = 0;
         this.aside = false; this.cheering = false;
         this.sqT = 1;
@@ -1539,6 +1621,15 @@ class Actor {
         if (s === 'wait') { this.fxT = rand(0.4, 1.2); this.scanT = 0.6; this.wvT = rand(2, 3.5); this.wsw = 0; }
         if (s === 'fidget') { this.fxT = 0; this.tiltT = 0; this.fq = Math.random() < 0.35; this.until = { scan: rand(1.6, 2.4), sway: 1.8, stretch: 1.3, sit: rand(3, 6), tummy: 1.8 }[this.fk] || 1.6; }
         if (s === 'watch') { this.fxT = 0; this.until = 2.8; }
+        if (s === 'fly') {                          // 날기 · 휙휙
+            this.wallOn = true;
+            this.plat = null; this.pr = null;
+            this.body.style.transformOrigin = '50% 50%';
+            this.tiltT = 0; this.fvx = 0; this.fvy = 0; this.gT = 0;
+            this.until = rand(...STROLL_TIME); this.fgoal = null;
+            this.hold = this.fmode === 'dash' ? 0.2 : 0;
+            this.flyPick(true);
+        }
         if (s === 'stroll') {                       // 화면 산책
             this.wallOn = true;
             this.plat = null; this.pr = null;
@@ -2014,6 +2105,52 @@ class Actor {
                     pose = this.rp('climb');
                     if (this.t > 0.35) this.launch();
                     break;
+                case 'fly': {                          // 날기 (soft curves) · 휙휙 (dart, stop, dart)
+                    const top = this.strollTop();
+                    if (this.y > top) this.y = top;                      // keyboard came up etc.
+                    const dash = this.fmode === 'dash';
+                    pose = this.rp(dash ? 'dash' : 'fly');
+                    const dx = this.sx - this.x, dy = this.sy - this.y, dist = Math.hypot(dx, dy);
+                    if (dash) {
+                        if (this.hold > 0) {                             // stopped in the air for a moment
+                            this.hold -= dt;
+                            breath = 1;
+                            bob = Math.sin(this.clock * 3) * 2 * this.k;
+                            this.tiltT = 0; this.sqT = 1;
+                            break;
+                        }
+                        const m = Math.min(dist, DASH_SPEED * dt);
+                        if (dist > 0.5) { this.x += dx / dist * m; this.y += dy / dist * m; }
+                        if (Math.abs(dx) > 3) this.dir = dx > 0 ? 1 : -1;
+                        this.tiltT = Math.abs(dx) > 3 ? Math.sign(dx) * 14 : 0;
+                        this.sqT = 0.9;
+                        this.gT -= dt;
+                        if (this.gT <= 0) { this.gT = GHOST_GAP; this.ghost(); }
+                        if (dist <= DASH_SPEED * dt) {
+                            this.sqT = 1; this.sq = 0.92; this.tiltT = 0;
+                            if (this.fgoal) { this.flyArrive(); break; }
+                            this.hold = rand(...DASH_HOLD);
+                            if (this.t > this.until) this.flyEnd(); else this.flyPick(false);
+                        }
+                        break;
+                    }
+                    // 날기: drifts toward the next point, turning in soft curves, bobbing a little
+                    const near = this.fgoal ? 2 : this.h * 0.5;
+                    if (dist <= near) { this.flyArrive(); break; }
+                    const spd = Math.max(45, this.p.speed * 1.2) * Math.min(1, dist / (this.h * 1.2) + (this.fgoal ? 0.15 : 0.35));
+                    const k = Math.min(1, dt * 1.8);
+                    this.fvx += (dx / dist * spd - this.fvx) * k;
+                    this.fvy += (dy / dist * spd - this.fvy) * k;
+                    this.x += this.fvx * dt;
+                    this.y = Math.max(0, this.y + this.fvy * dt);
+                    this.x = clamp(this.x, L, Math.max(L, R));
+                    if (this.fgoal === 'land' && this.y <= 0.5 && Math.abs(dx) < 3) { this.flyArrive(); break; }
+                    bob = Math.sin(this.clock * 3) * 3 * this.k * Math.min(1, this.y / this.h);
+                    this.tiltT = clamp(this.fvx * 0.12, -FLY_TILT, FLY_TILT);
+                    if (Math.abs(this.fvx) > 8) this.dir = this.fvx > 0 ? 1 : -1;
+                    breath = 1;
+                    break;
+                }
                 case 'stroll': {                       // 화면 산책 — anywhere on the screen, stays put while scrolling
                     const top = this.strollTop();
                     if (this.y > top) this.y = top;                      // keyboard came up etc.
@@ -4014,6 +4151,9 @@ function petHtml(p) {
   <label class="tw-label">이름 <input data-f="name" maxlength="20"></label>
   <label class="tw-label">성격 <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
   <div class="tw-sub">성격을 바꾸면 행동은 바로 바뀌어요. 친밀도와 기록은 그대로예요.</div>
+  <div class="tw-cap">화면에서 움직이는 방식</div>
+  <div class="tw-moves">${Object.entries(MOVES).map(([k, v]) => `<label class="tw-mv"><input type="checkbox" data-mv="${k}"> ${v}</label>`).join('')}</div>
+  <div class="tw-sub">여러 개 고르면 화면에 올라갈 때마다 그중 하나를 골라요.</div>
   <label class="tw-label">크기 (${device() === 'phone' ? '폰' : 'PC'})
     <div class="tw-row"><input type="number" inputmode="numeric" min="${SIZE_MIN}" max="${SIZE_MAX}" step="1" value="${petSize(p)}" data-size="${esc(p.id)}" class="tw-num"><span class="tw-sub" data-sizeval="${esc(p.id)}">${sizeLabel(p, petSize(p))}</span></div>
   </label>
@@ -4038,12 +4178,14 @@ function petHtml(p) {
 function fillEdit(p) {
     const cur = lookKeyOf(p);
     win.form = { kind: 'edit', id: p.id, look: cur, file: null, prep: null,
-        base: { name: p.name, pers: p.personality?.base || 'aegyo', facing: p.look?.facing || 'front', squish: String(Math.round((p.look?.squish ?? 0.5) * 10) / 10), look: cur } };
+        base: { name: p.name, pers: p.personality?.base || 'aegyo', facing: p.look?.facing || 'front', squish: String(Math.round((p.look?.squish ?? 0.5) * 10) / 10), look: cur, moves: movesOf(p).join(',') } };
     const b = win.form.base, box = win.body;
     box.querySelector('[data-f="name"]').value = b.name;
     box.querySelector('[data-f="pers"]').value = b.pers;
     box.querySelector('[data-f="facing"]').value = b.facing;
     box.querySelector('[data-f="squish"]').value = b.squish;
+    const mv = movesOf(p);
+    box.querySelectorAll('[data-mv]').forEach(c => { c.checked = mv.includes(c.dataset.mv); });
     drawLookGrid();
     showSquish();
 }
@@ -4098,7 +4240,7 @@ function settingsHtml() {
     </select>
   </label>
   <label class="tw-check"><input type="checkbox" data-s="lineLedges"> 줄 모양 채팅에서 메시지 사이 경계선도 발판으로 쓰기</label>
-  <label class="tw-check"><input type="checkbox" data-s="stroll"> 화면을 올라 돌아다니기</label>
+  <label class="tw-check"><input type="checkbox" data-s="stroll"> 화면 위를 돌아다니기</label>
   <label class="tw-check"><input type="checkbox" data-s="badge"> 재워 둔 동안 침대에 쌓인 밥 수 보기</label>
   <label class="tw-label">친밀도 표시
     <select data-s="heartMode">
@@ -4239,7 +4381,8 @@ function formDirty() {
     const b = f.base;
     return f.look !== b.look || !!f.file
         || val('name') !== b.name || val('pers') !== b.pers || val('facing') !== b.facing
-        || String(Number(val('squish'))) !== String(Number(b.squish));
+        || String(Number(val('squish'))) !== String(Number(b.squish))
+        || movesPicked().join(',') !== b.moves;
 }
 
 function pickLook(key) {
@@ -4618,6 +4761,12 @@ async function uploadLook(name, facing, squish) {
     return { id, name, kind: 'single', facing, squish, roles: { idle: [path] }, roleOpts: {}, baseline: 0, createdAt: Date.now() };
 }
 
+/** Ways to get about ticked in 꾸미기 (in MOVES order; none → 오르기). */
+function movesPicked() {
+    const on = [...(win?.body?.querySelectorAll('[data-mv]') || [])].filter(c => c.checked).map(c => c.dataset.mv);
+    return movesOf({ moves: Object.keys(MOVES).filter(k => on.includes(k)) });
+}
+
 function formValues() {
     const box = win.body;
     const v = (k) => box.querySelector(`[data-f="${k}"]`)?.value ?? '';
@@ -4626,6 +4775,7 @@ function formValues() {
         pers: PERSONALITIES[v('pers')] ? v('pers') : 'aegyo',
         facing: ['front', 'left', 'right'].includes(v('facing')) ? v('facing') : 'front',
         squish: Math.round(clamp(Number(v('squish')) || 0, 0, 1) * 10) / 10,
+        moves: movesPicked(),
     };
 }
 
@@ -4659,6 +4809,7 @@ async function saveEdit() {
         if (look) { p.look.roles = look.roles; p.look.roleOpts = look.roleOpts || {}; p.look.kind = look.kind; p.look.baseline = look.baseline; }
         p.look.facing = v.facing;
         p.look.squish = v.squish;
+        p.moves = v.moves;
         const ok = await saveNow();
         if (!ok) saveSoon();
         // pictures only this pet had (e.g. added to a built-in look) and nothing uses any more
@@ -4795,6 +4946,7 @@ function petCore(p) {
         personality: structuredClone(p.personality),
         lines: structuredClone(p.lines || {}),
         talkFreq: p.talkFreq,
+        moves: movesOf(p),
         dates: structuredClone(p.dates || []).map(d => ({ ...d, id: 'd' + Math.random().toString(36).slice(2, 9) })),
         metOn: p.metOn,
         sounds: structuredClone(p.sounds || {}),
@@ -5060,6 +5212,7 @@ function cleanPet(src, look) {
     if (Array.isArray(src.personality?.traits)) rec.personality.traits = src.personality.traits.filter(x => typeof x === 'string').slice(0, 10);
     if (isObj(src.lines)) for (const [k, v] of Object.entries(src.lines)) if (/^[a-zA-Z]{1,20}$/.test(k)) { const l = strList(v, 30); if (l.length) rec.lines[k] = l; }
     if (TALK_FREQ[src.talkFreq]) rec.talkFreq = src.talkFreq;
+    rec.moves = movesOf(src);
     if (Array.isArray(src.dates)) {
         rec.dates = src.dates.filter(d => isObj(d) && /^\d\d-\d\d$/.test(d.md)).slice(0, 30)
             .map(d => ({ id: 'd' + Math.random().toString(36).slice(2, 9), kind: String(d.kind || 'other').slice(0, 20), md: d.md, msg: String(d.msg || '').slice(0, LINE_MAX) }));
@@ -5248,6 +5401,10 @@ function onWinInput(e) {
     if (t.matches?.('[data-size]')) return onSizeInput(t, e.type === 'change');
     const f = t.dataset?.f;
     if (f === 'squish') return showSquish();
+    if (t.dataset?.mv != null && e.type === 'change') {          // keep at least one way ticked
+        if (!win.body.querySelector('[data-mv]:checked')) t.checked = true;
+        return;
+    }
     if (f === 'file' && e.type === 'change') return onFilePicked(t);
     if (f === 'importfile' && e.type === 'change') return importPicked(t);
     if (f === 'rolefile' && e.type === 'change') return addRoleFrames(t);
