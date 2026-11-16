@@ -25,6 +25,7 @@
 // 0.7.8: 벽 오르기 · 화면 산책 — goes up a side of the chat and strolls anywhere on the screen.
 // 0.7.9: a full tummy no longer means sleeping the day away (and doesn't stop 벽 오르기);
 //        two new speech moments — when a reply comes in, when I send a message.
+// 0.7.10: 벽 오르기 much more often for now (to watch it) — to be tuned.
 // 0.7.7: less standing and staring — little things on the spot, livelier waiting on a message,
 //        longer naps that sending / a reply no longer cut short, a much smaller lean at the input box.
 
@@ -51,11 +52,11 @@ const ctx = () => SillyTavern.getContext();
 // fussy: dislikes rapid taps (💢, closeness is never lost)
 // wall:  chance to go up a wall and stroll on the screen (벽 오르기 · 화면 산책) when it decides by itself
 const PERSONALITIES = {
-    aegyo:   { name: '애교', speed: 72, idle: [0.8, 2],   doze: 0.06, dozeLen: [6, 12], tap: '♥',  climb: [0.16, 0.24], perch: [2, 5],   land: '♥',  send: '♥',  bump: '♥',     me: [0.60, 0.95], eat: 0.7, wall: 0.10 },
-    saechim: { name: '새침', speed: 55, idle: [1.2, 3],   doze: 0.10, dozeLen: [6, 12], tap: '?',  climb: [0.07, 0.12], perch: [2, 5],   land: 'flick', send: 'glance', bump: 'flick', me: [0.15, 0.60], eat: 1, fussy: true, wall: 0.06 },
-    neugut:  { name: '느긋', speed: 30, idle: [2, 4],     doze: 0.35, dozeLen: [12, 24], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: '하암', send: '♪',  bump: '?',     me: [0.15, 0.50], eat: 1.3, wall: 0.03 },
-    simsul:  { name: '심술', speed: 58, idle: [1.2, 3],   doze: 0.08, dozeLen: [6, 11], tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: '흥',  bump: '💢',    me: [0.20, 0.60], eat: 1, fussy: true, wall: 0.10 },
-    musim:   { name: '무심', speed: 42, idle: [2, 4.5],   doze: 0.12, dozeLen: [8, 16], tap: '…',  climb: [0.08, 0.14], perch: [8, 16],  land: '…',  send: '…',  bump: 'aside', me: [0.05, 0.25], eat: 1, wall: 0.05 },
+    aegyo:   { name: '애교', speed: 72, idle: [0.8, 2],   doze: 0.06, dozeLen: [6, 12], tap: '♥',  climb: [0.16, 0.24], perch: [2, 5],   land: '♥',  send: '♥',  bump: '♥',     me: [0.60, 0.95], eat: 0.7, wall: 0.3 },
+    saechim: { name: '새침', speed: 55, idle: [1.2, 3],   doze: 0.10, dozeLen: [6, 12], tap: '?',  climb: [0.07, 0.12], perch: [2, 5],   land: 'flick', send: 'glance', bump: 'flick', me: [0.15, 0.60], eat: 1, fussy: true, wall: 0.3 },
+    neugut:  { name: '느긋', speed: 30, idle: [2, 4],     doze: 0.35, dozeLen: [12, 24], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: '하암', send: '♪',  bump: '?',     me: [0.15, 0.50], eat: 1.3, wall: 0.3 },
+    simsul:  { name: '심술', speed: 58, idle: [1.2, 3],   doze: 0.08, dozeLen: [6, 11], tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: '흥',  bump: '💢',    me: [0.20, 0.60], eat: 1, fussy: true, wall: 0.3 },
+    musim:   { name: '무심', speed: 42, idle: [2, 4.5],   doze: 0.12, dozeLen: [8, 16], tap: '…',  climb: [0.08, 0.14], perch: [8, 16],  land: '…',  send: '…',  bump: 'aside', me: [0.05, 0.25], eat: 1, wall: 0.3 },
 };
 
 // Built-in pets (original characters made for this project).
