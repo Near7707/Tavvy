@@ -26,6 +26,8 @@
 // 0.7.9: a full tummy no longer means sleeping the day away (and doesn't stop 벽 오르기);
 //        two new speech moments — when a reply comes in, when I send a message.
 // 0.7.10: 벽 오르기 much more often for now (to watch it) — to be tuned.
+// 0.7.11: on the screen it climbs (mostly straight up and down, pull by pull) instead of walking around;
+//         a full tummy is just cute now (pats its tummy ♪, rolls) — no extra naps, no slow walking.
 // 0.7.7: less standing and staring — little things on the spot, livelier waiting on a message,
 //        longer naps that sending / a reply no longer cut short, a much smaller lean at the input box.
 
@@ -52,11 +54,11 @@ const ctx = () => SillyTavern.getContext();
 // fussy: dislikes rapid taps (💢, closeness is never lost)
 // wall:  chance to go up a wall and stroll on the screen (벽 오르기 · 화면 산책) when it decides by itself
 const PERSONALITIES = {
-    aegyo:   { name: '애교', speed: 72, idle: [0.8, 2],   doze: 0.06, dozeLen: [6, 12], tap: '♥',  climb: [0.16, 0.24], perch: [2, 5],   land: '♥',  send: '♥',  bump: '♥',     me: [0.60, 0.95], eat: 0.7, wall: 0.3 },
-    saechim: { name: '새침', speed: 55, idle: [1.2, 3],   doze: 0.10, dozeLen: [6, 12], tap: '?',  climb: [0.07, 0.12], perch: [2, 5],   land: 'flick', send: 'glance', bump: 'flick', me: [0.15, 0.60], eat: 1, fussy: true, wall: 0.3 },
-    neugut:  { name: '느긋', speed: 30, idle: [2, 4],     doze: 0.35, dozeLen: [12, 24], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: '하암', send: '♪',  bump: '?',     me: [0.15, 0.50], eat: 1.3, wall: 0.3 },
-    simsul:  { name: '심술', speed: 58, idle: [1.2, 3],   doze: 0.08, dozeLen: [6, 11], tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: '흥',  bump: '💢',    me: [0.20, 0.60], eat: 1, fussy: true, wall: 0.3 },
-    musim:   { name: '무심', speed: 42, idle: [2, 4.5],   doze: 0.12, dozeLen: [8, 16], tap: '…',  climb: [0.08, 0.14], perch: [8, 16],  land: '…',  send: '…',  bump: 'aside', me: [0.05, 0.25], eat: 1, wall: 0.3 },
+    aegyo:   { name: '애교', speed: 72, idle: [0.8, 2],   doze: 0.06, dozeLen: [6, 12], tap: '♥',  climb: [0.16, 0.24], perch: [2, 5],   land: '♥',  send: '♥',  bump: '♥',     me: [0.60, 0.95], eat: 0.7, wall: 0.4 },
+    saechim: { name: '새침', speed: 55, idle: [1.2, 3],   doze: 0.10, dozeLen: [6, 12], tap: '?',  climb: [0.07, 0.12], perch: [2, 5],   land: 'flick', send: 'glance', bump: 'flick', me: [0.15, 0.60], eat: 1, fussy: true, wall: 0.4 },
+    neugut:  { name: '느긋', speed: 30, idle: [2, 4],     doze: 0.35, dozeLen: [12, 24], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: '하암', send: '♪',  bump: '?',     me: [0.15, 0.50], eat: 1.3, wall: 0.4 },
+    simsul:  { name: '심술', speed: 58, idle: [1.2, 3],   doze: 0.08, dozeLen: [6, 11], tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: '흥',  bump: '💢',    me: [0.20, 0.60], eat: 1, fussy: true, wall: 0.4 },
+    musim:   { name: '무심', speed: 42, idle: [2, 4.5],   doze: 0.12, dozeLen: [8, 16], tap: '…',  climb: [0.08, 0.14], perch: [8, 16],  land: '…',  send: '…',  bump: 'aside', me: [0.05, 0.25], eat: 1, wall: 0.4 },
 };
 
 // Built-in pets (original characters made for this project).
@@ -135,7 +137,7 @@ const ME_REST = 15;             // s — not twice in a row within this
 const FIDGET_CHANCE = 0.3;      // "what next?" → a little something on the spot (look around, sway, stretch, hop…)
 const WAIT_FIDGET = [3.5, 6];   // s — waiting for a reply: a little something this often
 const WALL_SLIP = 0.2;          // chance to slide back down halfway up a wall
-const STROLL_TIME = [8, 20];    // s — strolling on the screen this long
+const STROLL_TIME = [8, 20];    // s — climbing about on the screen this long
 const RAPID_TAPS = 3, RAPID_WINDOW = 1.5;   // this many taps within this many seconds = 연타
 const REVISIT_DAYS = 3;         // away this long → a little bubble by the bed
 const TEARY_DAYS = 7, TEARY_CLOSE = 60;     // away this long and this close → teary when it sees you
@@ -244,8 +246,11 @@ const TALK_CHANCE = { some: 0.35, often: 0.7 };          // a moment comes → s
 const TALK_PLAY = { some: 0.05, often: 0.12 };           // each "what next?" while playing alone
 const TALK_ALWAYS = ['level', 'reunion'];                // these always speak (unless 끔)
 const TALK_HALF = ['reply', 'sent'];                     // messages come often → half the usual chance
-const FULL_DOZE = 0.1;           // full tummy: this much more likely to nod off …
-const FULL_DOZE_LEN = 1.1;       // … and naps this much longer
+const FULL_DOZE = 0;             // full tummy: no extra naps (it was sleeping the day away) …
+const FULL_DOZE_LEN = 1;         // … nor longer ones
+const FULL_TUMMY = 0.1;          // full tummy: pats its tummy ♪ now and then
+const CLIMB_PULL = 0.55;         // s — one pull up the screen (moving, then a short hold)
+const CLIMB_SLIP = 0.05;         // chance per pull to slip down a little
 const TALK_GAP = 8;              // s — ordinary lines not closer together than this
 const SAY_MS = 2600;             // how long a speech bubble stays
 const LINE_MAX = 40;             // characters in one line
@@ -1122,7 +1127,7 @@ class Actor {
         if (this.levelPending()) return this.startCheer();          // comes back here after the dance
         this.talk('meal');
         if (this.reunionMeal) { this.reunionMeal = false; if (this.afterReunionMeal()) return; }
-        if (this.fullNow) { this.fullNow = false; fx(this, '♪', 'tavvy-fx-small'); return this.setState('doze'); }
+        if (this.fullNow) { this.fullNow = false; this.fk = 'tummy'; return this.setState('fidget'); }   // full now: pats its tummy ♪
         const el = this.afterMeal; this.afterMeal = null;
         this.setState('idle');
         if (el && el.isConnected && !this.waiting) this.watchReply(el);
@@ -1204,9 +1209,20 @@ class Actor {
 
     /** Pick somewhere new on the screen to stroll to. */
     strollPick() {
-        this.sx = rand(stage.left + this.w / 2, Math.max(stage.left + this.w / 2, stage.right - this.w / 2));
-        this.sy = rand(this.h * 1.2, this.strollTop());
-        this.sp = 0; this.spLen = rand(0.8, 2.5);
+        const L = stage.left + this.w / 2, R = Math.max(L, stage.right - this.w / 2);
+        const lo = this.h * 1.2, hi = Math.max(lo, this.strollTop());
+        const nearEdge = this.x - L < this.w * 1.5 || R - this.x < this.w * 1.5;
+        if (Math.random() < (nearEdge ? 0.5 : 0.25)) {           // now and then a little way sideways (away from a side)
+            const side = this.x - L < this.w * 1.5 ? 1 : R - this.x < this.w * 1.5 ? -1 : Math.random() < 0.5 ? -1 : 1;
+            this.sx = clamp(this.x + side * rand(this.w, this.w * 2.5), L, R);
+            this.sy = clamp(this.y + rand(-0.3, 0.3) * this.h, lo, hi);
+        } else {                                                 // mostly straight up or down
+            this.sx = clamp(this.x + rand(-0.15, 0.15) * this.w, L, R);
+            let y = rand(lo, hi);
+            if (Math.abs(y - this.y) < this.h * 1.5) y = this.y + (this.y + this.h * 2 <= hi ? 2 : -2) * this.h;
+            this.sy = clamp(y, lo, hi);
+        }
+        this.sp = 0; this.spLen = rand(0.8, 2.5); this.cph = 0; this.slipT = 0;
     }
 
     /** End of a stroll: drop, go back down the wall, or step onto a message. */
@@ -1534,7 +1550,7 @@ class Actor {
             if (this.rec.personality?.base === 'musim') fx(this, '…');
         }
         if (s === 'wait') { this.fxT = rand(0.4, 1.2); this.scanT = 0.6; this.wvT = rand(2, 3.5); this.wsw = 0; }
-        if (s === 'fidget') { this.fxT = 0; this.tiltT = 0; this.fq = Math.random() < 0.35; this.until = { scan: rand(1.6, 2.4), sway: 1.8, stretch: 1.3, sit: rand(3, 6) }[this.fk] || 1.6; }
+        if (s === 'fidget') { this.fxT = 0; this.tiltT = 0; this.fq = Math.random() < 0.35; this.until = { scan: rand(1.6, 2.4), sway: 1.8, stretch: 1.3, sit: rand(3, 6), tummy: 1.8 }[this.fk] || 1.6; }
         if (s === 'watch') { this.fxT = 0; this.until = 2.8; }
         if (s === 'wallup') {                       // 벽 오르기 (wdir: 1 up · -1 down · -2 sliding)
             this.wallPose();
@@ -1593,6 +1609,7 @@ class Actor {
         // stop and react to you now and then (friendlier = more often)
         if (performance.now() - this.lastMe > ME_REST * 1000 && Math.random() < byCloseness(this, ...this.p.me) * ME_SCALE) return this.startMe();
         if (full && !this.plat && Math.random() < 0.12) return this.setState('roll');   // 데굴데굴
+        if (full && Math.random() < FULL_TUMMY) { this.fk = 'tummy'; return this.setState('fidget'); }   // 배 통통 ♪
         if (Math.random() < FIDGET_CHANCE) return this.startFidget();   // a little something on the spot
         if (!this.plat && !this.waiting && root?.settings?.stroll !== false && stageIsChat() && Math.random() < (this.p.wall || 0)) return this.startWall();
         // hop up onto a message by itself
@@ -1603,7 +1620,7 @@ class Actor {
         // while a reply is being written, sometimes glance at the chat (more often when curious)
         if (gen.active && Math.random() < (this.fidgety() ? 0.45 : 0.3)) return this.startLook('peek', (stage.left + stage.right) / 2);
         if (!gen.active) this.talk('play');                         // playing alone: a line now and then
-        if (r < dz + (full ? 0.45 : 0.62)) {
+        if (r < dz + 0.62) {
             const [L, R] = this.range();
             if (this.plat && Math.random() < EDGE_CHANCE) {
                 const [l2, r2] = this.range(0.2);
@@ -1979,7 +1996,7 @@ class Actor {
                 case 'walk': {
                     if (this.food > 0) { this.edge = false; this.setState('eat'); break; }
                     const d = this.tx - this.x;
-                    const sp = this.p.speed * (this.isFull() ? 0.6 : 1) * (this.slowT > 0 ? 0.6 : 1);
+                    const sp = this.p.speed * (this.slowT > 0 ? 0.6 : 1);
                     if (Math.abs(d) <= sp * dt) {
                         this.x = this.tx;
                         if (this.edge && this.plat) { this.edge = false; this.setState('edge'); this.until = rand(0.6, 1.1); }
@@ -2062,18 +2079,36 @@ class Actor {
                         if (this.fxT <= 0) { this.fxT = 1.5; fx(this, 'Z', 'tavvy-fx-z'); }
                         break;
                     }
-                    const dx = this.sx - this.x, dy = this.sy - this.y, dist = Math.hypot(dx, dy);
-                    const sp = this.p.speed * 0.6;
-                    if (dist > 2) {                                      // on the move
-                        const m = Math.min(dist, sp * dt);
-                        this.x += dx / dist * m; this.y += dy / dist * m;
-                        if (Math.abs(dx) > 3) this.dir = dx > 0 ? 1 : -1;
-                        pose = this.rp('wall');
-                        waddle = Math.sin(this.clock * 12) * 3;
-                        this.wph += dt;
-                        if (this.wph > 0.28) { this.wph = 0; this.frame++; }
+                    pose = this.rp('wall');
+                    if (this.slipT > 0) {                                // slipped: slides down a little, holds on again
+                        this.slipT -= dt;
+                        this.y = Math.max(this.h, this.y - 200 * dt);
+                        shiver = Math.sin(this.clock * 40) * 1.2;
+                        if (this.slipT <= 0) this.sy = Math.max(this.sy, this.y);
                         break;
                     }
+                    const dx = this.sx - this.x, dy = this.sy - this.y, dist = Math.hypot(dx, dy);
+                    if (dist > 2) {                                      // climbing: pull … hold … pull
+                        const prev = this.cph || 0;
+                        this.cph = prev + dt;
+                        const ph = this.cph % CLIMB_PULL;
+                        if (ph < prev % CLIMB_PULL) {                    // a new pull
+                            this.frame++;
+                            this.pullSide = -(this.pullSide || 1);
+                            if (dy > 0 && Math.random() < CLIMB_SLIP) { this.slipT = 0.3; if (Math.random() < 0.4) fx(this, '💦', 'tavvy-fx-small'); break; }
+                        }
+                        const moving = ph < CLIMB_PULL * 0.65;
+                        const sp = this.p.speed * 0.6 * 1.55;            // same average pace as before, in pulls
+                        if (moving) {
+                            const m = Math.min(dist, sp * dt);
+                            this.x += dx / dist * m; this.y += dy / dist * m;
+                        }
+                        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 3) this.dir = dx > 0 ? 1 : -1;
+                        this.tiltT = (this.pullSide || 1) * 3;           // reaching with one side, then the other
+                        this.sqT = moving ? 1.05 : 0.97;
+                        break;
+                    }
+                    this.tiltT = 0; this.sqT = 1;
                     if (this.sgoal === 'wall') { this.setState('wallup'); this.wdir = -1; this.dir = -this.dir; this.slipAt = null; break; }   // head down the wall
                     if (this.sgoal === 'drop') { this.strollDrop(); break; }
                     breath = 1;                                          // stopped for a moment
@@ -2100,6 +2135,11 @@ class Actor {
                     } else if (k === 'stretch') {                        // 기지개
                         this.tiltT = 0;
                         this.sqT = this.t < 0.9 ? 1.12 : 1;
+                    } else if (k === 'tummy') {                          // 배 통통 — pats its full tummy
+                        pose = this.role('happy', 'idle');
+                        this.tiltT = 0;
+                        this.sqT = this.t < 1.4 && Math.sin(this.t * Math.PI * 5) > 0.5 ? 0.94 : 1;
+                        if (this.fxT === 0 && this.t > 0.3) { this.fxT = 1; fx(this, '♪', 'tavvy-fx-small'); }
                     } else if (k === 'sit') {                            // sits down for a bit (has a 앉기 picture)
                         pose = this.role('sit', 'idle');
                         breath = 0.8;
