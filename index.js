@@ -140,21 +140,20 @@ const LEVELS = [
 const CLOSE = 50;               // closeness from which "친하면" reactions show (friends)
 const ME_SCALE = 0.3;           // "react to you" chance × this when it decides by itself
 const ME_REST = 15;             // s — not twice in a row within this
-const FIDGET_CHANCE = 0.15;     // "what next?" → a little something on the spot (0.9.0: just stretch, hop, roll — the rest got rows of their own)
 // 0.9.0: everyday behaviours of their own (no new pictures needed). Chance each time it decides what's next (× 빈도).
-const NEW_ACTS = { hum: 0.07, scan: 0.08, sit: 0.07, shake: 0.05, peek: 0.04 };
+const NEW_ACTS = { hum: 0.07, scan: 0.08, sit: 0.07, peek: 0.04, roll: 0.04 };
 const READ_ON = 0.25, READ_CLIMB = 0.04;    // 글 읽는 척: on a message / hop up onto one to read it
-const RUN_WALK = 0.12, HOP_WALK = 0.15;     // a walk that's a sudden run / a walk done in little hops
-const RUN_X = 3, HOP_RATE = 2.4;            // run = 3× the walking speed / hops per second
+const RUN_WALK = 0.12;                      // a walk that's a sudden run
+const RUN_X = 3;                            // run = 3× the walking speed
+const TILT_K = 0.5;                         // 0.9.1: every lean / tilt at half the angle
+const EAT_MIN = 1.5;                        // 0.9.1: eats at least this long (s), even a short message
 // 0.9.0: attitudes toward you (처음엔 끔 — switched on per pet)
 const ATTITUDES = [
     { key: 'cling',  name: '졸졸 따라다니기' },   // stays near the input box / your hand
-    { key: 'shy',    name: '부끄러워 도망' },     // a pat → runs off a few steps, then a look back
     { key: 'where',  name: '…어디 갔었어?' },    // you were away a while → comes and stares, "…어디 갔었어?"
     { key: 'stare',  name: '글 쓰면 빤히' },      // you start writing → comes over and looks up at it
 ];
 const CLING_WALK = 0.6;         // walks: this share heads for the input box / your hand
-const SHY_CHANCE = 0.6;         // a pat → runs off
 const WHERE_AWAY = 5;           // min away from this screen
 const WHERE_CHANCE = 0.6;
 const STARE_CHANCE = 0.5;       // starting to write → comes over to look
@@ -943,14 +942,11 @@ const BASIC_ACTS = [
     { key: 'dash',   name: '휙휙' },
     { key: 'climb',  name: '말풍선 오르기' },
     { key: 'doze',   name: '졸기' },
-    { key: 'fidget', name: '제자리 놀기' },
     { key: 'hum',    name: '흥얼거리기' },       // 0.9.0
     { key: 'scan',   name: '두리번거리기' },
     { key: 'sit',    name: '앉기', needs: 'sit' },   // only with a 앉기 picture
     { key: 'read',   name: '글 읽는 척' },
     { key: 'run',    name: '갑자기 달리기' },
-    { key: 'hopwalk', name: '뛰어서 가기' },
-    { key: 'shake',  name: '몸 털기' },
     { key: 'peek',   name: '빼꼼 숨기' },
     { key: 'roll',   name: '구르기' },
     { key: 'me',     name: '나 보며 반응' },
@@ -1338,17 +1334,6 @@ class Actor {
         this.talk('level');
     }
 
-    /** A little something on the spot — needs no extra pictures (sits only if it has a 앉기 picture). */
-    startFidget() {
-        const kinds = ['stretch', 'hop', 'hop'];                 // 0.9.0: 두리번·흥얼·앉기 have rows of their own
-        if (!this.plat && !this.isFull() && !isOff(this, 'roll')) kinds.push('roll');
-        const k = kinds[Math.floor(Math.random() * kinds.length)];
-        if (k === 'roll') return this.setState('roll');
-        if (k === 'hop') return this.hopInPlace('idle');
-        this.fk = k;
-        this.setState('fidget');
-    }
-
     /** 화면 오르기 (0.7.12): straight up the screen from where it stands on the floor, back to you. */
     /** 오르기 / 날기 / 휙휙 — each with its own 빈도, sharing one chance between the ones that are on (or none). */
     pickMove() {
@@ -1529,23 +1514,7 @@ class Actor {
         if (go.k === 'hide') { this.setState('hide'); this.hd = { s: go.s, E: go.E, x0: this.x, wait: 0.6 + rand(1.2, 2.4), f: 0 }; return; }
         if (go.k === 'where') return this.setState('where');
         if (go.k === 'stare') return this.setState('stare');
-        if (go.k === 'shy') { this.after = 'idle'; return this.startLook('glance', go.px); }   // …and a look back
         this.setState('idle');
-    }
-
-    /** 부끄러워 도망: patted → off a few steps (flustered), then a look back. */
-    startShy(px) {
-        const [L, R] = this.range();
-        let away = px >= this.x ? -1 : 1;
-        let tx = clamp(this.x + away * rand(90, 150), L, Math.max(L, R));
-        if (Math.abs(tx - this.x) < 30) { away = -away; tx = clamp(this.x + away * rand(90, 150), L, Math.max(L, R)); }
-        if (Math.abs(tx - this.x) < 30) return false;
-        fx(this, '💦', 'tavvy-fx-small');
-        this.dir = away; this.tx = tx; this.edge = false;
-        this.setState('walk');
-        this.gait = 'run';
-        this.go = { k: 'shy', px };
-        return true;
     }
 
     /** …어디 갔었어?: you were away a while — over to the middle, a long look at you. */
@@ -1775,10 +1744,6 @@ class Actor {
         this.talk('pat');
         fx(this, k === 'simsul' && soft ? '♥' : pp.tap);                                // 내편 심술: no 💢, just ♥
         const later = (fn) => setTimeout(() => { if (!this.gone && !this.held) fn(); }, 650);
-        if (Math.random() < chance(this, 'shy', SHY_CHANCE)) {                            // 0.9.0 부끄러워 도망
-            const from = px ?? this.x + this.dir * 20;
-            return later(() => { if (this.free() && !this.air && !this.wallOn) this.startShy(from); });
-        }
         if (k === 'saechim' && close) later(() => fx(this, '♥', 'tavvy-fx-small'));      // 친하면 작은 ♥
         if (k === 'simsul' && !soft) {
             if (close) later(() => fx(this, '♥'));                                          // 💢 … then softens
@@ -1860,7 +1825,7 @@ class Actor {
             if (this.rec.personality?.base === 'musim') fx(this, '…');
         }
         if (s === 'wait') { this.fxT = rand(0.4, 1.2); this.scanT = 0.6; this.wvT = rand(2, 3.5); this.wsw = 0; }
-        if (s === 'fidget') { this.fxT = 0; this.tiltT = 0; this.fq = Math.random() < 0.35; this.until = { scan: rand(1.6, 2.4), sway: 2.6, stretch: 1.3, sit: rand(3, 6), tummy: 1.8, shake: 0.95 }[this.fk] || 1.6; }
+        if (s === 'fidget') { this.fxT = 0; this.tiltT = 0; this.fq = Math.random() < 0.35; this.until = { scan: rand(1.6, 2.4), sway: 2.6, sit: rand(3, 6), tummy: 1.8 }[this.fk] || 1.6; }
         if (s === 'skid') { this.until = 0.45; }
         if (s === 'where') { this.fxT = 0; this.until = 3.4; }
         if (s === 'stare') { this.fxT = 0; }
@@ -1925,12 +1890,11 @@ class Actor {
         if (performance.now() - this.lastMe > ME_REST * 1000 && Math.random() < chance(this, 'me', byCloseness(this, ...this.p.me) * ME_SCALE)) return this.startMe();
         if (full && !this.plat && Math.random() < chance(this, 'roll', 0.12)) return this.setState('roll');   // 데굴데굴
         if (full && Math.random() < FULL_TUMMY) { this.fk = 'tummy'; return this.setState('fidget'); }   // 배 통통 ♪
-        if (Math.random() < chance(this, 'fidget', FIDGET_CHANCE)) return this.startFidget();   // a little something on the spot
         // 0.9.0: everyday things of their own
+        if (!this.plat && !this.isFull() && Math.random() < chance(this, 'roll', NEW_ACTS.roll)) return this.setState('roll');   // 데굴데굴 (0.9.1: was in 제자리 놀기)
         if (Math.random() < chance(this, 'hum', NEW_ACTS.hum)) { this.fk = 'sway'; return this.setState('fidget'); }      // 흥얼거리기 ♪
         if (Math.random() < chance(this, 'scan', NEW_ACTS.scan)) { this.fk = 'scan'; return this.setState('fidget'); }    // 두리번
         if (this.rec.look.roles?.sit?.length && Math.random() < chance(this, 'sit', NEW_ACTS.sit)) { this.fk = 'sit'; return this.setState('fidget'); }
-        if (Math.random() < chance(this, 'shake', NEW_ACTS.shake)) { this.fk = 'shake'; return this.setState('fidget'); }  // 몸 털기
         if (!this.plat && !gen.active && Math.random() < chance(this, 'peek', NEW_ACTS.peek) && this.startPeek()) return;  // 빼꼼
         if (this.plat && Math.random() < chance(this, 'read', READ_ON) && this.startRead()) return;                        // 글 읽는 척
         if (!this.plat && ledgesOn() && Math.random() < chance(this, 'read', READ_CLIMB)) {
@@ -1959,7 +1923,7 @@ class Actor {
             let tx = rand(L, R);
             if (Math.abs(tx - this.x) < 30) tx = clamp(this.x + (Math.random() < 0.5 ? -1 : 1) * rand(40, 140), L, R);
             if (!this.plat && Math.random() < chance(this, 'cling', CLING_WALK)) tx = clamp(clingX() + rand(-60, 60), L, R);   // 졸졸: back near you
-            const gait = Math.random() < chance(this, 'run', RUN_WALK) ? 'run' : Math.random() < chance(this, 'hopwalk', HOP_WALK) ? 'hop' : null;
+            const gait = Math.random() < chance(this, 'run', RUN_WALK) ? 'run' : null;
             if (gait === 'run' && Math.abs(tx - this.x) < 120 && R - L > 160) tx = this.x - L > R - this.x ? rand(L, L + 40) : rand(R - 40, R);   // a run needs a little room
             if (Math.abs(tx - this.x) < 6) return this.setState('idle');
             this.walkTo(tx);
@@ -2330,7 +2294,7 @@ class Actor {
                 case 'walk': {
                     if (this.food > 0) { this.edge = false; this.setState('eat'); break; }
                     const d = this.tx - this.x;
-                    const sp = this.p.speed * paceOf(this.rec) * (this.gait === 'run' ? RUN_X : this.gait === 'hop' ? 1.15 : 1);   // 0.8.2: no more slow steps after a big meal (felt unnatural)
+                    const sp = this.p.speed * paceOf(this.rec) * (this.gait === 'run' ? RUN_X : 1);   // 0.8.2: no more slow steps after a big meal (felt unnatural)
                     if (Math.abs(d) <= sp * dt) {
                         this.x = this.tx;
                         const go = this.go, gait = this.gait;
@@ -2349,13 +2313,6 @@ class Actor {
                     bob = Math.pow(Math.sin(ph * Math.PI), 0.7) * 4 * this.k;
                     waddle = Math.sin(this.walkPh * Math.PI) * 1.5;
                     if (this.gait === 'run') { bob *= 0.6; this.tiltT = Math.sign(d) * 7; }        // leaning into it
-                    if (this.gait === 'hop') {                                                    // 뛰어서 가기: little hops
-                        this.hopPh = (this.hopPh || 0) + HOP_RATE * dt;
-                        const hp = this.hopPh % 1;
-                        bob = Math.sin(hp * Math.PI) * 13 * this.k;
-                        waddle = 0;
-                        if (hp < 0.08 || hp > 0.92) this.sqT = 0.9; else this.sqT = 1.04;
-                    }
                     if (Math.floor(this.walkPh) !== before) {
                         // foot touches down: next frame + a tiny squish
                         this.frame++;
@@ -2363,8 +2320,6 @@ class Actor {
                         if (soft > 0) this.sq = Math.min(this.sq, 0.95);
                     }
                     pose = this.aside ? this.rp('aside') : this.role('walk');
-                    if (this.go?.k === 'shy') pose = this.rp('fluster');
-                    else if (this.gait === 'hop' && bob > 4 * this.k) pose = this.rp('jump');
                     break;
                 }
                 case 'skid': {                         // 갑자기 달리기: a sudden stop, sliding a bit
@@ -2574,13 +2529,6 @@ class Actor {
                         this.tiltT = Math.sin(this.t * Math.PI * 1.6) * 6;
                         bob = Math.abs(Math.sin(this.t * Math.PI * 1.6)) * 2 * this.k;
                         if (this.fxT < 3 && this.t > 0.2 + this.fxT * 0.85) { this.fxT++; fx(this, this.fxT === 2 ? '♫' : '♪', 'tavvy-fx-small'); }
-                    } else if (k === 'shake') {                          // 몸 털기: a quick shake, a few ✦ fly off
-                        if (this.t < 0.6) { this.tiltT = Math.sin(this.t * Math.PI * 14) * 11; this.tilt = this.tiltT; this.sqT = 1.04; }
-                        else { this.tiltT = 0; this.sqT = 1; }
-                        if (this.fxT === 0 && this.t > 0.55) { this.fxT = 1; fx(this, '✦', 'tavvy-fx-small'); setTimeout(() => { if (!this.gone) fx(this, '✧', 'tavvy-fx-small'); }, 120); }
-                    } else if (k === 'stretch') {                        // 기지개
-                        this.tiltT = 0;
-                        this.sqT = this.t < 0.9 ? 1.12 : 1;
                     } else if (k === 'tummy') {                          // 배 통통 — pats its full tummy
                         pose = this.role('happy', 'idle');
                         this.tiltT = 0;
@@ -2690,7 +2638,7 @@ class Actor {
                         break;
                     }
                     if (this.food > 0) this.eatIdle = 0;
-                    else if ((this.eatIdle += dt) > 0.45) this.finishMeal();
+                    else if ((this.eatIdle += dt) > 0.45 && this.t >= EAT_MIN) this.finishMeal();
                     break;
                 case 'nod':                            // after a big meal: leaning over, nodding, Z
                     breath = 0.6;
@@ -2857,7 +2805,7 @@ class Actor {
             if (hid <= 0 && this.state !== 'hide') { this.clipEdge = null; this.el.style.clipPath = ''; }
             else { const v = Math.max(0, hid).toFixed(1); this.el.style.clipPath = ce.s < 0 ? `inset(-200% -200% -200% ${v}px)` : `inset(-200% ${v}px -200% -200%)`; }
         }
-        this.body.style.transform = `rotate(${(this.tilt + waddle + this.spin).toFixed(2)}deg) scale(${(sx * this.scale).toFixed(3)}, ${(sy * this.scale).toFixed(3)})`;
+        this.body.style.transform = `rotate(${((this.tilt + waddle) * TILT_K + this.spin).toFixed(2)}deg) scale(${(sx * this.scale).toFixed(3)}, ${(sy * this.scale).toFixed(3)})`;
         const look = this.rec.look;
         const list = pose && pose.length ? pose : look.roles.idle;
         const rk = roleKeyOf(look, list);
