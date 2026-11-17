@@ -278,7 +278,8 @@ function movesOf(rec) {
     if (!Array.isArray(rec?.moves)) return ['wall'];
     return Object.keys(MOVES).filter(k => rec.moves.includes(k));
 }
-const SCREEN_SCALE = 0.5;        // 0.8.3: getting about on the screen less often than before (p.wall × this; 0.8.2 had 0.8)
+const SCREEN_SCALE = 0.3;        // 0.8.4: getting about on the screen less often than before (p.wall × this; 0.8.2 had 0.8, 0.8.3 0.5)
+const STUCK_EXTRA = 30;          // 0.8.4: still up on the screen this long past its time → lets go and drops
 const TALK_GAP = 8;              // s — ordinary lines not closer together than this
 const SAY_MS = 2600;             // how long a speech bubble stays
 const LINE_MAX = 40;             // characters in one line
@@ -2231,6 +2232,9 @@ class Actor {
                 case 'fly': {                          // 날기 (soft curves) · 휙휙 (dart, stop, dart)
                     const top = this.strollTop();
                     if (this.y > top) this.y = top;                      // keyboard came up etc.
+                    if (this.sy > top) this.sy = top;                    // 0.8.4: …and where it's going, too (else it never gets there)
+                    this.sx = clamp(this.sx, L, Math.max(L, R));
+                    if (this.t > this.until + STUCK_EXTRA) { this.strollDrop(); break; }   // safety net: never stuck up there
                     const dash = this.fmode === 'dash';
                     pose = this.rp(dash ? 'dash' : 'fly');
                     const dx = this.sx - this.x, dy = this.sy - this.y, dist = Math.hypot(dx, dy);
@@ -2277,6 +2281,9 @@ class Actor {
                 case 'stroll': {                       // 화면 산책 — anywhere on the screen, stays put while scrolling
                     const top = this.strollTop();
                     if (this.y > top) this.y = top;                      // keyboard came up etc.
+                    if (this.sy > top) this.sy = top;                    // 0.8.4: …and where it's going, too (else it never gets there)
+                    this.sx = clamp(this.sx, L, Math.max(L, R));
+                    if (this.t > this.until + STUCK_EXTRA) { this.strollDrop(); break; }   // safety net: never stuck up there
                     pose = this.rp('wall');
                     if (this.slipT > 0) {                                // slipped: slides down a little, holds on again
                         this.slipT -= dt;
