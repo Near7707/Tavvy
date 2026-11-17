@@ -279,6 +279,10 @@ function movesOf(rec) {
     return Object.keys(MOVES).filter(k => rec.moves.includes(k));
 }
 const SCREEN_SCALE = 0.3;        // 0.8.4: getting about on the screen less often than before (p.wall × this; 0.8.2 had 0.8, 0.8.3 0.5)
+const RESTS = [[1, '1분'], [3, '3분'], [5, '5분'], [10, '10분']];   // 0.8.5: 쉬는 시간 after getting about on the screen
+const REST_DEF = 3;
+const restOf = (rec) => (RESTS.some(x => x[0] === rec?.screenRest) ? rec.screenRest : REST_DEF);
+const screenAt = new Map();      // pet id → when it last came down from the screen (Date.now; not saved)
 const STUCK_EXTRA = 30;          // 0.8.4: still up on the screen this long past its time → lets go and drops
 const TALK_GAP = 8;              // s — ordinary lines not closer together than this
 const SAY_MS = 2600;             // how long a speech bubble stays
@@ -339,6 +343,7 @@ function newPetRecord({ id, name, personality, look }) {
         lines: {},                                    // speech lines per moment: { wake: ['…'], … }
         talkFreq: 'some',                             // how often it speaks: 'off' / 'some' / 'often'
         moves: ['wall'],                              // how it gets about on the screen (MOVES keys)
+        screenRest: REST_DEF,                         // 0.8.5: minutes off the screen after getting about on it
         off: [],                                      // (kept as is) switched off = 끔 in the 행동 tab
         freq: {},                                     // how often, per behaviour: 'rare' / 'often' (missing = 보통)
         pace: 'norm',                                 // walking pace: 'slow' / 'norm' / 'fast'                                      // behaviours switched off in the 행동 tab (BASIC_ACTS / UNLOCKS keys)
@@ -951,7 +956,7 @@ const paceOf = (rec) => (PACES.find(x => x[0] === rec?.pace) || PACES[1])[2];
 /** Anything changed from the preset (빈도, 반응, 걸음)? */
 function customised(rec) {
     const r = rec?.personality?.react || {};
-    return (rec?.off?.length || 0) > 0 || Object.keys(rec?.freq || {}).length > 0 || (rec?.pace && rec.pace !== 'norm') || movesOf(rec).join() !== 'wall'
+    return (rec?.off?.length || 0) > 0 || Object.keys(rec?.freq || {}).length > 0 || (rec?.pace && rec.pace !== 'norm') || movesOf(rec).join() !== 'wall' || restOf(rec) !== REST_DEF
         || Object.values(r).some(k => PERSONALITIES[k]);
 }
 
@@ -1311,6 +1316,7 @@ class Actor {
     pickMove() {
         const list = movesOf(this.rec);
         if (!list.length) return null;
+        if (Date.now() - (screenAt.get(this.rec.id) || 0) < restOf(this.rec) * 60000) return null;   // 쉬는 시간
         let r = Math.random();
         const each = (this.p.wall || 0) * SCREEN_SCALE / list.length;
         for (const m of list) {
@@ -1391,6 +1397,7 @@ class Actor {
 
     /** Back to normal standing (left the wall / the screen). */
     endWall() {
+        if (this.wallOn) screenAt.set(this.rec.id, Date.now());   // 쉬는 시간 starts when it comes down
         this.wallOn = false;
         this.tilt = 0; this.tiltv = 0; this.tiltT = 0;
         this.body.style.transformOrigin = '';
@@ -4000,6 +4007,15 @@ function setFreq(key, v) {
     renderPanel();
 }
 
+function setRest(v) {
+    const p = curPet();
+    v = Number(v);
+    if (!p || readOnly || !RESTS.some(x => x[0] === v)) return;
+    p.screenRest = v;
+    saveSoon();
+    renderPanel();
+}
+
 function setPace(v) {
     const p = curPet();
     if (!p || readOnly || !PACES.some(x => x[0] === v)) return;
@@ -4022,7 +4038,7 @@ async function resetActs() {
     const p = curPet();
     if (!p || readOnly) return;
     if (!await confirmBox('행동 빈도·걸음·반응 모습을 모두 기본 성격대로 되돌릴까요?')) return;
-    p.off = []; p.freq = {}; p.pace = 'norm'; p.moves = ['wall'];
+    p.off = []; p.freq = {}; p.pace = 'norm'; p.moves = ['wall']; p.screenRest = REST_DEF;
     if (p.personality) p.personality.react = {};
     saveSoon();
     renderPanel();
@@ -4047,7 +4063,10 @@ function actsHtml(p) {
         + (customised(p) ? '<div class="tw-btn tw-btn-small" data-act="actreset">처음대로</div>' : '') + '</div>'
         + '<div class="tw-sub">처음엔 기본 성격대로 움직여요. 아래에서 빈도와 반응을 마음대로 바꿀 수 있어요. 누르면 바로 저장돼요.</div>';
     const pace = p.pace || 'norm';
-    const basic = `<div class="tw-cap">평소 행동</div><div class="tw-freqs">${BASIC_ACTS.map(u => freqRow(p, u)).join('')}`
+    const rest = restOf(p);
+    const restRow = `<div class="tw-frow"><span class="tw-fname">화면 쉬는 시간</span><span class="tw-fseg">${RESTS.map(([k, n]) =>
+        `<span class="tw-fbtn${rest === k ? ' tw-fon' : ''}" data-rest="${k}">${n}</span>`).join('')}</span></div>`;
+    const basic = `<div class="tw-cap">평소 행동</div><div class="tw-freqs">${BASIC_ACTS.map(u => freqRow(p, u) + (u.key === 'dash' ? restRow : '')).join('')}`
         + `<div class="tw-frow"><span class="tw-fname">걸음 빠르기</span><span class="tw-fseg">${PACES.map(([k, n]) =>
             `<span class="tw-fbtn${pace === k ? ' tw-fon' : ''}" data-pace="${k}">${n}</span>`).join('')}</span></div></div>`;
     const react = p.personality?.react || {};
@@ -5172,6 +5191,7 @@ function petCore(p) {
         off: [...(p.off || [])],
         freq: structuredClone(p.freq || {}),
         pace: p.pace || 'norm',
+        screenRest: restOf(p),
         dates: structuredClone(p.dates || []).map(d => ({ ...d, id: 'd' + Math.random().toString(36).slice(2, 9) })),
         metOn: p.metOn,
         sounds: structuredClone(p.sounds || {}),
@@ -5444,6 +5464,7 @@ function cleanPet(src, look) {
     if (Array.isArray(src.off)) rec.off = src.off.filter(actKey);
     if (isObj(src.freq)) for (const [k, v] of Object.entries(src.freq)) if (actKey(k) && (v === 'rare' || v === 'often')) rec.freq[k] = v;
     if (PACES.some(x => x[0] === src.pace)) rec.pace = src.pace;
+    if (RESTS.some(x => x[0] === src.screenRest)) rec.screenRest = src.screenRest;
     if (isObj(src.personality?.react)) for (const m of REACT_MOMENTS) if (PERSONALITIES[src.personality.react[m.key]]) rec.personality.react[m.key] = src.personality.react[m.key];
     if (Array.isArray(src.dates)) {
         rec.dates = src.dates.filter(d => isObj(d) && /^\d\d-\d\d$/.test(d.md)).slice(0, 30)
@@ -5583,6 +5604,8 @@ function onWinClick(e) {
     if (act === 'actreset') return resetActs();
     const fq = t.closest('[data-freq]');
     if (fq) return setFreq(fq.dataset.freq, fq.dataset.fv);
+    const rs = t.closest('[data-rest]');
+    if (rs) return setRest(rs.dataset.rest);
     const pc = t.closest('[data-pace]');
     if (pc) return setPace(pc.dataset.pace);
     if (act === 'aifill') return aiFill();
