@@ -140,7 +140,24 @@ const LEVELS = [
 const CLOSE = 50;               // closeness from which "친하면" reactions show (friends)
 const ME_SCALE = 0.3;           // "react to you" chance × this when it decides by itself
 const ME_REST = 15;             // s — not twice in a row within this
-const FIDGET_CHANCE = 0.3;      // "what next?" → a little something on the spot (look around, sway, stretch, hop…)
+const FIDGET_CHANCE = 0.15;     // "what next?" → a little something on the spot (0.9.0: just stretch, hop, roll — the rest got rows of their own)
+// 0.9.0: everyday behaviours of their own (no new pictures needed). Chance each time it decides what's next (× 빈도).
+const NEW_ACTS = { hum: 0.07, scan: 0.08, sit: 0.07, shake: 0.05, peek: 0.04 };
+const READ_ON = 0.25, READ_CLIMB = 0.04;    // 글 읽는 척: on a message / hop up onto one to read it
+const RUN_WALK = 0.12, HOP_WALK = 0.15;     // a walk that's a sudden run / a walk done in little hops
+const RUN_X = 3, HOP_RATE = 2.4;            // run = 3× the walking speed / hops per second
+// 0.9.0: attitudes toward you (처음엔 끔 — switched on per pet)
+const ATTITUDES = [
+    { key: 'cling',  name: '졸졸 따라다니기' },   // stays near the input box / your hand
+    { key: 'shy',    name: '부끄러워 도망' },     // a pat → runs off a few steps, then a look back
+    { key: 'where',  name: '…어디 갔었어?' },    // you were away a while → comes and stares, "…어디 갔었어?"
+    { key: 'stare',  name: '글 쓰면 빤히' },      // you start writing → comes over and looks up at it
+];
+const CLING_WALK = 0.6;         // walks: this share heads for the input box / your hand
+const SHY_CHANCE = 0.6;         // a pat → runs off
+const WHERE_AWAY = 5;           // min away from this screen
+const WHERE_CHANCE = 0.6;
+const STARE_CHANCE = 0.5;       // starting to write → comes over to look
 const WAIT_FIDGET = [3.5, 6];   // s — waiting for a reply: a little something this often
 const STROLL_TIME = [8, 20];    // s — climbing about on the screen this long
 const RAPID_TAPS = 3, RAPID_WINDOW = 1.5;   // this many taps within this many seconds = 연타
@@ -338,6 +355,7 @@ function newPetRecord({ id, name, personality, look }) {
         id,
         name,
         createdAt: now,
+        acts090: true,                                // 0.9.0 rows (흥얼·두리번·앉기 out of 제자리 놀기) already in place
         look,                                         // images, facing, size, softness
         personality: { base: personality, traits: [], react: {} },   // react: moment → which personality's reaction (missing = base)
         lines: {},                                    // speech lines per moment: { wake: ['…'], … }
@@ -384,11 +402,22 @@ function splitScreen(p) {
     if (p.freq) delete p.freq.screen;
 }
 
+/** 0.9.0: 흥얼·두리번·앉기 left 제자리 놀기 for rows of their own — a pet that had 제자리 놀기 off / rare / often keeps that for them. */
+function splitFidget(p) {
+    if (!p || typeof p !== 'object' || p.acts090) return;
+    p.acts090 = true;
+    const keys = ['hum', 'scan', 'sit'];
+    if (Array.isArray(p.off) && p.off.includes('fidget')) p.off = [...new Set([...p.off, ...keys])];
+    const f = p.freq && typeof p.freq === 'object' ? p.freq.fidget : undefined;
+    if (f === 'rare' || f === 'often') for (const k of keys) if (p.freq[k] === undefined) p.freq[k] = f;
+}
+
 function migrate(r) {
     fillDefaults(r.settings ??= {}, defaultSettings());
     for (const p of r.pets) {
         if (!p || typeof p !== 'object') continue;
         splitScreen(p);
+        splitFidget(p);
         if (Array.isArray(p.lines)) p.lines = p.lines.length ? { play: p.lines.filter(x => typeof x === 'string') } : {};   // was a plain list (always empty)
         const blank = newPetRecord({ id: p.id, name: p.name, personality: 'aegyo', look: {} });
         delete blank.createdAt; delete blank.lastVisit; delete blank.home;
@@ -915,6 +944,14 @@ const BASIC_ACTS = [
     { key: 'climb',  name: '말풍선 오르기' },
     { key: 'doze',   name: '졸기' },
     { key: 'fidget', name: '제자리 놀기' },
+    { key: 'hum',    name: '흥얼거리기' },       // 0.9.0
+    { key: 'scan',   name: '두리번거리기' },
+    { key: 'sit',    name: '앉기', needs: 'sit' },   // only with a 앉기 picture
+    { key: 'read',   name: '글 읽는 척' },
+    { key: 'run',    name: '갑자기 달리기' },
+    { key: 'hopwalk', name: '뛰어서 가기' },
+    { key: 'shake',  name: '몸 털기' },
+    { key: 'peek',   name: '빼꼼 숨기' },
     { key: 'roll',   name: '구르기' },
     { key: 'me',     name: '나 보며 반응' },
 ];
@@ -947,8 +984,10 @@ const persOf = (who, m) => PERSONALITIES[kindOf(who, m)];
 function fr(who, key) {
     const rec = who?.rec || who;
     if (isOff(rec, key)) return 0;
+    if (isAtt(key)) return FREQ_X[rec?.freq?.[key]] ?? 0;      // attitudes: nothing until you pick one
     return FREQ_X[rec?.freq?.[key]] ?? 1;
 }
+const isAtt = (key) => ATTITUDES.some(a => a.key === key);
 /** A chance p scaled by the behaviour's 빈도 (never quite certain unless it already was). */
 const chance = (who, key, p) => (p >= 1 ? p * Math.min(1, fr(who, key)) : Math.min(0.95, p * fr(who, key)));
 const paceOf = (rec) => (PACES.find(x => x[0] === rec?.pace) || PACES[1])[2];
@@ -1301,8 +1340,7 @@ class Actor {
 
     /** A little something on the spot — needs no extra pictures (sits only if it has a 앉기 picture). */
     startFidget() {
-        const kinds = ['scan', 'scan', 'sway', 'stretch', 'hop', 'hop'];
-        if (this.rec.look.roles?.sit?.length) kinds.push('sit', 'sit');
+        const kinds = ['stretch', 'hop', 'hop'];                 // 0.9.0: 두리번·흥얼·앉기 have rows of their own
         if (!this.plat && !this.isFull() && !isOff(this, 'roll')) kinds.push('roll');
         const k = kinds[Math.floor(Math.random() * kinds.length)];
         if (k === 'roll') return this.setState('roll');
@@ -1460,6 +1498,74 @@ class Actor {
         this.next = next;
         this.sq = 0.92;
         this.setState('jump');
+    }
+
+    /* ---------- 0.9.0: everyday things · attitudes ---------- */
+
+    /** 빼꼼 숨기: to the nearer side, half out of sight, then a peek back. */
+    startPeek() {
+        const [L, R] = this.range();
+        if (R - L < 40) return false;
+        const s = this.x - stage.left < stage.right - this.x ? -1 : 1;
+        const go = { k: 'hide', s, E: s < 0 ? stage.left : stage.right };
+        const wx = s < 0 ? L : R;
+        if (Math.abs(wx - this.x) <= 10) { this.arrive(go); return true; }
+        this.walkTo(wx);
+        this.go = go;
+        return true;
+    }
+
+    /** 글 읽는 척 on the message it stands on. */
+    startRead() {
+        if (!this.plat) return false;
+        const [L, R] = this.range();
+        if (R - L < 30) return false;
+        this.setState('read');
+        return true;
+    }
+
+    /** Walked somewhere for a reason (this.go) — and got there. */
+    arrive(go) {
+        if (go.k === 'hide') { this.setState('hide'); this.hd = { s: go.s, E: go.E, x0: this.x, wait: 0.6 + rand(1.2, 2.4), f: 0 }; return; }
+        if (go.k === 'where') return this.setState('where');
+        if (go.k === 'stare') return this.setState('stare');
+        if (go.k === 'shy') { this.after = 'idle'; return this.startLook('glance', go.px); }   // …and a look back
+        this.setState('idle');
+    }
+
+    /** 부끄러워 도망: patted → off a few steps (flustered), then a look back. */
+    startShy(px) {
+        const [L, R] = this.range();
+        let away = px >= this.x ? -1 : 1;
+        let tx = clamp(this.x + away * rand(90, 150), L, Math.max(L, R));
+        if (Math.abs(tx - this.x) < 30) { away = -away; tx = clamp(this.x + away * rand(90, 150), L, Math.max(L, R)); }
+        if (Math.abs(tx - this.x) < 30) return false;
+        fx(this, '💦', 'tavvy-fx-small');
+        this.dir = away; this.tx = tx; this.edge = false;
+        this.setState('walk');
+        this.gait = 'run';
+        this.go = { k: 'shy', px };
+        return true;
+    }
+
+    /** …어디 갔었어?: you were away a while — over to the middle, a long look at you. */
+    startWhere() {
+        if (this.state === 'doze') { fx(this, '!', 'tavvy-fx-small'); this.sq = 0.9; }
+        const [L, R] = this.range();
+        const tx = clamp((stage.left + stage.right) / 2 + rand(-30, 30), L, Math.max(L, R));
+        if (Math.abs(tx - this.x) <= 20) return this.arrive({ k: 'where' });
+        this.walkTo(tx);
+        this.go = { k: 'where' };
+    }
+
+    /** 글 쓰면 빤히: over to the input box to watch you write. */
+    startStare() {
+        if (this.plat) return this.arrive({ k: 'stare' });       // up on a message: watches from there
+        const [L, R] = this.range();
+        const tx = clamp(inputX() + rand(-40, 40), L, Math.max(L, R));
+        if (Math.abs(tx - this.x) <= 20) return this.arrive({ k: 'stare' });
+        this.walkTo(tx);
+        this.go = { k: 'stare' };
     }
 
     /** Stop and react to you (the person in front of the screen). */
@@ -1669,6 +1775,10 @@ class Actor {
         this.talk('pat');
         fx(this, k === 'simsul' && soft ? '♥' : pp.tap);                                // 내편 심술: no 💢, just ♥
         const later = (fn) => setTimeout(() => { if (!this.gone && !this.held) fn(); }, 650);
+        if (Math.random() < chance(this, 'shy', SHY_CHANCE)) {                            // 0.9.0 부끄러워 도망
+            const from = px ?? this.x + this.dir * 20;
+            return later(() => { if (this.free() && !this.air && !this.wallOn) this.startShy(from); });
+        }
         if (k === 'saechim' && close) later(() => fx(this, '♥', 'tavvy-fx-small'));      // 친하면 작은 ♥
         if (k === 'simsul' && !soft) {
             if (close) later(() => fx(this, '♥'));                                          // 💢 … then softens
@@ -1727,6 +1837,8 @@ class Actor {
         if (this.wallOn && s !== 'stroll' && s !== 'fly') this.endWall();
         this.state = s; this.t = 0;
         this.aside = false; this.cheering = false;
+        if (s !== 'walk') { this.gait = null; this.go = null; }      // 0.9.0: how / why it's walking
+        if (s !== 'read') this.rd = null;
         this.sqT = 1;
         if (s === 'idle') { this.until = rand(...this.p.idle); this.tiltT = 0; }
         if (s === 'doze') { this.until = rand(...this.p.dozeLen) * (this.isFull() ? FULL_DOZE_LEN : 1); this.fxT = 0.6; }
@@ -1748,7 +1860,10 @@ class Actor {
             if (this.rec.personality?.base === 'musim') fx(this, '…');
         }
         if (s === 'wait') { this.fxT = rand(0.4, 1.2); this.scanT = 0.6; this.wvT = rand(2, 3.5); this.wsw = 0; }
-        if (s === 'fidget') { this.fxT = 0; this.tiltT = 0; this.fq = Math.random() < 0.35; this.until = { scan: rand(1.6, 2.4), sway: 1.8, stretch: 1.3, sit: rand(3, 6), tummy: 1.8 }[this.fk] || 1.6; }
+        if (s === 'fidget') { this.fxT = 0; this.tiltT = 0; this.fq = Math.random() < 0.35; this.until = { scan: rand(1.6, 2.4), sway: 2.6, stretch: 1.3, sit: rand(3, 6), tummy: 1.8, shake: 0.95 }[this.fk] || 1.6; }
+        if (s === 'skid') { this.until = 0.45; }
+        if (s === 'where') { this.fxT = 0; this.until = 3.4; }
+        if (s === 'stare') { this.fxT = 0; }
         if (s === 'watch') { this.fxT = 0; this.until = 2.8; }
         if (s === 'fly') {                          // 날기 · 휙휙
             this.wallOn = true;
@@ -1811,6 +1926,17 @@ class Actor {
         if (full && !this.plat && Math.random() < chance(this, 'roll', 0.12)) return this.setState('roll');   // 데굴데굴
         if (full && Math.random() < FULL_TUMMY) { this.fk = 'tummy'; return this.setState('fidget'); }   // 배 통통 ♪
         if (Math.random() < chance(this, 'fidget', FIDGET_CHANCE)) return this.startFidget();   // a little something on the spot
+        // 0.9.0: everyday things of their own
+        if (Math.random() < chance(this, 'hum', NEW_ACTS.hum)) { this.fk = 'sway'; return this.setState('fidget'); }      // 흥얼거리기 ♪
+        if (Math.random() < chance(this, 'scan', NEW_ACTS.scan)) { this.fk = 'scan'; return this.setState('fidget'); }    // 두리번
+        if (this.rec.look.roles?.sit?.length && Math.random() < chance(this, 'sit', NEW_ACTS.sit)) { this.fk = 'sit'; return this.setState('fidget'); }
+        if (Math.random() < chance(this, 'shake', NEW_ACTS.shake)) { this.fk = 'shake'; return this.setState('fidget'); }  // 몸 털기
+        if (!this.plat && !gen.active && Math.random() < chance(this, 'peek', NEW_ACTS.peek) && this.startPeek()) return;  // 빼꼼
+        if (this.plat && Math.random() < chance(this, 'read', READ_ON) && this.startRead()) return;                        // 글 읽는 척
+        if (!this.plat && ledgesOn() && Math.random() < chance(this, 'read', READ_CLIMB)) {
+            const t = this.pickClimb();
+            if (t && this.climbTo(t, 'read')) return;
+        }
         if (!this.plat && !this.waiting && root?.settings?.stroll !== false && stageIsChat()) {
             const m = this.pickMove();
             if (m) return this.startWall(m);
@@ -1832,7 +1958,13 @@ class Actor {
             if (R - L < 10) return this.setState('idle');
             let tx = rand(L, R);
             if (Math.abs(tx - this.x) < 30) tx = clamp(this.x + (Math.random() < 0.5 ? -1 : 1) * rand(40, 140), L, R);
-            return this.walkTo(tx);
+            if (!this.plat && Math.random() < chance(this, 'cling', CLING_WALK)) tx = clamp(clingX() + rand(-60, 60), L, R);   // 졸졸: back near you
+            const gait = Math.random() < chance(this, 'run', RUN_WALK) ? 'run' : Math.random() < chance(this, 'hopwalk', HOP_WALK) ? 'hop' : null;
+            if (gait === 'run' && Math.abs(tx - this.x) < 120 && R - L > 160) tx = this.x - L > R - this.x ? rand(L, L + 40) : rand(R - 40, R);   // a run needs a little room
+            if (Math.abs(tx - this.x) < 6) return this.setState('idle');
+            this.walkTo(tx);
+            this.gait = gait;
+            return;
         }
         return this.setState('idle');
     }
@@ -2198,9 +2330,12 @@ class Actor {
                 case 'walk': {
                     if (this.food > 0) { this.edge = false; this.setState('eat'); break; }
                     const d = this.tx - this.x;
-                    const sp = this.p.speed * paceOf(this.rec);          // 0.8.2: no more slow steps after a big meal (felt unnatural)
+                    const sp = this.p.speed * paceOf(this.rec) * (this.gait === 'run' ? RUN_X : this.gait === 'hop' ? 1.15 : 1);   // 0.8.2: no more slow steps after a big meal (felt unnatural)
                     if (Math.abs(d) <= sp * dt) {
                         this.x = this.tx;
+                        const go = this.go, gait = this.gait;
+                        if (go) { this.arrive(go); break; }                                           // 0.9.0: walked there for something
+                        if (gait === 'run') { this.skv = Math.sign(d || this.dir) * sp; this.setState('skid'); break; }   // 급정거
                         if (this.edge && this.plat) { this.edge = false; this.setState('edge'); this.until = rand(0.6, 1.1); }
                         else { this.edge = false; this.setState('idle'); this.until *= 0.6; }   // only a short stop after a walk
                         break;
@@ -2213,6 +2348,14 @@ class Actor {
                     // little hop on every step (light, springy walk)
                     bob = Math.pow(Math.sin(ph * Math.PI), 0.7) * 4 * this.k;
                     waddle = Math.sin(this.walkPh * Math.PI) * 1.5;
+                    if (this.gait === 'run') { bob *= 0.6; this.tiltT = Math.sign(d) * 7; }        // leaning into it
+                    if (this.gait === 'hop') {                                                    // 뛰어서 가기: little hops
+                        this.hopPh = (this.hopPh || 0) + HOP_RATE * dt;
+                        const hp = this.hopPh % 1;
+                        bob = Math.sin(hp * Math.PI) * 13 * this.k;
+                        waddle = 0;
+                        if (hp < 0.08 || hp > 0.92) this.sqT = 0.9; else this.sqT = 1.04;
+                    }
                     if (Math.floor(this.walkPh) !== before) {
                         // foot touches down: next frame + a tiny squish
                         this.frame++;
@@ -2220,6 +2363,85 @@ class Actor {
                         if (soft > 0) this.sq = Math.min(this.sq, 0.95);
                     }
                     pose = this.aside ? this.rp('aside') : this.role('walk');
+                    if (this.go?.k === 'shy') pose = this.rp('fluster');
+                    else if (this.gait === 'hop' && bob > 4 * this.k) pose = this.rp('jump');
+                    break;
+                }
+                case 'skid': {                         // 갑자기 달리기: a sudden stop, sliding a bit
+                    const [Ls, Rs] = this.range();
+                    this.skv *= Math.pow(0.004, dt);
+                    this.x = clamp(this.x + this.skv * dt, Ls, Math.max(Ls, Rs));
+                    this.tiltT = -Math.sign(this.skv || 1) * 9;
+                    this.sqT = 0.92;
+                    pose = this.rp('surprise');
+                    if (this.t > this.until) { this.tiltT = 0; this.sqT = 1; if (Math.random() < 0.3) fx(this, '💦', 'tavvy-fx-small'); this.setState('idle'); }
+                    break;
+                }
+                case 'read': {                         // 글 읽는 척: along the message, looking down at the words
+                    breath = 1;
+                    if (this.food > 0 || this.mealPending) { this.tiltT = 0; this.decide(); break; }
+                    if (!this.rd) {
+                        if (!this.plat) { this.setState('idle'); break; }
+                        const [Lr, Rr] = this.range();
+                        if (Rr - Lr < 20) { this.setState('perch'); break; }
+                        this.rd = { tx: this.x - Lr > Rr - this.x ? rand(Lr, Lr + 15) : rand(Rr - 15, Rr), f: 0, end: 0 };
+                    }
+                    const rd = this.rd, dr = rd.tx - this.x, spr = this.p.speed * paceOf(this.rec) * 0.35;
+                    if (this.side && Math.abs(dr) > 2) this.dir = Math.sign(dr);
+                    pose = this.role('look', 'idle');
+                    this.tiltT = (this.side ? this.dir : 1) * 6;
+                    if (Math.abs(dr) > spr * dt) { this.x += Math.sign(dr) * spr * dt; bob = Math.abs(Math.sin(this.t * Math.PI * 1.6)) * 1.5 * this.k; }
+                    else if (!rd.end) { rd.end = this.t + 1.1; if (Math.random() < 0.7) fx(this, Math.random() < 0.5 ? '!' : '♪', 'tavvy-fx-small'); }
+                    if (!rd.f && this.t > 1.3) { rd.f = 1; fx(this, Math.random() < 0.6 ? '?' : '…', 'tavvy-fx-small'); }
+                    if ((rd.end && this.t > rd.end) || this.t > 14) { this.tiltT = 0; this.setState('idle'); }
+                    break;
+                }
+                case 'hide': {                         // 빼꼼 숨기: half out of sight at the side, then a peek back at you
+                    const h = this.hd;
+                    if (!h) { this.setState('idle'); break; }
+                    breath = 1;
+                    const ease = (a, b, u) => a + (b - a) * (1 - Math.pow(1 - clamp(u, 0, 1), 2));
+                    const hideX = h.E + h.s * this.w * 0.12, peekX = h.E - h.s * this.w * 0.18;
+                    this.clipEdge = h;
+                    if (this.t < 0.6) { this.dir = this.side ? h.s : this.dir; this.x = ease(h.x0, hideX, this.t / 0.6); }
+                    else if (this.t < h.wait) { this.x = hideX; pose = this.rp('aside'); }
+                    else if (this.t < h.wait + 0.5) {
+                        if (this.side) this.dir = -h.s;
+                        this.x = ease(hideX, peekX, (this.t - h.wait) / 0.5);
+                        pose = this.role('look', 'idle');
+                        this.tiltT = -h.s * 8;
+                    } else {
+                        this.x = peekX;
+                        pose = this.role('look', 'idle');
+                        this.tiltT = -h.s * 8;
+                        if (!h.f) { h.f = 1; fx(this, ['?', '!', '♥'][Math.floor(Math.random() * 3)], 'tavvy-fx-small'); }
+                        if (this.t > h.wait + 1.9) {
+                            this.tiltT = 0; this.hd = null;
+                            const [Lh, Rh] = this.range();
+                            this.walkTo(clamp(this.x - h.s * rand(50, 110), Lh, Rh));   // comes back out
+                        }
+                    }
+                    break;
+                }
+                case 'where': {                        // …어디 갔었어? — comes and stares at you
+                    breath = 1;
+                    pose = this.role('look', 'idle');
+                    this.tiltT = 0;
+                    this.sqT = this.t > 0.4 ? 1.03 : 1;
+                    if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '…', 'tavvy-fx-small'); }
+                    if (this.fxT === 1 && this.t > 0.9) { this.fxT = 2; this.speak('…어디 갔었어?', 2600); }
+                    if (this.t > this.until) { this.sqT = 1; this.setState('idle'); }
+                    break;
+                }
+                case 'stare': {                        // 글 쓰면 빤히: next to the input box, watching you write
+                    breath = 1;
+                    if (this.food > 0 || this.mealPending) { this.tiltT = 0; this.decide(); break; }
+                    pose = this.role('look', 'idle');
+                    const ix = inputX();
+                    if (this.side && Math.abs(ix - this.x) > 10) this.dir = ix > this.x ? 1 : -1;
+                    this.tiltT = (Math.abs(ix - this.x) > 10 ? (ix > this.x ? 1 : -1) : (this.side ? this.dir : 1)) * 4;
+                    if (this.fxT === 0 && this.t > 0.4) { this.fxT = 1; fx(this, '…', 'tavvy-fx-small'); }
+                    if (performance.now() - typing.last > 2500 || this.t > 12) { this.tiltT = 0; this.setState('idle'); }
                     break;
                 }
                 case 'doze':
@@ -2347,10 +2569,15 @@ class Actor {
                         pose = this.role('look', 'idle');
                         this.tiltT = Math.sin(this.t * Math.PI * 1.3) * 4;
                         if (this.fq && this.fxT === 0 && this.t > 0.8) { this.fxT = 1; fx(this, '?', 'tavvy-fx-small'); }
-                    } else if (k === 'sway') {                           // humming, swaying
+                    } else if (k === 'sway') {                           // 흥얼거리기: humming, swaying (0.9.0: longer, a few ♪)
                         pose = this.role('happy', 'idle');
-                        this.tiltT = Math.sin(this.t * Math.PI * 2) * 5;
-                        if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '♪', 'tavvy-fx-small'); }
+                        this.tiltT = Math.sin(this.t * Math.PI * 1.6) * 6;
+                        bob = Math.abs(Math.sin(this.t * Math.PI * 1.6)) * 2 * this.k;
+                        if (this.fxT < 3 && this.t > 0.2 + this.fxT * 0.85) { this.fxT++; fx(this, this.fxT === 2 ? '♫' : '♪', 'tavvy-fx-small'); }
+                    } else if (k === 'shake') {                          // 몸 털기: a quick shake, a few ✦ fly off
+                        if (this.t < 0.6) { this.tiltT = Math.sin(this.t * Math.PI * 14) * 11; this.tilt = this.tiltT; this.sqT = 1.04; }
+                        else { this.tiltT = 0; this.sqT = 1; }
+                        if (this.fxT === 0 && this.t > 0.55) { this.fxT = 1; fx(this, '✦', 'tavvy-fx-small'); setTimeout(() => { if (!this.gone) fx(this, '✧', 'tavvy-fx-small'); }, 120); }
                     } else if (k === 'stretch') {                        // 기지개
                         this.tiltT = 0;
                         this.sqT = this.t < 0.9 ? 1.12 : 1;
@@ -2624,6 +2851,12 @@ class Actor {
         const left = this.x - this.w / 2 + shiver;
         const top = stage.floorY - this.y - this.h + this.basePx - bob;
         this.el.style.transform = `translate3d(${(left - stage.ox).toFixed(1)}px, ${(top - stage.oy).toFixed(1)}px, 0)`;
+        const ce = this.clipEdge;                                                 // 0.9.0 빼꼼: the part past the side is out of sight
+        if (ce) {
+            const hid = ce.s < 0 ? ce.E - left : left + this.w - ce.E;
+            if (hid <= 0 && this.state !== 'hide') { this.clipEdge = null; this.el.style.clipPath = ''; }
+            else { const v = Math.max(0, hid).toFixed(1); this.el.style.clipPath = ce.s < 0 ? `inset(-200% -200% -200% ${v}px)` : `inset(-200% ${v}px -200% -200%)`; }
+        }
         this.body.style.transform = `rotate(${(this.tilt + waddle + this.spin).toFixed(2)}deg) scale(${(sx * this.scale).toFixed(3)}, ${(sy * this.scale).toFixed(3)})`;
         const look = this.rec.look;
         const list = pose && pose.length ? pose : look.roles.idle;
@@ -2802,7 +3035,7 @@ function bumpCheck() {
  * Food (stage 4) — counting, the bowl, sparkles, backups
  * ===================================================================== */
 
-const EATABLE = ['idle', 'walk', 'eat', 'look', 'wait', 'watch', 'perch', 'edge', 'me', 'peekin', 'follow', 'fidget'];
+const EATABLE = ['idle', 'walk', 'eat', 'look', 'wait', 'watch', 'perch', 'edge', 'me', 'peekin', 'follow', 'fidget', 'read', 'stare', 'where', 'skid'];
 
 /** "2026-11-12" — the day starts at 6 a.m. */
 function dayKey(t = Date.now()) {
@@ -3405,7 +3638,10 @@ function onTyping() {
     if (start) typing.session++;
     typing.last = now;
     for (const a of actors) {
-        if (!can(a, 'peekInput') || a.held || a.air || a.waiting) continue;
+        if (a.held || a.air || a.waiting) continue;
+        if (a.state === 'stare' || a.go?.k === 'stare') continue;                     // already watching you write
+        if (start && ['idle', 'walk', 'perch', 'fidget', 'read'].includes(a.state) && !a.wallOn && Math.random() < chance(a, 'stare', STARE_CHANCE)) { a.startStare(); continue; }   // 0.9.0 글 쓰면 빤히
+        if (!can(a, 'peekInput')) continue;
         if (!start && now < a.peekInNext) continue;
         a.peekInNext = now + rand(...PEEKIN_GAP) * 1000;
         const k = kindOf(a, 'me');
@@ -3413,6 +3649,23 @@ function onTyping() {
         if (!okState || Math.random() >= chance(a, 'peekInput', start ? PEEKIN_CHANCE : PEEKIN_AGAIN)) continue;
         if (k === 'musim') { if (a.peekInSession === typing.session) continue; a.peekInSession = typing.session; }
         a.startPeekIn();
+    }
+}
+
+/** Middle of the input box (or of the chat). */
+function inputX() {
+    const r = $id('send_textarea')?.getBoundingClientRect();
+    return r && r.width > 0 ? (r.left + r.right) / 2 : (stage.left + stage.right) / 2;
+}
+/** 졸졸 따라다니기 heads for: your hand if it was here just now, else the input box. */
+const clingX = () => (performance.now() - hand.t < 4000 ? hand.x : inputX());
+
+/** Back after WHERE_AWAY minutes or more away from this screen: …어디 갔었어? */
+function whereAll() {
+    for (const a of actors) {
+        if (!a.free() || a.waiting || a.wallOn || a.go) continue;
+        if (!['idle', 'walk', 'perch', 'fidget', 'read', 'doze'].includes(a.state)) continue;
+        if (Math.random() < chance(a, 'where', WHERE_CHANCE)) a.startWhere();
     }
 }
 
@@ -3982,8 +4235,11 @@ function journalHtml(p) {
 
 /** One behaviour in the 행동 tab: 끔 / 드물게 / 보통 / 자주 (or just 끔 / 켬). */
 function freqRow(p, u) {
-    const off = MOVES[u.key] ? !movesOf(p).includes(u.key) : isOff(p, u.key);
+    const off = MOVES[u.key] ? !movesOf(p).includes(u.key) : isAtt(u.key) ? !FREQ_X[p.freq?.[u.key]] : isOff(p, u.key);
     const cur = off ? 'off' : (FREQ_X[p.freq?.[u.key]] ? p.freq[u.key] : 'norm');
+    if (u.needs && !p.look?.roles?.[u.needs]?.length) {         // 앉기 without a 앉기 picture
+        return `<div class="tw-frow tw-frow-off"><span class="tw-fname">${esc(u.name)}</span><span class="tw-sub">${esc(ROLE_DEFS[u.needs]?.name || u.name)} 그림을 넣으면 해요</span></div>`;
+    }
     const opts = NO_FREQ.includes(u.key) ? [['off', '끔'], ['norm', '켬']] : FREQS;
     return `<div class="tw-frow${off ? ' tw-frow-off' : ''}"><span class="tw-fname">${esc(u.name)}</span><span class="tw-fseg">${opts.map(([k, n]) =>
         `<span class="tw-fbtn${cur === k ? ' tw-fon' : ''}" data-freq="${u.key}" data-fv="${k}">${n}</span>`).join('')}</span></div>`;
@@ -3999,8 +4255,11 @@ function setFreq(key, v) {
         const on = new Set(movesOf(p));
         if (v === 'off') on.delete(key); else on.add(key);
         p.moves = Object.keys(MOVES).filter(k => on.has(k));
+    } else if (isAtt(key)) {                             // attitudes: stored only when on (보통 too)
+        off.delete(key);
+        if (FREQ_X[v]) freq[key] = v; else delete freq[key];
     } else if (v === 'off') off.add(key); else off.delete(key);
-    if (v === 'rare' || v === 'often') freq[key] = v; else if (v !== 'off') delete freq[key];
+    if (!isAtt(key)) { if (v === 'rare' || v === 'often') freq[key] = v; else if (v !== 'off') delete freq[key]; }
     p.off = [...off];
     p.freq = freq;
     saveSoon();
@@ -4069,11 +4328,12 @@ function actsHtml(p) {
     const basic = `<div class="tw-cap">평소 행동</div><div class="tw-freqs">${BASIC_ACTS.map(u => freqRow(p, u) + (u.key === 'dash' ? restRow : '')).join('')}`
         + `<div class="tw-frow"><span class="tw-fname">걸음 빠르기</span><span class="tw-fseg">${PACES.map(([k, n]) =>
             `<span class="tw-fbtn${pace === k ? ' tw-fon' : ''}" data-pace="${k}">${n}</span>`).join('')}</span></div></div>`;
+    const atts = `<div class="tw-cap">나를 대하는 태도</div><div class="tw-sub">처음엔 꺼져 있어요. 원하는 것만 켜 보세요.</div><div class="tw-freqs">${ATTITUDES.map(u => freqRow(p, u)).join('')}</div>`;
     const react = p.personality?.react || {};
     const reacts = `<div class="tw-cap">반응 모습</div><div class="tw-sub">순간마다 어느 성격처럼 반응할지 골라요. 섞어 써도 돼요.</div><div class="tw-freqs">${REACT_MOMENTS.map(m =>
         `<div class="tw-frow"><span class="tw-fname">${esc(m.name)}</span><select class="tw-rsel" data-react="${m.key}"><option value="">기본 (${esc(baseName)})</option>${Object.entries(PERSONALITIES).map(([k, v]) =>
             `<option value="${k}"${react[m.key] === k ? ' selected' : ''}>${esc(v.name)}</option>`).join('')}</select></div>`).join('')}</div>`;
-    return `${head}${basic}${groups}<div class="tw-sub" style="margin:6px 0 4px">친해질수록 새 행동이 하나씩 열려요.</div>${reacts}`;
+    return `${head}${basic}${atts}${groups}<div class="tw-sub" style="margin:6px 0 4px">친해질수록 새 행동이 하나씩 열려요.</div>${reacts}`;
 }
 
 /* ---------- window ---------- */
@@ -5192,6 +5452,7 @@ function petCore(p) {
         freq: structuredClone(p.freq || {}),
         pace: p.pace || 'norm',
         screenRest: restOf(p),
+        acts090: true,
         dates: structuredClone(p.dates || []).map(d => ({ ...d, id: 'd' + Math.random().toString(36).slice(2, 9) })),
         metOn: p.metOn,
         sounds: structuredClone(p.sounds || {}),
@@ -5459,10 +5720,14 @@ function cleanPet(src, look) {
     if (TALK_FREQ[src.talkFreq]) rec.talkFreq = src.talkFreq;
     src = { ...src, off: Array.isArray(src.off) ? [...src.off] : src.off, freq: isObj(src.freq) ? { ...src.freq } : src.freq };
     splitScreen(src);                                   // a pet file from before 0.8.2
+    splitFidget(src);                                   // …and before 0.9.0
     rec.moves = movesOf(src);
     const actKey = (k) => BASIC_ACTS.some(b => b.key === k) || UNLOCKS.some(u => u.key === k);
     if (Array.isArray(src.off)) rec.off = src.off.filter(actKey);
-    if (isObj(src.freq)) for (const [k, v] of Object.entries(src.freq)) if (actKey(k) && (v === 'rare' || v === 'often')) rec.freq[k] = v;
+    if (isObj(src.freq)) for (const [k, v] of Object.entries(src.freq)) {
+        if (actKey(k) && (v === 'rare' || v === 'often')) rec.freq[k] = v;
+        else if (isAtt(k) && FREQ_X[v]) rec.freq[k] = v;          // 0.9.0 attitudes (보통 is stored too)
+    }
     if (PACES.some(x => x[0] === src.pace)) rec.pace = src.pace;
     if (RESTS.some(x => x[0] === src.screenRest)) rec.screenRest = src.screenRest;
     if (isObj(src.personality?.react)) for (const m of REACT_MOMENTS) if (PERSONALITIES[src.personality.react[m.key]]) rec.personality.react[m.key] = src.personality.react[m.key];
@@ -6807,8 +7072,11 @@ function onReady() {
     const dropAll = () => { for (const a of actors) a.dropPointer?.(); };
     window.addEventListener('pagehide', dropAll);
     window.addEventListener('blur', dropAll);
+    let awayAt = 0;                                  // 0.9.0: when this screen went out of sight
     const onReturn = () => {
-        if (document.hidden) return dropAll();
+        if (document.hidden) { if (!awayAt) awayAt = Date.now(); return dropAll(); }
+        if (awayAt && Date.now() - awayAt >= WHERE_AWAY * 60000) setTimeout(whereAll, 1500);
+        awayAt = 0;
         measure(); recheckRoom();
         setTimeout(() => { measure(); recheckRoom(); }, 300);
         setTimeout(() => { measure(); recheckRoom(); }, 1200);
