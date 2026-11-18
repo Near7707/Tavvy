@@ -1169,3 +1169,4 @@
 .tavvy-giftbox .tgb-lid::after { left: 50%; transform: rotate(12deg) scaleX(-1); transform-origin: left bottom; }
 .tavvy-win .tw-giftbtns { flex-wrap: wrap; }
 .tavvy-win .tw-giftbtns [data-gedit] { flex-basis: 100%; order: 3; }
+.tavvy-win .tw-giftmemo { width: 100%; box-sizing: border-box; margin: 0; font-size: 12px; resize: vertical; min-height: 2.6em; }

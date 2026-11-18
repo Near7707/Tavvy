@@ -153,6 +153,7 @@ const PRESENT_ACTS = [
 ];
 const PRESENT_P = { pr_look: 0.04, pr_roll: 0.025, pr_toss: 0.025, pr_show: 0.025, pr_give: 0.025, pr_hug: 0.35 };   // × 빈도 (처음엔 드물게)
 const GIFT_MAX = 6;
+const GIFT_MEMO = 100;                               // 0.10.2 선물 메모
 const GIFT_SIZES = [['s', '작게', 0.32], ['m', '보통', 0.45], ['l', '크게', 0.6]];   // × the pet's height
 const TOY_G = 1600;                         // a present's gravity (px/s²)
 const isPres = (key) => PRESENT_ACTS.some(a => a.key === key);
@@ -384,7 +385,7 @@ function newPetRecord({ id, name, personality, look }) {
         metOn: true,                                  // celebrate the day we met every year
         celebrated: {},                               // date id ('met' for the day we met) → the day it was last celebrated
         sounds: {},                                   // per-moment sound files (empty = default)
-        gifts: [],                                    // 0.10.0 선물: [{ id, src, name, size 's'|'m'|'l', at, fresh? }]
+        gifts: [],                                    // 0.10.0 선물: [{ id, src, name, memo?, size 's'|'m'|'l', at, fresh? }]
         home: null,                                   // { chatId, integrity } or null = homeless
         bowl: { me: 0, them: 0, tokens: 0 },          // food waiting
         eaten: { me: 0, them: 0, tokens: 0 },         // lifetime eaten
@@ -1539,6 +1540,14 @@ class Actor {
             T.sc = 0;                                            // 0.10.1: inside a ribbon box until it's opened
             T.box = { o: -1, sh: 0 };
             T.lift = Math.max(this.h * 2, this.foot() - stage.chatTop);   // drops in from the top of the chat
+            // 0.10.2: every other present still waiting comes down in a box of its own, beside the first one
+            const bs = Math.max(16, this.h * 0.5), step = bs * 1.1, blo = stage.left + bs / 2, bhi = stage.right - bs / 2;
+            const near = clamp(this.x - s * (this.w * 0.42 + bs * 0.6), blo, bhi);
+            const others = (this.rec.gifts || []).filter(x => x !== g && x?.fresh && typeof x.src === 'string').slice(0, GIFT_MAX - 1);
+            T.extra = others.map((x, i) => {
+                const j = Math.floor(i / 2), far = i % 2 === 0;     // the other side first, then further out on both
+                return { g: x, px: clamp(far ? near - s * step * j : T.px + s * step * (j + 1), blo, bhi) };
+            });
             T.kind = kindOf(this, 'me');
         }
         return true;
@@ -1582,28 +1591,53 @@ class Actor {
         el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -100%) rotate(${(T.rot || 0).toFixed(1)}deg) scale(${T.sc.toFixed(3)})`;
     }
 
-    /** 0.10.1: the ribbon box a new present comes in (drawn with CSS — no picture needed). */
+    /** 0.10.1: the ribbon box a new present comes in (drawn with CSS — no picture needed).
+     *  0.10.2: one box per present not yet received, all opened together; the extra presents pop out and twinkle away. */
     drawBox(T) {
         const B = T?.box;
-        const on = B && B.o < 0.8 && !this.held && !this.air && !this.gone && !document.hidden;
-        if (!on) { if (this.boxEl) this.boxEl.hidden = true; return; }
-        let el = this.boxEl;
-        if (!el) {
-            el = this.boxEl = document.createElement('div');
+        const on = !!B && B.o < 0.8 && !this.held && !this.air && !this.gone && !document.hidden;
+        const list = on ? [{ px: T.px }, ...(T.extra || [])] : [];
+        const els = (this.boxEls ||= []), gels = (this.xgEls ||= []);
+        while (els.length < list.length) {
+            const el = document.createElement('div');
             el.className = 'tavvy-giftbox';
             el.innerHTML = '<div class="tgb-lid"></div><div class="tgb-body"></div>';
             ensureLayer().appendChild(el);
+            els.push(el);
         }
-        el.hidden = false;
-        const s = Math.max(16, this.h * 0.5);
-        el.style.width = s.toFixed(1) + 'px';
-        el.style.height = (s * 0.86).toFixed(1) + 'px';
-        const o = Math.max(0, B.o);
-        const sh = B.sh > 0 ? Math.sin(B.sh * 60) * 7 * (B.sh / 0.25) : 0;   // wobbles when it's patted
-        const x = T.px - stage.ox, y = this.foot() - (B.o < 0 ? T.lift : 0) - stage.oy;
-        el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -100%) rotate(${((B.o < 0 ? T.rot : 0) + sh).toFixed(1)}deg)`;
-        el.style.opacity = String(clamp(1 - (o - 0.3) / 0.5, 0, 1));
-        el.firstChild.style.transform = o ? `translate(${(T.s * o * s * 0.5).toFixed(1)}px, ${(-o * s * 1.1).toFixed(1)}px) rotate(${(T.s * o * 70).toFixed(1)}deg)` : '';
+        const s = Math.max(16, this.h * 0.5), o = on ? Math.max(0, B.o) : 0;
+        els.forEach((el, i) => {
+            if (i >= list.length) { el.hidden = true; return; }
+            el.hidden = false;
+            el.style.width = s.toFixed(1) + 'px';
+            el.style.height = (s * 0.86).toFixed(1) + 'px';
+            const sh = B.sh > 0 ? Math.sin(B.sh * 60 + i * 1.7) * 7 * (B.sh / 0.25) : 0;   // they all wobble when patted
+            const x = list[i].px - stage.ox, y = this.foot() - (B.o < 0 ? T.lift : 0) - stage.oy;
+            el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -100%) rotate(${((B.o < 0 ? T.rot * (i % 2 ? -1 : 1) : 0) + sh).toFixed(1)}deg)`;
+            el.style.opacity = String(clamp(1 - (o - 0.3) / 0.5, 0, 1));
+            const ls = i % 2 ? -T.s : T.s;
+            el.firstChild.style.transform = o ? `translate(${(ls * o * s * 0.5).toFixed(1)}px, ${(-o * s * 1.1).toFixed(1)}px) rotate(${(ls * o * 70).toFixed(1)}deg)` : '';
+        });
+        const xs = on && B.o >= 0 ? T.extra || [] : [];
+        while (gels.length < xs.length) {
+            const el = document.createElement('img');
+            el.className = 'tavvy-prop'; el.alt = ''; el.draggable = false;
+            ensureLayer().appendChild(el);
+            gels.push(el);
+        }
+        gels.forEach((el, i) => {
+            const X = xs[i];
+            if (!X) { el.hidden = true; return; }
+            const src = imgUrl(X.g.src);
+            if (el.dataset.src !== src) { el.src = src; el.dataset.src = src; }
+            const hp = this.h * giftK(X.g), u2 = Math.min(1, o / 0.45);
+            el.style.height = hp.toFixed(1) + 'px';
+            el.style.maxWidth = (hp * 1.6).toFixed(1) + 'px';
+            el.hidden = false;
+            const lift = Math.sin(u2 * Math.PI) * this.h * 0.35 + Math.max(0, o - 0.35) * this.h * 1.4;
+            el.style.opacity = String(clamp(1 - (o - 0.35) / 0.4, 0, 1));
+            el.style.transform = `translate3d(${(X.px - stage.ox).toFixed(1)}px, ${(this.foot() - lift - stage.oy).toFixed(1)}px, 0) translate(-50%, -100%) scale(${u2.toFixed(3)})`;
+        });
     }
 
     /** Moved dx px without the walk state: count steps so the 걷기 pictures take turns (0.9.3). */
@@ -2259,7 +2293,8 @@ class Actor {
         this.gone = true;
         this.el.remove();
         this.propEl?.remove();
-        this.boxEl?.remove(); this.boxEl = null;
+        for (const el of [...(this.boxEls || []), ...(this.xgEls || [])]) el.remove();
+        this.boxEls = this.xgEls = null;
         if (this.sayEl) { const el = this.sayEl; this.sayEl = null; clearTimeout(this.sayTimer); setTimeout(() => el.remove(), 1400); }   // "잘 자…" stays a moment
         for (const sp of sparkles.filter(x => x.a === this)) sp.remove(false);   // eaten already (record) — just the show stops
         const i = actors.indexOf(this);
@@ -2613,7 +2648,10 @@ class Actor {
                                     T.pats = (T.pats || 0) + 1; B.sh = 0.25; this.sq = 0.88;
                                 }
                                 if (lt > 0.7 && lt < 1.35) bob = Math.abs(Math.sin((lt - 0.7) / 0.35 * Math.PI)) * 3 * this.k;
-                                if (lt >= 1.45) { B.o = 0; fx(this, '✦'); this.gotGift(T.g); }
+                                if (lt >= 1.45) {
+                                    B.o = 0; fx(this, '✦'); this.gotGift(T.g);
+                                    for (const X of T.extra || []) this.gotGift(X.g);   // 0.10.2: all of them at once
+                                }
                             } else {
                                 B.o += dt;
                                 const u2 = Math.min(1, B.o / 0.45);
@@ -2621,7 +2659,8 @@ class Actor {
                                 T.lift = Math.sin(u2 * Math.PI) * this.h * 0.35;   // pops up out of it, then settles
                                 pose = this.role('surprise', 'happy', 'idle');
                                 this.tiltT = 0;
-                                if (B.o >= 0.6) { T.lift = 0; T.sc = 1; T.ph = 2; T.lt = 0; T.box = null; }
+                                if (T.extra?.length && B.o >= 0.4 && !T.tw) { T.tw = 1; fx(this, '✦'); }   // the rest twinkle away
+                                if (B.o >= (T.extra?.length ? 0.8 : 0.6)) { T.lift = 0; T.sc = 1; T.ph = 2; T.lt = 0; T.box = null; T.extra = null; }
                             }
                         } else {
                             const k = T.kind, lt = (T.lt += dt);
@@ -5832,7 +5871,7 @@ async function exportPetFile(id) {
         for (const g of p.gifts || []) {
             if (typeof g?.src !== 'string') continue;
             files.push(await fileToDataUrl(g.src));
-            pet.gifts.push({ name: g.name || '', size: g.size || 'm', at: g.at || 0, file: files.length - 1 });
+            pet.gifts.push({ name: g.name || '', ...(g.memo ? { memo: g.memo } : {}), size: g.size || 'm', at: g.at || 0, file: files.length - 1 });
         }
         const data = { [PET_FILE]: 1, formatVersion: FORMAT_VERSION, pet, files };
         download(`tavvy_${safeName(p.name)}.json`, new Blob([JSON.stringify(data)], { type: 'application/json' }));
@@ -6074,7 +6113,8 @@ async function unpackGifts(list, files, uploaded) {
         const id = 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
         const path = await uploadFile(`tavvy_gift_${id}.${ext === 'jpeg' ? 'jpg' : ext}`, files[g.file].split(',')[1]);
         uploaded.push(path);
-        out.push({ id, src: path, name: String(g.name || '').slice(0, 20), size: GIFT_SIZES.some(x => x[0] === g.size) ? g.size : 'm', at: num(g.at) });
+        const memo = String(g.memo || '').slice(0, GIFT_MEMO);
+        out.push({ id, src: path, name: String(g.name || '').slice(0, 20), ...(memo ? { memo } : {}), size: GIFT_SIZES.some(x => x[0] === g.size) ? g.size : 'm', at: num(g.at) });
     }
     return out;
 }
@@ -6176,7 +6216,8 @@ function onWinClick(e) {
     if (act === 'aifill') return aiFill();
     if (act === 'adddate') return addDateRow();
     if (act === 'giftpick') return pickGift();
-    if (act === 'giftok') return confirmGift();
+    if (act === 'giftok') return confirmGift(false);
+    if (act === 'giftnow') return confirmGift(true);
     if (act === 'giftno') { win.giftPend = null; return drawGifts(); }
     if (act === 'giftswap') return void win.body.querySelector('[data-f="giftfile"]')?.click();
     const ge = t.closest('[data-gedit]');
@@ -6260,6 +6301,7 @@ function onWinInput(e) {
         return redoGiftPreview();
     }
     if (t.dataset?.gname != null && e.type === 'change') return renameGift(t.dataset.gname, t.value);
+    if (t.dataset?.gmemo != null && e.type === 'change') return memoGift(t.dataset.gmemo, t.value);
     if (f === 'sheetfile' && e.type === 'change') return sheetPicked(t);
     if ((t.dataset?.sheetpick != null || t.dataset?.sheetrow != null || t.dataset?.sheetref != null) && e.type === 'change') return onSheetInput(t);
     if (t.dataset?.fitmode != null || t.dataset?.fitscale != null) return onFitInput(t, e.type === 'change');
@@ -6285,6 +6327,7 @@ function giftsHtml(p) {
     const cards = list.map(g => `<div class="tw-gift">
   <img class="tw-giftpic tw-checker" src="${esc(imgUrl(g.src))}" alt="">
   <input class="tw-giftname" data-gname="${esc(g.id)}" maxlength="20" value="${esc(g.name || '')}" placeholder="이름 없음">
+  <textarea class="tw-giftmemo" data-gmemo="${esc(g.id)}" maxlength="${GIFT_MEMO}" rows="2" placeholder="메모">${esc(g.memo || '')}</textarea>
   <span class="tw-fseg tw-giftsize">${GIFT_SIZES.map(([k, n]) => `<span class="tw-fbtn${(g.size || 'm') === k ? ' tw-fon' : ''}" data-gsize="${esc(g.id)}" data-gv="${k}">${n}</span>`).join('')}</span>
   <div class="tw-giftbtns"><div class="tw-btn tw-btn-small" data-gshow="${esc(g.id)}">꺼내 보기</div><div class="tw-btn tw-btn-small" data-gdel="${esc(g.id)}">빼기</div><div class="tw-btn tw-btn-small" data-gedit="${esc(g.id)}">그림 고치기</div></div>
   ${g.fresh ? '<span class="tw-sub">아직 안 받았어요</span>' : ''}
@@ -6300,7 +6343,10 @@ function giftsHtml(p) {
     <div class="tw-bgrow"${pend.bg ? '' : ' hidden'}><span class="tw-sub">조금</span><input type="range" min="6" max="80" step="2" value="${pend.tol}" data-f="giftbgtol"><span class="tw-sub">많이</span></div>
   </div></div>
   <label class="tw-label">이름 <span class="tw-sub">(안 적어도 돼요)</span> <input data-f="giftname" maxlength="20" value="${esc(pend.name || '')}"></label>
-  <div class="tw-row"><div class="tw-btn tw-btn-main" data-act="giftok">${pend.editId ? '바꾸기' : '주기'}</div>${pend.editId ? '<div class="tw-btn" data-act="giftswap">다른 그림으로</div>' : ''}<div class="tw-btn" data-act="giftno">취소</div></div>
+  <div class="tw-row">${pend.editId
+      ? '<div class="tw-btn tw-btn-main" data-act="giftok">바꾸기</div><div class="tw-btn" data-act="giftswap">다른 그림으로</div>'
+      : '<div class="tw-btn tw-btn-main" data-act="giftnow">바로 주기</div><div class="tw-btn" data-act="giftok">모아 두기</div>'}<div class="tw-btn" data-act="giftno">취소</div></div>
+  ${pend.editId ? '' : '<div class="tw-sub">바로 주기: 창을 닫고 안 받은 선물을 한꺼번에 건네요 · 모아 두기: 넣어만 두고 다음 그림을 골라요</div>'}
 </div>`;
     return `<div class="tw-cap">받은 선물 ${list.length} / ${GIFT_MAX}</div>
 <div class="tw-sub">선물을 주면 가끔 꺼내서 구경하고, 갖고 놀고, 자랑해요. 얼마나 자주 할지는 행동 탭 "선물"에서 골라요.</div>
@@ -6371,7 +6417,7 @@ async function editGift(id) {
     win.body?.querySelector('.tw-giftpend')?.scrollIntoView?.({ block: 'nearest' });
 }
 
-async function confirmGift() {
+async function confirmGift(now) {
     const pend = win.giftPend, p = curPet();
     if (!pend?.prep || busy || p !== pend.pet) return;
     if (readOnly) return say(readOnlyReason);
@@ -6392,7 +6438,8 @@ async function confirmGift() {
         drawGifts();
         refreshBed();
         const awake = actors.some(a => a.rec === p);
-        say(awake ? `선물을 줬어요! 창을 닫으면 ${josa(p.name, '이', '가')} 받아요.` : `선물을 줬어요! 🛏️ 버튼으로 깨우면 ${josa(p.name, '이', '가')} 받아요.`);
+        if (now && awake) return void giveNow(p);              // 0.10.2 바로 주기
+        say(awake ? `선물을 넣었어요! 창을 닫으면 ${josa(p.name, '이', '가')} 받아요.` : `선물을 넣었어요! 🛏️ 버튼으로 깨우면 ${josa(p.name, '이', '가')} 받아요.`);
     } catch (e) {
         say('선물을 올리지 못했어요: ' + (e.message || e));
     } finally {
@@ -6439,6 +6486,15 @@ function renameGift(id, v) {
     saveSoon();
 }
 
+/** 0.10.2: a note about the present, just for you (the pet doesn't use it). */
+function memoGift(id, v) {
+    const g = giftOf(curPet(), id);
+    if (!g || readOnly) return;
+    const m = String(v || '').trim().slice(0, GIFT_MEMO);
+    if (m) g.memo = m; else delete g.memo;
+    saveSoon();
+}
+
 async function delGift(id) {
     const p = curPet(), g = giftOf(p, id);
     if (!g || readOnly || busy) return;
@@ -6452,6 +6508,21 @@ async function delGift(id) {
 }
 
 /** "꺼내 보기": the window closes and it takes this one out right away. */
+/** 0.10.2 바로 주기: close the window and hand over every present still waiting, right away (or as soon as it's free). */
+function giveNow(p) {
+    const a = actors.find(x => x.rec === p);
+    if (!a) return;
+    closeWin();
+    const go = (n) => {
+        if (win?.open) { if (n < 40) setTimeout(() => go(n + 1), 250); return; }   // "저장 안 한 내용" may be asking first
+        const g = (p.gifts || []).find(x => x?.fresh && typeof x.src === 'string');
+        if (!g || a.gone || a.state === 'toy' && a.toy?.k === 'recv') return;
+        if (!a.free() || a.held || a.air || a.wallOn || ['eat', 'sniff', 'toy'].includes(a.state)) return;   // busy → it takes them when it's done
+        a.startToy('recv', g);
+    };
+    setTimeout(() => go(0), 350);
+}
+
 function showGiftNow(id) {
     const p = curPet(), g = giftOf(p, id);
     if (!g) return;
