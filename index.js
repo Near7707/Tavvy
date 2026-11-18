@@ -149,11 +149,12 @@ const TILT_K = 0.5;                         // 0.9.1: every lean / tilt at half 
 const EAT_MIN = 1.5;                        // 0.9.1: eats at least this long (s), even a short message
 // 0.9.0: attitudes toward you (처음엔 끔 — switched on per pet)
 const ATTITUDES = [
-    { key: 'cling',  name: '졸졸 따라다니기' },   // stays near the input box / your hand
+    { key: 'cling',  name: '졸졸 따라다니기' },   // 0.9.3: tap somewhere → walks over that way
     { key: 'where',  name: '…어디 갔었어?' },    // you were away a while → comes and stares, "…어디 갔었어?"
     { key: 'stare',  name: '글 쓰면 빤히' },      // you start writing → comes over and looks up at it
 ];
-const CLING_WALK = 0.6;         // walks: this share heads for the input box / your hand
+const CLING_TAP = 0.6;          // 0.9.3: a tap → walks toward it (드물게 30% / 보통 60% / 자주 ~90%)
+const TAP_MS = 350, TAP_MOVE = 10;   // a short touch that didn't move = a tap (not a scroll / a long press)
 const WHERE_AWAY = 5;           // min away from this screen
 const WHERE_CHANCE = 0.6;
 const STARE_CHANCE = 0.5;       // starting to write → comes over to look
@@ -1500,6 +1501,13 @@ class Actor {
         return true;
     }
 
+    /** Moved dx px without the walk state: count steps so the 걷기 pictures take turns (0.9.3). */
+    stepWalk(dx) {
+        const before = Math.floor(this.walkPh || 0);
+        this.walkPh = (this.walkPh || 0) + Math.abs(dx) / 22;
+        if (Math.floor(this.walkPh) !== before) this.frame++;
+    }
+
     /** 글 읽는 척 on the message it stands on. */
     startRead() {
         if (!this.plat) return false;
@@ -1922,7 +1930,6 @@ class Actor {
             if (R - L < 10) return this.setState('idle');
             let tx = rand(L, R);
             if (Math.abs(tx - this.x) < 30) tx = clamp(this.x + (Math.random() < 0.5 ? -1 : 1) * rand(40, 140), L, R);
-            if (!this.plat && Math.random() < chance(this, 'cling', CLING_WALK)) tx = clamp(clingX() + rand(-60, 60), L, R);   // 졸졸: back near you
             const gait = Math.random() < chance(this, 'run', RUN_WALK) ? 'run' : null;
             if (gait === 'run' && Math.abs(tx - this.x) < 120 && R - L > 160) tx = this.x - L > R - this.x ? rand(L, L + 40) : rand(R - 40, R);   // a run needs a little room
             if (Math.abs(tx - this.x) < 6) return this.setState('idle');
@@ -2342,12 +2349,12 @@ class Actor {
                         this.rd = { tx: this.x - Lr > Rr - this.x ? rand(Lr, Lr + 15) : rand(Rr - 15, Rr), f: 0, end: 0 };
                     }
                     const rd = this.rd, dr = rd.tx - this.x, spr = this.p.speed * paceOf(this.rec) * 0.35;
-                    if (this.side && Math.abs(dr) > 2) this.dir = Math.sign(dr);
+                    if (Math.abs(dr) > 2) this.dir = Math.sign(dr);   // 0.9.3: always — a side-facing 걷기 picture on a front-facing pet walked backwards
                     pose = this.role('look', 'idle');
                     this.tiltT = (this.side ? this.dir : 1) * 6;
                     if (Math.abs(dr) > spr * dt) {                     // 0.9.2: moving → the walking picture (no gliding)
                         this.x += Math.sign(dr) * spr * dt;
-                        this.walkPh = (this.walkPh || 0) + (spr / 22) * dt;
+                        this.stepWalk(spr * dt);                       // 0.9.3: the walking pictures take turns
                         bob = Math.pow(Math.sin((this.walkPh % 1) * Math.PI), 0.7) * 2 * this.k;
                         pose = this.role('walk');
                     }
@@ -2363,11 +2370,13 @@ class Actor {
                     const ease = (a, b, u) => a + (b - a) * (1 - Math.pow(1 - clamp(u, 0, 1), 2));
                     const hideX = h.E + h.s * this.w * 0.12, peekX = h.E - h.s * this.w * 0.18;
                     this.clipEdge = h;
-                    if (this.t < 0.6) { this.dir = this.side ? h.s : this.dir; this.x = ease(h.x0, hideX, this.t / 0.6); pose = this.role('walk'); }   // 0.9.2: walking in
+                    const px = this.x;
+                    if (this.t < 0.6) { this.dir = h.s; this.x = ease(h.x0, hideX, this.t / 0.6); this.stepWalk(this.x - px); pose = this.role('walk'); }   // walking in (0.9.3: right way round, pictures in turn)
                     else if (this.t < h.wait) { this.x = hideX; pose = this.rp('aside'); }
                     else if (this.t < h.wait + 0.5) {
-                        if (this.side) this.dir = -h.s;
+                        this.dir = -h.s;
                         this.x = ease(hideX, peekX, (this.t - h.wait) / 0.5);
+                        this.stepWalk(this.x - px);
                         pose = this.role('walk');                  // 0.9.2: a step out, walking
                         this.tiltT = -h.s * 8;
                     } else {
@@ -3610,8 +3619,20 @@ function inputX() {
     const r = $id('send_textarea')?.getBoundingClientRect();
     return r && r.width > 0 ? (r.left + r.right) / 2 : (stage.left + stage.right) / 2;
 }
-/** 졸졸 따라다니기 heads for: your hand if it was here just now, else the input box. */
-const clingX = () => (performance.now() - hand.t < 4000 ? hand.x : inputX());
+/** 졸졸 따라다니기 (0.9.3): you tapped at x → pets with it on walk over that way (on what they stand on). */
+function clingTap(x) {
+    for (const a of actors) {
+        if (!a.free() || a.waiting || a.wallOn || a.go || a.gait) continue;
+        if (!['idle', 'walk', 'perch', 'fidget', 'read', 'look', 'edge'].includes(a.state)) continue;
+        if (Math.random() >= chance(a, 'cling', CLING_TAP)) continue;
+        const [L, R] = a.range();
+        if (R - L < 10) continue;
+        const tx = clamp(x + rand(-20, 20), L, R);
+        if (Math.abs(tx - a.x) < 24) continue;
+        if (Math.random() < 0.4) fx(a, '!', 'tavvy-fx-small');
+        a.walkTo(tx);
+    }
+}
 
 /** Back after WHERE_AWAY minutes or more away from this screen: …어디 갔었어? */
 function whereAll() {
@@ -7008,6 +7029,17 @@ function onReady() {
     const seeHand = (e) => { if (!actors.length) return; hand.x = e.clientX; hand.y = e.clientY; hand.t = performance.now(); };
     document.addEventListener('pointermove', seeHand, { capture: true, passive: true });
     document.addEventListener('pointerdown', seeHand, { capture: true, passive: true });
+    // 0.9.3 졸졸 따라다니기: a short tap anywhere (not on a pet / the bed / the Tavvy window, not a scroll)
+    const taps = new Map();
+    const notMine = (t) => !t?.closest?.('.tavvy-pet, #tavvy-bed, #tavvy-win, .tavvy-bubble');
+    document.addEventListener('pointerdown', (e) => { if (actors.length && e.isPrimary && notMine(e.target)) taps.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now() }); }, { capture: true, passive: true });
+    document.addEventListener('pointerup', (e) => {
+        const d = taps.get(e.pointerId); taps.delete(e.pointerId);
+        if (!d || !actors.length) return;
+        if (performance.now() - d.t > TAP_MS || Math.hypot(e.clientX - d.x, e.clientY - d.y) > TAP_MOVE) return;
+        clingTap(e.clientX);
+    }, { capture: true, passive: true });
+    document.addEventListener('pointercancel', (e) => taps.delete(e.pointerId), { capture: true, passive: true });
     setInterval(bedWiggle, 500);
     // "펫 정보" in the wand menu (the menu may be built a little after us)
     if (!addWandItem()) { let n = 0; const w = setInterval(() => { if (addWandItem() || ++n > 30) clearInterval(w); }, 1000); }
