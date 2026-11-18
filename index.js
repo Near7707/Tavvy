@@ -2348,7 +2348,7 @@ class Actor {
                         if (Rr - Lr < 20) { this.setState('perch'); break; }
                         this.rd = { tx: this.x - Lr > Rr - this.x ? rand(Lr, Lr + 15) : rand(Rr - 15, Rr), f: 0, end: 0 };
                     }
-                    const rd = this.rd, dr = rd.tx - this.x, spr = this.p.speed * paceOf(this.rec) * 0.35;
+                    const rd = this.rd, dr = rd.tx - this.x, spr = this.p.speed * paceOf(this.rec) * 0.5;   // 0.9.4: 0.35 → 0.5 (felt too slow)
                     if (Math.abs(dr) > 2) this.dir = Math.sign(dr);   // 0.9.3: always — a side-facing 걷기 picture on a front-facing pet walked backwards
                     pose = this.role('look', 'idle');
                     this.tiltT = (this.side ? this.dir : 1) * 6;
