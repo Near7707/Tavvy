@@ -4406,10 +4406,12 @@ function lookById(key) {
 
 /** Tiles: built-in pets, then my saved looks, then "새로 올리기". */
 function lookGridHtml(selected, current = null) {
-    const tile = (key, src, name, extra = '') =>
-        `<div class="tw-look${selected === key ? ' tw-on' : ''}" data-look="${esc(key)}"><div class="tw-look-img">${src ? `<img src="${esc(src)}" alt="">` : ''}${current === key ? '<em>지금</em>' : ''}</div><span>${esc(name)}</span>${extra}</div>`;
+    const tile = (key, src, name, del = '') =>
+        `<div class="tw-look${selected === key ? ' tw-on' : ''}" data-look="${esc(key)}"><div class="tw-look-img">${src ? `<img src="${esc(src)}" alt="">` : ''}${current === key ? '<em>지금</em>' : ''}${del}</div><span>${esc(name)}</span></div>`;
     const builtins = Object.entries(BUILTIN).map(([k, v]) => tile('builtin:' + k, `${BASE}assets/pets/${k}/idle.png`, v.name)).join('');
-    const mine = (root?.looks || []).map(l => tile('lib:' + l.id, imgUrl(l.roles?.idle?.[0]), l.name)).join('');
+    // 0.10.3: a saved look no pet wears can be thrown away right here (same as in ⚙)
+    const mine = (root?.looks || []).map(l => tile('lib:' + l.id, imgUrl(l.roles?.idle?.[0]), l.name,
+        lookUsers(l).length ? '' : `<i class="tw-lookdel" data-dellook="${esc(l.id)}" title="지우기">✕</i>`)).join('');
     return `<div class="tw-cap">기본 펫</div><div class="tw-looks">${builtins}</div>
 <div class="tw-cap">내가 올린 외형</div><div class="tw-looks">${mine}<div class="tw-look tw-look-add${selected === 'upload' ? ' tw-on' : ''}" data-look="upload"><div class="tw-look-img"><i class="fa-solid fa-plus"></i></div><span>새로 올리기</span></div></div>`;
 }
@@ -4888,7 +4890,7 @@ function show(view, opts = {}) {
     const back = view !== 'home';
     const p = view === 'pet' ? root?.pets.find(x => x.id === win.id) : null;
     if (view === 'pet' && !p) return show('home');
-    const title = { home: 'Tavvy', pet: p?.name || '', new: '새 펫 만들기', settings: '설정' }[view];
+    const title = { home: 'Tavvy', pet: p?.name || '', new: '새 펫 만들기', settings: '설정', bye: '작별' }[view];
     win.head.innerHTML = `${back ? '<div class="tw-icon" data-act="back" title="뒤로"><i class="fa-solid fa-arrow-left"></i></div>' : '<div class="tw-icon tw-paw"><i class="fa-solid fa-paw"></i></div>'}
 <b class="tw-title">${esc(title)}</b>
 ${view === 'home' ? '<div class="tw-icon" data-act="settings" title="설정"><i class="fa-solid fa-gear"></i></div>' : ''}
@@ -4897,11 +4899,23 @@ ${view === 'home' ? '<div class="tw-icon" data-act="settings" title="설정"><i 
     else if (view === 'pet') win.body.innerHTML = petHtml(p);
     else if (view === 'new') win.body.innerHTML = newHtml();
     else if (view === 'settings') win.body.innerHTML = settingsHtml();
+    else if (view === 'bye') win.body.innerHTML = byeHtml(opts.name);
     win.body.scrollTop = 0;
     if (view === 'pet') { fillEdit(p); fillTalk(p); showTab(win.tab); }
     if (view === 'new') fillNew();
     if (view === 'settings') fillSettings();
     refreshWin();
+}
+
+/** 0.10.3: after saying goodbye — so it's clear the pet is gone. */
+function byeHtml(name) {
+    const n = String(name || '');
+    return `<div class="tw-bye">
+  <div class="tw-bye-wave">👋</div>
+  <b>${esc(n)}${esc(josa(n, '과', '와').slice(n.length))} 작별했어요</b>
+  <div class="tw-sub">함께한 기록은 지워졌어요. 외형(그림)은 "내가 올린 외형"에 남아 있어서 새 펫을 만들 때 다시 고를 수 있어요.</div>
+  <div class="tw-row tw-bye-btns"><div class="tw-btn" data-act="gohome">처음 화면으로</div><div class="tw-btn tw-btn-main" data-act="close">닫기</div></div>
+</div>`;
 }
 
 /** Leaving a page with unsaved edits asks once. Returns true if it's fine to go. */
@@ -5139,8 +5153,8 @@ function looksLiveHtml() {
         const users = lookUsers(l);
         return `<div class="tw-lookrow">
   <div class="tw-av"><img src="${esc(imgUrl(l.roles?.idle?.[0]))}" alt=""></div>
-  <div class="tw-card-main"><b>${esc(l.name)}</b><span>${users.length ? `${esc(users.map(p => p.name).join(', '))}${josa(users[users.length - 1].name, '이', '가').slice(users[users.length - 1].name.length)} 쓰는 중` : '쓰는 펫 없음'}</span></div>
-  ${users.length ? '' : `<div class="tw-btn tw-btn-small" data-dellook="${esc(l.id)}">지우기</div>`}
+  <div class="tw-card-main"><input class="tw-lookname" data-lname="${esc(l.id)}" maxlength="20" value="${esc(l.name)}" placeholder="이름 없음"><span>${users.length ? `${esc(users.map(p => p.name).join(', '))}${josa(users[users.length - 1].name, '이', '가').slice(users[users.length - 1].name.length)} 쓰는 중` : '쓰는 펫 없음'}</span></div>
+  <div class="tw-btn tw-btn-small${users.length ? ' tw-btn-dim' : ''}" data-dellook="${esc(l.id)}">지우기</div>
 </div>`;
     }).join('');
 }
@@ -5706,22 +5720,39 @@ async function deletePet(id) {
     else saveSoon();
     refreshBed();
     renderPanel();
-    if (win?.open) { win.form = null; show('home'); }
-    say(`${josa(pet.name, '과', '와')} 작별했어요. 외형은 "내가 올린 외형"에 남아 있어요.`);
+    if (win?.open) { win.form = null; show('bye', { name: pet.name }); }   // 0.10.3: a page that says it's done
 }
 
 async function deleteLook(id) {
     if (readOnly) return say(readOnlyReason);
     const l = (root.looks || []).find(x => x.id === id);
     if (!l) return;
-    if (lookUsers(l).length) return say('이 외형을 쓰는 펫이 있어서 지울 수 없어요.');
+    const users = lookUsers(l);
+    if (users.length) {
+        const n = users.map(p => p.name).join(', ');
+        return say(`${n}${josa(users[users.length - 1].name, '이', '가').slice(users[users.length - 1].name.length)} 입고 있어서 지울 수 없어요. 그 펫의 외형을 바꾸거나 작별하면 지울 수 있어요.`);
+    }
     if (!(await confirmBox(`"${l.name}" 외형을 지울까요? 그림 파일도 함께 지워져요.`))) return;
     root.looks = root.looks.filter(x => x !== l);
     const ok = await saveNow();
     if (ok) for (const f of lookFiles(l)) { if (!fileInUse(f)) deleteFile(f); }
     else saveSoon();
+    if (win?.form && win.form.look === 'lib:' + l.id) {   // it was picked in an open form
+        win.form.look = win.form.kind === 'edit' ? win.form.base.look : null;
+    }
+    if (win?.form) drawLookGrid();
     refreshWin();
     say('외형을 지웠어요.');
+}
+
+/** 0.10.3: give a saved look another name (pets wearing it keep their own names). */
+function renameLook(id, v) {
+    if (readOnly) return say(readOnlyReason);
+    const l = (root.looks || []).find(x => x.id === id);
+    if (!l) return;
+    const name = String(v || '').trim().slice(0, 20);
+    if (name && name !== l.name) { l.name = name; saveSoon(); }
+    setTimeout(refreshWin, 0);   // not while the box is still losing focus (redrawing it then throws)
 }
 
 /* ---------- moving, copying, pet files and PNG cards (7단계) ---------- */
@@ -6188,6 +6219,7 @@ function onWinClick(e) {
     if (act === 'close') return closeWin();
     if (act === 'back') return leave(() => show('home'));
     if (act === 'settings') return show('settings');
+    if (act === 'gohome') return show('home');
     if (act === 'new') return show('new');
     if (act === 'save') return saveEdit();
     if (act === 'create') return createPet();
@@ -6273,12 +6305,12 @@ function onWinClick(e) {
     if (pet) return show('pet', { id: pet.dataset.pet });
     const tab = t.closest('[data-tab]');
     if (tab) return showTab(tab.dataset.tab);
+    const dl = t.closest('[data-dellook]');
+    if (dl) return deleteLook(dl.dataset.dellook);
     const look = t.closest('[data-look]');
     if (look) return pickLook(look.dataset.look);
     const theme = t.closest('[data-theme-pick]');
     if (theme) return setSetting('winTheme', theme.dataset.themePick);
-    const dl = t.closest('[data-dellook]');
-    if (dl) return deleteLook(dl.dataset.dellook);
 }
 
 function onWinInput(e) {
@@ -6301,6 +6333,7 @@ function onWinInput(e) {
         return redoGiftPreview();
     }
     if (t.dataset?.gname != null && e.type === 'change') return renameGift(t.dataset.gname, t.value);
+    if (t.dataset?.lname != null && e.type === 'change') return renameLook(t.dataset.lname, t.value);
     if (t.dataset?.gmemo != null && e.type === 'change') return memoGift(t.dataset.gmemo, t.value);
     if (f === 'sheetfile' && e.type === 'change') return sheetPicked(t);
     if ((t.dataset?.sheetpick != null || t.dataset?.sheetrow != null || t.dataset?.sheetref != null) && e.type === 'change') return onSheetInput(t);
@@ -6325,7 +6358,7 @@ function giftsHtml(p) {
     const list = p.gifts || [];
     const pend = win.giftPend?.pet === p ? win.giftPend : null;
     const cards = list.map(g => `<div class="tw-gift">
-  <img class="tw-giftpic tw-checker" src="${esc(imgUrl(g.src))}" alt="">
+  <div class="tw-giftpicbox"><img class="tw-giftpic tw-checker" src="${esc(imgUrl(g.src))}" alt=""></div>
   <input class="tw-giftname" data-gname="${esc(g.id)}" maxlength="20" value="${esc(g.name || '')}" placeholder="이름 없음">
   <textarea class="tw-giftmemo" data-gmemo="${esc(g.id)}" maxlength="${GIFT_MEMO}" rows="2" placeholder="메모">${esc(g.memo || '')}</textarea>
   <span class="tw-fseg tw-giftsize">${GIFT_SIZES.map(([k, n]) => `<span class="tw-fbtn${(g.size || 'm') === k ? ' tw-fon' : ''}" data-gsize="${esc(g.id)}" data-gv="${k}">${n}</span>`).join('')}</span>
