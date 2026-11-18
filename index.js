@@ -148,9 +148,10 @@ const PRESENT_ACTS = [
     { key: 'pr_roll', name: '굴리며 놀기' },
     { key: 'pr_toss', name: '던졌다 받기' },
     { key: 'pr_show', name: '자랑하기' },
+    { key: 'pr_give', name: '나에게 내밀기' },
     { key: 'pr_hug',  name: '끼고 자기' },
 ];
-const PRESENT_P = { pr_look: 0.04, pr_roll: 0.025, pr_toss: 0.025, pr_show: 0.025, pr_hug: 0.35 };   // × 빈도 (처음엔 드물게)
+const PRESENT_P = { pr_look: 0.04, pr_roll: 0.025, pr_toss: 0.025, pr_show: 0.025, pr_give: 0.025, pr_hug: 0.35 };   // × 빈도 (처음엔 드물게)
 const GIFT_MAX = 6;
 const GIFT_SIZES = [['s', '작게', 0.32], ['m', '보통', 0.45], ['l', '크게', 0.6]];   // × the pet's height
 const TOY_G = 1600;                         // a present's gravity (px/s²)
@@ -1535,7 +1536,8 @@ class Actor {
             ph: 0, n: 0, max: kind === 'roll' ? (Math.random() < 0.5 ? 2 : 3) : 2, f: 0, wait: 0, dur: rand(3, 5) };
         if (kind === 'recv') {
             const T = this.toy;
-            T.sc = 1;
+            T.sc = 0;                                            // 0.10.1: inside a ribbon box until it's opened
+            T.box = { o: -1, sh: 0 };
             T.lift = Math.max(this.h * 2, this.foot() - stage.chatTop);   // drops in from the top of the chat
             T.kind = kindOf(this, 'me');
         }
@@ -1565,6 +1567,7 @@ class Actor {
     drawProp() {
         const T = this.state === 'toy' ? this.toy : this.state === 'doze' ? this.hug : null;
         if (T && T === this.hug) T.sc = Math.min(1, T.sc + 0.06);
+        this.drawBox(T);
         const on = T && !this.held && !this.air && !this.gone && !document.hidden && T.sc > 0.02;
         if (!on) { if (this.propEl) this.propEl.hidden = true; return; }
         let el = this.propEl;
@@ -1577,6 +1580,30 @@ class Actor {
         el.hidden = false;
         const x = T.px - stage.ox, y = this.foot() - T.lift - stage.oy;
         el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -100%) rotate(${(T.rot || 0).toFixed(1)}deg) scale(${T.sc.toFixed(3)})`;
+    }
+
+    /** 0.10.1: the ribbon box a new present comes in (drawn with CSS — no picture needed). */
+    drawBox(T) {
+        const B = T?.box;
+        const on = B && B.o < 0.8 && !this.held && !this.air && !this.gone && !document.hidden;
+        if (!on) { if (this.boxEl) this.boxEl.hidden = true; return; }
+        let el = this.boxEl;
+        if (!el) {
+            el = this.boxEl = document.createElement('div');
+            el.className = 'tavvy-giftbox';
+            el.innerHTML = '<div class="tgb-lid"></div><div class="tgb-body"></div>';
+            ensureLayer().appendChild(el);
+        }
+        el.hidden = false;
+        const s = Math.max(16, this.h * 0.5);
+        el.style.width = s.toFixed(1) + 'px';
+        el.style.height = (s * 0.86).toFixed(1) + 'px';
+        const o = Math.max(0, B.o);
+        const sh = B.sh > 0 ? Math.sin(B.sh * 60) * 7 * (B.sh / 0.25) : 0;   // wobbles when it's patted
+        const x = T.px - stage.ox, y = this.foot() - (B.o < 0 ? T.lift : 0) - stage.oy;
+        el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -100%) rotate(${((B.o < 0 ? T.rot : 0) + sh).toFixed(1)}deg)`;
+        el.style.opacity = String(clamp(1 - (o - 0.3) / 0.5, 0, 1));
+        el.firstChild.style.transform = o ? `translate(${(T.s * o * s * 0.5).toFixed(1)}px, ${(-o * s * 1.1).toFixed(1)}px) rotate(${(T.s * o * 70).toFixed(1)}deg)` : '';
     }
 
     /** Moved dx px without the walk state: count steps so the 걷기 pictures take turns (0.9.3). */
@@ -1994,7 +2021,7 @@ class Actor {
         if (this.rec.look.roles?.sit?.length && Math.random() < chance(this, 'sit', NEW_ACTS.sit)) { this.fk = 'sit'; return this.setState('fidget'); }
         if (!this.plat && !gen.active && Math.random() < chance(this, 'peek', NEW_ACTS.peek) && this.startPeek()) return;  // 빼꼼
         if (!gen.active && this.giftList().length) {                  // 0.10.0 선물: takes one out now and then
-            for (const [k, key] of [['look', 'pr_look'], ['show', 'pr_show'], ['roll', 'pr_roll'], ['toss', 'pr_toss']]) {
+            for (const [k, key] of [['look', 'pr_look'], ['show', 'pr_show'], ['give', 'pr_give'], ['roll', 'pr_roll'], ['toss', 'pr_toss']]) {
                 if ((k === 'roll' || k === 'toss') && this.plat) continue;
                 if (Math.random() < chance(this, key, PRESENT_P[key])) return void this.startToy(k);
             }
@@ -2232,6 +2259,7 @@ class Actor {
         this.gone = true;
         this.el.remove();
         this.propEl?.remove();
+        this.boxEl?.remove(); this.boxEl = null;
         if (this.sayEl) { const el = this.sayEl; this.sayEl = null; clearTimeout(this.sayTimer); setTimeout(() => el.remove(), 1400); }   // "잘 자…" stays a moment
         for (const sp of sparkles.filter(x => x.a === this)) sp.remove(false);   // eaten already (record) — just the show stops
         const i = actors.indexOf(this);
@@ -2552,6 +2580,18 @@ class Actor {
                         }
                         if (T.hop > 0) { T.hop -= dt; bob = Math.max(0, Math.sin((1 - T.hop / 0.3) * Math.PI)) * 6 * this.k; }
                         if (this.t > 15) T.out = true;
+                    } else if (T.k === 'give') {                             // 0.10.1 나에게 내밀기: holds it out to you
+                        const cs = (stage.left + stage.right) / 2 >= this.x ? 1 : -1;
+                        if (this.side) this.dir = cs;
+                        const gx = this.x + cs * this.w * 0.3;          // in front, a little to one side (its face stays in view)
+                        T.px += (gx - T.px) * u;
+                        T.lift += (H * 0.12 - T.lift) * u;
+                        pose = this.role('happy', 'idle');
+                        if (this.t < 0.7) { T.st = 0.8; this.tiltT = Math.sin(this.t * 28) * 4; }            // rummaging for it
+                        else if (this.t < 2.3) { T.st = 1.6; this.tiltT = 0; T.rot = Math.sin(this.t * 5) * 4; } // closer — for you
+                        else { T.st = 1; T.rot *= 0.8; }
+                        if (!T.f && this.t > 0.9) { T.f = 1; fx(this, '♥'); }
+                        if (this.t > 3) T.out = true;
                     } else {                                                 // recv: you just gave it — it drops in
                         if (T.ph === 0) {
                             T.vy -= TOY_G * dt; T.lift += T.vy * dt; T.rot += 200 * dt * T.s;
@@ -2560,7 +2600,28 @@ class Actor {
                             if (T.lift <= 0) {
                                 T.lift = 0;
                                 if (T.vy < -260) T.vy = -T.vy * 0.3;
-                                else { T.vy = 0; T.rot = 0; T.ph = 1; T.lt = 0; fx(this, '!'); this.sq = 0.88; this.gotGift(T.g); }
+                                else { T.vy = 0; T.rot = 0; T.ph = 1; T.lt = 0; fx(this, '!'); this.sq = 0.88; }
+                            }
+                        } else if (T.ph === 1) {                             // 0.10.1: a box! a look, two pats, and it opens
+                            const B = T.box, lt = (T.lt += dt);
+                            if (this.side) this.dir = T.s;
+                            if (B.sh > 0) B.sh = Math.max(0, B.sh - dt);
+                            if (B.o < 0) {
+                                pose = lt < 0.6 ? this.role('look', 'idle') : this.role('happy', 'idle');
+                                this.tiltT = lt < 0.6 ? T.s * 6 : T.s * 3;
+                                for (const at of [0.7, 1.05]) if (lt >= at && (T.pats || 0) < (at === 0.7 ? 1 : 2)) {
+                                    T.pats = (T.pats || 0) + 1; B.sh = 0.25; this.sq = 0.88;
+                                }
+                                if (lt > 0.7 && lt < 1.35) bob = Math.abs(Math.sin((lt - 0.7) / 0.35 * Math.PI)) * 3 * this.k;
+                                if (lt >= 1.45) { B.o = 0; fx(this, '✦'); this.gotGift(T.g); }
+                            } else {
+                                B.o += dt;
+                                const u2 = Math.min(1, B.o / 0.45);
+                                T.sc = u2;
+                                T.lift = Math.sin(u2 * Math.PI) * this.h * 0.35;   // pops up out of it, then settles
+                                pose = this.role('surprise', 'happy', 'idle');
+                                this.tiltT = 0;
+                                if (B.o >= 0.6) { T.lift = 0; T.sc = 1; T.ph = 2; T.lt = 0; T.box = null; }
                             }
                         } else {
                             const k = T.kind, lt = (T.lt += dt);
@@ -6117,6 +6178,9 @@ function onWinClick(e) {
     if (act === 'giftpick') return pickGift();
     if (act === 'giftok') return confirmGift();
     if (act === 'giftno') { win.giftPend = null; return drawGifts(); }
+    if (act === 'giftswap') return void win.body.querySelector('[data-f="giftfile"]')?.click();
+    const ge = t.closest('[data-gedit]');
+    if (ge) return editGift(ge.dataset.gedit);
     if (act === 'giftcut') {
         const pend = win.giftPend;
         if (!pend?.file) return;
@@ -6222,12 +6286,13 @@ function giftsHtml(p) {
   <img class="tw-giftpic tw-checker" src="${esc(imgUrl(g.src))}" alt="">
   <input class="tw-giftname" data-gname="${esc(g.id)}" maxlength="20" value="${esc(g.name || '')}" placeholder="이름 없음">
   <span class="tw-fseg tw-giftsize">${GIFT_SIZES.map(([k, n]) => `<span class="tw-fbtn${(g.size || 'm') === k ? ' tw-fon' : ''}" data-gsize="${esc(g.id)}" data-gv="${k}">${n}</span>`).join('')}</span>
-  <div class="tw-giftbtns"><div class="tw-btn tw-btn-small" data-gshow="${esc(g.id)}">꺼내 보기</div><div class="tw-btn tw-btn-small" data-gdel="${esc(g.id)}">빼기</div></div>
+  <div class="tw-giftbtns"><div class="tw-btn tw-btn-small" data-gshow="${esc(g.id)}">꺼내 보기</div><div class="tw-btn tw-btn-small" data-gdel="${esc(g.id)}">빼기</div><div class="tw-btn tw-btn-small" data-gedit="${esc(g.id)}">그림 고치기</div></div>
   ${g.fresh ? '<span class="tw-sub">아직 안 받았어요</span>' : ''}
 </div>`).join('');
     const add = list.length < GIFT_MAX && !pend
         ? '<div class="tw-gift tw-giftadd" data-act="giftpick"><i class="fa-solid fa-plus"></i><span>선물 주기</span><span class="tw-sub">그림 고르기</span></div>' : '';
     const pendHtml = !pend ? '' : `<div class="tw-giftpend">
+  ${pend.editId ? `<div class="tw-cap">그림 고치기</div><div class="tw-sub">이름·크기·받은 기록은 그대로예요. 한 번 지운 배경이나 잘라 낸 부분은 되살릴 수 없어서, 그럴 땐 "다른 그림으로"로 원래 그림을 다시 넣어 주세요.</div>` : ''}
   <div class="tw-row">${pend.prep ? `<img class="tw-prev tw-checker" src="${pend.prep.dataUrl}" alt="">` : '<span class="tw-sub">그림 준비 중…</span>'}<div>
     <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="giftcut"><i class="fa-solid fa-crop-simple"></i> 직접 자르기</div><span class="tw-sub">${pend.cut ? '직접 자른 부분만 써요' : ''}</span></div>
     <label class="tw-check"><input type="checkbox" data-f="giftcrop"${pend.crop ? ' checked' : ''}> 투명 여백 자르기</label>
@@ -6235,7 +6300,7 @@ function giftsHtml(p) {
     <div class="tw-bgrow"${pend.bg ? '' : ' hidden'}><span class="tw-sub">조금</span><input type="range" min="6" max="80" step="2" value="${pend.tol}" data-f="giftbgtol"><span class="tw-sub">많이</span></div>
   </div></div>
   <label class="tw-label">이름 <span class="tw-sub">(안 적어도 돼요)</span> <input data-f="giftname" maxlength="20" value="${esc(pend.name || '')}"></label>
-  <div class="tw-row"><div class="tw-btn tw-btn-main" data-act="giftok">주기</div><div class="tw-btn" data-act="giftno">취소</div></div>
+  <div class="tw-row"><div class="tw-btn tw-btn-main" data-act="giftok">${pend.editId ? '바꾸기' : '주기'}</div>${pend.editId ? '<div class="tw-btn" data-act="giftswap">다른 그림으로</div>' : ''}<div class="tw-btn" data-act="giftno">취소</div></div>
 </div>`;
     return `<div class="tw-cap">받은 선물 ${list.length} / ${GIFT_MAX}</div>
 <div class="tw-sub">선물을 주면 가끔 꺼내서 구경하고, 갖고 놀고, 자랑해요. 얼마나 자주 할지는 행동 탭 "선물"에서 골라요.</div>
@@ -6266,7 +6331,8 @@ function giftPicked(input) {
     input.value = '';
     if (!file || !p) return;
     if (file.size > 8 * 1024 * 1024) return say('그림이 너무 커요 (8MB 이하).');
-    win.giftPend = { pet: p, file, cut: null, crop: true, bg: true, tol: BG_TOL, name: '', prep: null };
+    const old = win.giftPend?.pet === p && win.giftPend.editId ? win.giftPend : null;   // 0.10.1: "다른 그림으로" while editing
+    win.giftPend = { pet: p, file, cut: null, crop: true, bg: true, tol: BG_TOL, name: old ? old.name : '', prep: null, editId: old?.editId };
     return redoGiftPreview();
 }
 
@@ -6285,11 +6351,32 @@ async function redoGiftPreview() {
     drawGifts();
 }
 
+/** 0.10.1 "그림 고치기": the same preview as giving one, starting from the picture it has now. */
+async function editGift(id) {
+    const p = curPet(), g = giftOf(p, id);
+    if (!g || busy) return;
+    if (readOnly) return say(readOnlyReason);
+    let file;
+    try {
+        const r = await fetch(imgUrl(g.src));
+        if (!r.ok) throw new Error(r.status);
+        const blob = await r.blob();
+        file = new File([blob], 'gift.png', { type: blob.type || 'image/png' });
+    } catch {
+        return say('선물 그림을 읽지 못했어요. "빼기" 뒤에 다시 줘 보세요.');
+    }
+    if (curPet() !== p || !giftOf(p, id)) return;
+    win.giftPend = { pet: p, file, cut: null, crop: true, bg: false, tol: BG_TOL, name: g.name || '', prep: null, editId: id };
+    await redoGiftPreview();
+    win.body?.querySelector('.tw-giftpend')?.scrollIntoView?.({ block: 'nearest' });
+}
+
 async function confirmGift() {
     const pend = win.giftPend, p = curPet();
     if (!pend?.prep || busy || p !== pend.pet) return;
     if (readOnly) return say(readOnlyReason);
     if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 해 주세요.');
+    if (pend.editId) return replaceGift(p, pend);
     if ((p.gifts || []).length >= GIFT_MAX) return say(`선물은 ${GIFT_MAX}개까지 줄 수 있어요.`);
     busy = true;
     try {
@@ -6308,6 +6395,30 @@ async function confirmGift() {
         say(awake ? `선물을 줬어요! 창을 닫으면 ${josa(p.name, '이', '가')} 받아요.` : `선물을 줬어요! 🛏️ 버튼으로 깨우면 ${josa(p.name, '이', '가')} 받아요.`);
     } catch (e) {
         say('선물을 올리지 못했어요: ' + (e.message || e));
+    } finally {
+        busy = false;
+    }
+}
+
+/** 0.10.1: a new picture for a present it already has — name, size and "받았어요" stay. */
+async function replaceGift(p, pend) {
+    const g = giftOf(p, pend.editId);
+    if (!g) { win.giftPend = null; return drawGifts(); }
+    busy = true;
+    try {
+        say('그림 바꾸는 중…');
+        const path = await uploadFile(`tavvy_gift_${g.id}_${Date.now().toString(36)}.png`, pend.prep.base64);
+        const old = g.src, oldName = g.name;
+        g.src = path;
+        g.name = String(pend.name || '').trim().slice(0, 20);
+        const ok = await saveNow();
+        if (!ok && readOnly) { g.src = old; g.name = oldName; deleteFile(path); return say(readOnlyReason); }
+        if (ok) { if (!fileInUse(old)) deleteFile(old); } else saveSoon();
+        win.giftPend = null;
+        drawGifts();
+        say('선물 그림을 바꿨어요.');
+    } catch (e) {
+        say('그림을 올리지 못했어요: ' + (e.message || e));
     } finally {
         busy = false;
     }
@@ -6352,7 +6463,7 @@ function showGiftNow(id) {
         if (win?.open) { if (n < 40) setTimeout(() => go(n + 1), 250); return; }   // "저장 안 한 내용" may be asking first
         if (a.gone || !a.free() || a.held || a.air || a.wallOn) return;
         if (g.fresh) return void a.startToy('recv', g);
-        const kinds = a.plat ? ['look', 'show'] : ['look', 'show', 'roll', 'toss'];
+        const kinds = a.plat ? ['look', 'show', 'give'] : ['look', 'show', 'give', 'roll', 'toss'];
         a.startToy(kinds[Math.floor(Math.random() * kinds.length)], g);
     };
     setTimeout(() => go(0), 350);

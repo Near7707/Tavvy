@@ -1118,3 +1118,54 @@
 .tavvy-win .tw-giftadd i { font-size: 18px; }
 .tavvy-win .tw-giftpend { margin-top: 10px; padding: 10px; border: 1px solid var(--tw-line); border-radius: 12px; display: flex; flex-direction: column; gap: 8px; }
 .tavvy-win .tw-giftpend .tw-bgrow[hidden] { display: none; }
+
+/* ---------- 0.10.1: the ribbon box a new present comes in ---------- */
+.tavvy-giftbox {
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 3;
+    pointer-events: none;
+    will-change: transform;
+}
+.tavvy-giftbox[hidden] { display: none; }
+.tavvy-giftbox .tgb-body,
+.tavvy-giftbox .tgb-lid {
+    position: absolute;
+    background:
+        linear-gradient(90deg, transparent 42%, #fff1a8 42%, #fff1a8 58%, transparent 58%),
+        #f3a3bf;
+    border: 1.5px solid #c96d8f;
+    box-sizing: border-box;
+}
+.tavvy-giftbox .tgb-body {
+    left: 6%;
+    right: 6%;
+    bottom: 0;
+    height: 72%;
+    border-radius: 3px;
+}
+.tavvy-giftbox .tgb-lid {
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 30%;
+    border-radius: 3px;
+    z-index: 1;
+}
+.tavvy-giftbox .tgb-lid::before,
+.tavvy-giftbox .tgb-lid::after {           /* the bow */
+    content: '';
+    position: absolute;
+    bottom: 100%;
+    width: 34%;
+    height: 70%;
+    border: 1.5px solid #d9b94a;
+    background: #fff1a8;
+    border-radius: 50% 50% 10% 50%;
+    box-sizing: border-box;
+}
+.tavvy-giftbox .tgb-lid::before { right: 50%; transform: rotate(-12deg); transform-origin: right bottom; }
+.tavvy-giftbox .tgb-lid::after { left: 50%; transform: rotate(12deg) scaleX(-1); transform-origin: left bottom; }
+.tavvy-win .tw-giftbtns { flex-wrap: wrap; }
+.tavvy-win .tw-giftbtns [data-gedit] { flex-basis: 100%; order: 3; }
