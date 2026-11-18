@@ -1197,3 +1197,6 @@
 .tavvy-win .tw-bye-wave { font-size: 40px; }
 .tavvy-win .tw-bye b { font-size: 16px; }
 .tavvy-win .tw-bye-btns { justify-content: center; margin-top: 8px; }
+
+/* 0.10.4: cancel the upload box */
+.tavvy-win .tw-uploadno { justify-content: flex-end; }

@@ -4442,6 +4442,7 @@ function uploadHtml() {
     ${bgHtml('')}
   </div></div>
   <div class="tw-sub">그림 한 장이면 돼요. 배경이 하얀색처럼 한 가지 색이면 알아서 지워요(미리보기에서 확인). 한 번 올리면 "내가 올린 외형"에 남아서 다음에 고르기만 하면 돼요.</div>
+  <div class="tw-row tw-uploadno"><div class="tw-btn tw-btn-small" data-act="uploadno">취소</div></div>
 </div>`;
 }
 
@@ -5567,6 +5568,27 @@ async function onFilePicked(input) {
     return redoUploadPreview();
 }
 
+/** 0.10.4: close the "새로 올리기" box — forget the picked picture, go back to the look picked before. */
+function cancelUpload() {
+    const f = win.form;
+    if (!f) return;
+    f.file = null; f.prep = null; f.cut = null;
+    const box = win.body;
+    const input = box.querySelector('[data-f="file"]');
+    if (input) input.value = '';
+    box.querySelector('.tw-filename').textContent = '아직 안 골랐어요';
+    box.querySelector('.tw-prevrow').hidden = true;
+    const note = box.querySelector('.tw-cutnote');
+    if (note) note.textContent = '';
+    if (f.kind === 'edit') {
+        f.look = f.base.look;
+        box.querySelector('[data-f="facing"]').value = f.base.facing;
+        box.querySelector('[data-f="squish"]').value = f.base.squish;
+        showSquish();
+    } else f.look = null;
+    drawLookGrid();
+}
+
 /** Make the upload preview again with the current switches (and the hand cut, if any). */
 async function redoUploadPreview() {
     const f = win.form;
@@ -5734,15 +5756,17 @@ async function deleteLook(id) {
     }
     if (!(await confirmBox(`"${l.name}" 외형을 지울까요? 그림 파일도 함께 지워져요.`))) return;
     root.looks = root.looks.filter(x => x !== l);
-    const ok = await saveNow();
-    if (ok) for (const f of lookFiles(l)) { if (!fileInUse(f)) deleteFile(f); }
-    else saveSoon();
+    // 0.10.4: the screen changes right away; saving to SillyTavern (can take seconds on a phone) carries on behind it
     if (win?.form && win.form.look === 'lib:' + l.id) {   // it was picked in an open form
         win.form.look = win.form.kind === 'edit' ? win.form.base.look : null;
     }
     if (win?.form) drawLookGrid();
     refreshWin();
     say('외형을 지웠어요.');
+    saveNow().then((ok) => {   // picture files go only once the record is safely saved
+        if (ok) { for (const f of lookFiles(l)) { if (!fileInUse(f)) deleteFile(f); } }
+        else saveSoon();
+    });
 }
 
 /** 0.10.3: give a saved look another name (pets wearing it keep their own names). */
@@ -6220,6 +6244,7 @@ function onWinClick(e) {
     if (act === 'back') return leave(() => show('home'));
     if (act === 'settings') return show('settings');
     if (act === 'gohome') return show('home');
+    if (act === 'uploadno') return cancelUpload();
     if (act === 'new') return show('new');
     if (act === 'save') return saveEdit();
     if (act === 'create') return createPet();
