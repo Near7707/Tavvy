@@ -1062,3 +1062,59 @@
 
 /* 0.8.3: 키 맞추기 for one action's pictures */
 .tavvy-win .tw-pendfit:not(:empty), .tavvy-win .tw-refit { margin: 6px 0 8px; }
+
+/* ---------- 0.10.0: 선물 (presents you give a pet) ---------- */
+.tavvy-prop {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: auto;
+    z-index: 3;            /* in front of the pet */
+    pointer-events: none;
+    transform-origin: 50% 50%;
+    will-change: transform;
+}
+.tavvy-prop[hidden] { display: none; }
+.tavvy-bed-gift {
+    position: absolute;
+    left: -6px;
+    top: -6px;
+    font-size: 14px;
+    line-height: 1;
+    pointer-events: none;
+    animation: tavvy-giftbob 1.6s ease-in-out infinite;
+}
+.tavvy-bed-gift[hidden] { display: none; }
+@keyframes tavvy-giftbob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+
+/* six tabs on a phone */
+.tavvy-win .tw-tabs { gap: 2px; }
+.tavvy-win .tw-tab { padding: 7px 0; font-size: 12px; letter-spacing: -0.02em; }
+
+.tavvy-win .tw-gifts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.tavvy-win .tw-gift {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--tw-line);
+    border-radius: 12px;
+    min-width: 0;
+}
+.tavvy-win .tw-giftpic { width: 100%; height: 72px; object-fit: contain; border-radius: 8px; box-sizing: border-box; padding: 4px; }
+.tavvy-win .tw-giftname { width: 100%; box-sizing: border-box; margin: 0; font-size: 13px; }
+.tavvy-win .tw-giftsize { display: flex; }
+.tavvy-win .tw-giftsize .tw-fbtn { flex: 1; text-align: center; padding-left: 0; padding-right: 0; }
+.tavvy-win .tw-giftbtns { display: flex; gap: 4px; }
+.tavvy-win .tw-giftbtns .tw-btn { flex: 1; justify-content: center; text-align: center; padding-left: 2px; padding-right: 2px; }
+.tavvy-win .tw-giftadd {
+    align-items: center;
+    justify-content: center;
+    border-style: dashed;
+    color: var(--tw-sub);
+    cursor: pointer;
+    min-height: 150px;
+}
+.tavvy-win .tw-giftadd i { font-size: 18px; }
+.tavvy-win .tw-giftpend { margin-top: 10px; padding: 10px; border: 1px solid var(--tw-line); border-radius: 12px; display: flex; flex-direction: column; gap: 8px; }
+.tavvy-win .tw-giftpend .tw-bgrow[hidden] { display: none; }

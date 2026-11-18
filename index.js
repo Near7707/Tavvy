@@ -142,6 +142,20 @@ const ME_SCALE = 0.3;           // "react to you" chance × this when it decides
 const ME_REST = 15;             // s — not twice in a row within this
 // 0.9.0: everyday behaviours of their own (no new pictures needed). Chance each time it decides what's next (× 빈도).
 const NEW_ACTS = { hum: 0.07, scan: 0.08, sit: 0.07, peek: 0.04, roll: 0.04 };
+// 0.10.0 선물 주기: pictures you give a pet — now and then it takes one out
+const PRESENT_ACTS = [
+    { key: 'pr_look', name: '구경하기' },
+    { key: 'pr_roll', name: '굴리며 놀기' },
+    { key: 'pr_toss', name: '던졌다 받기' },
+    { key: 'pr_show', name: '자랑하기' },
+    { key: 'pr_hug',  name: '끼고 자기' },
+];
+const PRESENT_P = { pr_look: 0.04, pr_roll: 0.025, pr_toss: 0.025, pr_show: 0.025, pr_hug: 0.35 };   // × 빈도 (처음엔 드물게)
+const GIFT_MAX = 6;
+const GIFT_SIZES = [['s', '작게', 0.32], ['m', '보통', 0.45], ['l', '크게', 0.6]];   // × the pet's height
+const TOY_G = 1600;                         // a present's gravity (px/s²)
+const isPres = (key) => PRESENT_ACTS.some(a => a.key === key);
+const giftK = (g) => (GIFT_SIZES.find(x => x[0] === g?.size) || GIFT_SIZES[1])[2];
 const READ_ON = 0.25, READ_CLIMB = 0.04;    // 글 읽는 척: on a message / hop up onto one to read it
 const RUN_WALK = 0.12;                      // a walk that's a sudden run
 const RUN_X = 3;                            // run = 3× the walking speed
@@ -182,7 +196,7 @@ const UNLOCKS = [
     { key: 'resist',    lv: 3, name: '배웅 투정' },
     { key: 'dozeWait',  lv: 3, name: '기다리다 졸기' },
     { key: 'soft',      lv: 4, name: '마음이 풀린 반응', not: 'aegyo' },
-    { key: 'gift',      lv: 4, name: '선물 주기', only: 'aegyo' },
+    { key: 'gift',      lv: 4, name: '행운 빌기', only: 'aegyo' },
 ];
 const PEEKIN_CHANCE = 0.6;      // starting to write → peeks at the input box
 const PEEKIN_AGAIN = 0.3;       // still writing → now and then again
@@ -201,7 +215,7 @@ const TEAR_COLOR = '#6fc3ff', TEAR_ANGLE = 30;   // degrees (0 = sideways)
 const GIFT_CHANCE = 0.15;       // 애교 only, when reacting to you
 const BIG_REST = 180;           // s — after a present, not again for this long
 const bigAt = new Map();        // pet id → when it last grew big (kept across sleep / wake)
-const GIFTS = ['🌼', '🍀', '🍬', '⭐', '🎁'];
+const GIFTS = ['🍀'];          // 0.10.0: 행운 빌기 — a clover, wishing you luck (was 선물 주기, random items)
 
 // pictures per action (6-2). key = role name in look.roles; fb = the picture used when this one is empty.
 // Every role here is actually used by some behaviour.
@@ -243,7 +257,7 @@ const ROLE_GROUPS = [
     ] },
     { key: 'special', name: '특별 순간', roles: [
         { key: 'appear', name: '등장', fb: 'jump' },
-        { key: 'gift', name: '선물 주기', fb: 'happy' },
+        { key: 'gift', name: '행운 빌기', fb: 'happy' },
         { key: 'cheer', name: '축하', fb: 'dance' },
     ] },
 ];
@@ -369,6 +383,7 @@ function newPetRecord({ id, name, personality, look }) {
         metOn: true,                                  // celebrate the day we met every year
         celebrated: {},                               // date id ('met' for the day we met) → the day it was last celebrated
         sounds: {},                                   // per-moment sound files (empty = default)
+        gifts: [],                                    // 0.10.0 선물: [{ id, src, name, size 's'|'m'|'l', at, fresh? }]
         home: null,                                   // { chatId, integrity } or null = homeless
         bowl: { me: 0, them: 0, tokens: 0 },          // food waiting
         eaten: { me: 0, them: 0, tokens: 0 },         // lifetime eaten
@@ -834,6 +849,7 @@ function petFiles(pet) {
         for (const p of list || []) if (p && !p.startsWith('builtin:')) out.push(p);
     }
     for (const p of Object.values(pet.sounds || {})) if (typeof p === 'string') out.push(p);
+    for (const g of pet.gifts || []) if (typeof g?.src === 'string') out.push(g.src);   // 0.10.0 선물
     return out;
 }
 
@@ -981,6 +997,7 @@ const persOf = (who, m) => PERSONALITIES[kindOf(who, m)];
 function fr(who, key) {
     const rec = who?.rec || who;
     if (isOff(rec, key)) return 0;
+    if (isPres(key)) return FREQ_X[rec?.freq?.[key]] ?? FREQ_X.rare;   // 0.10.0 선물: 처음엔 드물게
     if (isAtt(key)) return FREQ_X[rec?.freq?.[key]] ?? 0;      // attitudes: nothing until you pick one
     return FREQ_X[rec?.freq?.[key]] ?? 1;
 }
@@ -1501,6 +1518,67 @@ class Actor {
         return true;
     }
 
+    /* ---------- 0.10.0 선물: a present you gave it ---------- */
+
+    giftList() { return (this.rec.gifts || []).filter(g => g && typeof g.src === 'string' && !g.fresh); }
+
+    /** Take a present out: look (구경) / show (자랑) / roll (굴리기) / toss (던졌다 받기) / recv (just given — it drops in). */
+    startToy(kind, g) {
+        if (!g) { const l = this.giftList(); g = l[Math.floor(Math.random() * l.length)]; }
+        if (!g) return false;
+        if ((kind === 'roll' || kind === 'toss') && this.plat) kind = 'look';
+        const hp = this.h * giftK(g), lo = stage.left + hp / 2, hi = stage.right - hp / 2;
+        let s = this.side ? this.dir : (Math.random() < 0.5 ? -1 : 1);
+        if ((s > 0 ? hi - this.x : this.x - lo) < this.w * 0.5 + hp + (kind === 'roll' ? 80 : 0)) s = -s;   // the side with room
+        this.setState('toy');
+        this.toy = { k: kind, g, s, px: clamp(this.x + s * (this.w * 0.42 + hp * 0.32), lo, hi), lift: 0, vx: 0, vy: 0, rot: 0, sc: 0, st: 1,
+            ph: 0, n: 0, max: kind === 'roll' ? (Math.random() < 0.5 ? 2 : 3) : 2, f: 0, wait: 0, dur: rand(3, 5) };
+        if (kind === 'recv') {
+            const T = this.toy;
+            T.sc = 1;
+            T.lift = Math.max(this.h * 2, this.foot() - stage.chatTop);   // drops in from the top of the chat
+            T.kind = kindOf(this, 'me');
+        }
+        return true;
+    }
+
+    /** Got it (landed in front of it): no longer waiting to be given. */
+    gotGift(g) {
+        delete g.fresh;
+        addMoment(this.rec, 'firstGift');
+        saveSoon();
+        refreshBed();
+        renderPanel();
+    }
+
+    /** One frame of walking toward tx outside the walk state. True once it's there. */
+    stepToward(tx, dt) {
+        const dx = tx - this.x, sp = this.p.speed * paceOf(this.rec);
+        if (Math.abs(dx) <= sp * dt + 1) return true;
+        this.dir = Math.sign(dx);
+        this.x += Math.sign(dx) * sp * dt;
+        this.stepWalk(sp * dt);
+        return false;
+    }
+
+    /** The present beside it (playing with it, or tucked up next to it while dozing). */
+    drawProp() {
+        const T = this.state === 'toy' ? this.toy : this.state === 'doze' ? this.hug : null;
+        if (T && T === this.hug) T.sc = Math.min(1, T.sc + 0.06);
+        const on = T && !this.held && !this.air && !this.gone && !document.hidden && T.sc > 0.02;
+        if (!on) { if (this.propEl) this.propEl.hidden = true; return; }
+        let el = this.propEl;
+        if (!el) { el = this.propEl = document.createElement('img'); el.className = 'tavvy-prop'; el.alt = ''; el.draggable = false; ensureLayer().appendChild(el); }
+        const src = imgUrl(T.g.src);
+        if (el.dataset.src !== src) { el.src = src; el.dataset.src = src; }
+        const hp = this.h * giftK(T.g);
+        el.style.height = hp.toFixed(1) + 'px';
+        el.style.maxWidth = (hp * 1.6).toFixed(1) + 'px';
+        el.hidden = false;
+        const x = T.px - stage.ox, y = this.foot() - T.lift - stage.oy;
+        el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -100%) rotate(${(T.rot || 0).toFixed(1)}deg) scale(${T.sc.toFixed(3)})`;
+    }
+
     /** Moved dx px without the walk state: count steps so the 걷기 pictures take turns (0.9.3). */
     stepWalk(dx) {
         const before = Math.floor(this.walkPh || 0);
@@ -1812,6 +1890,15 @@ class Actor {
         this.aside = false; this.cheering = false;
         if (s !== 'walk') { this.gait = null; this.go = null; }      // 0.9.0: how / why it's walking
         if (s !== 'read') this.rd = null;
+        if (s !== 'toy') this.toy = null;                            // 0.10.0 선물
+        this.hug = null;
+        if (s === 'doze' && !this.plat && Math.random() < chance(this, 'pr_hug', PRESENT_P.pr_hug)) {   // 끼고 자기
+            const l = this.giftList(), g = l[Math.floor(Math.random() * l.length)];
+            if (g) {
+                const hp = this.h * giftK(g), sd = this.side ? this.dir : (Math.random() < 0.5 ? -1 : 1);
+                this.hug = { g, px: clamp(this.x + sd * (this.w * 0.42 + hp * 0.32), stage.left + hp / 2, stage.right - hp / 2), lift: 0, rot: 0, sc: 0 };
+            }
+        }
         this.sqT = 1;
         if (s === 'idle') { this.until = rand(...this.p.idle); this.tiltT = 0; }
         if (s === 'doze') { this.until = rand(...this.p.dozeLen) * (this.isFull() ? FULL_DOZE_LEN : 1); this.fxT = 0.6; }
@@ -1890,6 +1977,8 @@ class Actor {
         if (this.levelPending()) return this.startCheer();          // e.g. a pat tipped it over
         if (this.afterMeal) { const el = this.afterMeal; this.afterMeal = null; if (el.isConnected && !this.waiting) { this.watchReply(el); if (this.state !== 'idle') return; } }
         if (gen.active && this.waiting) return this.setState('wait');
+        const fresh = (this.rec.gifts || []).find(g => g?.fresh && typeof g.src === 'string');
+        if (fresh && !win?.open && !this.wallOn) return void this.startToy('recv', fresh);   // 0.10.0: a present for it
         const full = this.isFull();
         const r = Math.random();
         const dz = chance(this, 'doze', this.p.doze + (full ? FULL_DOZE : 0));
@@ -1904,6 +1993,12 @@ class Actor {
         if (Math.random() < chance(this, 'scan', NEW_ACTS.scan)) { this.fk = 'scan'; return this.setState('fidget'); }    // 두리번
         if (this.rec.look.roles?.sit?.length && Math.random() < chance(this, 'sit', NEW_ACTS.sit)) { this.fk = 'sit'; return this.setState('fidget'); }
         if (!this.plat && !gen.active && Math.random() < chance(this, 'peek', NEW_ACTS.peek) && this.startPeek()) return;  // 빼꼼
+        if (!gen.active && this.giftList().length) {                  // 0.10.0 선물: takes one out now and then
+            for (const [k, key] of [['look', 'pr_look'], ['show', 'pr_show'], ['roll', 'pr_roll'], ['toss', 'pr_toss']]) {
+                if ((k === 'roll' || k === 'toss') && this.plat) continue;
+                if (Math.random() < chance(this, key, PRESENT_P[key])) return void this.startToy(k);
+            }
+        }
         if (this.plat && Math.random() < chance(this, 'read', READ_ON) && this.startRead()) return;                        // 글 읽는 척
         if (!this.plat && ledgesOn() && Math.random() < chance(this, 'read', READ_CLIMB)) {
             const t = this.pickClimb();
@@ -2136,6 +2231,7 @@ class Actor {
         if (this.gone) return;
         this.gone = true;
         this.el.remove();
+        this.propEl?.remove();
         if (this.sayEl) { const el = this.sayEl; this.sayEl = null; clearTimeout(this.sayTimer); setTimeout(() => el.remove(), 1400); }   // "잘 자…" stays a moment
         for (const sp of sparkles.filter(x => x.a === this)) sp.remove(false);   // eaten already (record) — just the show stops
         const i = actors.indexOf(this);
@@ -2361,6 +2457,140 @@ class Actor {
                     else if (!rd.end) { rd.end = this.t + 1.1; if (Math.random() < 0.7) fx(this, Math.random() < 0.5 ? '!' : '♪', 'tavvy-fx-small'); }
                     if (!rd.f && this.t > 1.3) { rd.f = 1; fx(this, Math.random() < 0.6 ? '?' : '…', 'tavvy-fx-small'); }
                     if ((rd.end && this.t > rd.end) || this.t > 14) { this.tiltT = 0; this.setState('idle'); }
+                    break;
+                }
+                case 'toy': {                          // 0.10.0 선물: out of its pocket for a while
+                    const T = this.toy;
+                    if (!T) { this.setState('idle'); break; }
+                    if (this.food > 0 || this.mealPending) { this.toy = null; this.decide(); break; }
+                    breath = 1;
+                    const H = this.h, hold = H * 0.92, u = Math.min(1, dt * 8);
+                    const hp = H * giftK(T.g), lo = stage.left + hp / 2, hi = stage.right - hp / 2;
+                    const walking = () => { pose = this.role('walk'); bob = Math.pow(Math.sin((this.walkPh % 1) * Math.PI), 0.7) * 4 * this.k; this.tiltT = 0; };
+                    if (T.out) {                                             // back into its pocket
+                        const v = Math.min(1, dt * 10);
+                        T.px += (this.x - T.px) * v; T.lift += (H * 0.4 - T.lift) * v;
+                        T.sc = Math.max(0, T.sc - dt * (T.fast ? 7 : 3.5));
+                        T.rot *= 0.8;
+                        pose = this.role('happy', 'idle');
+                        if (T.sc <= 0.02) { this.toy = null; this.tiltT = 0; this.setState('idle'); }
+                        break;
+                    }
+                    if (T.k !== 'recv') T.sc += (T.st - T.sc) * u;          // pops out
+                    if (T.k === 'look') {                                    // 구경하기
+                        if (this.side) this.dir = T.s;
+                        pose = this.role('look', 'idle');
+                        this.tiltT = T.s * 6;
+                        if (!T.f && this.t > 0.9) { T.f = 1; fx(this, Math.random() < 0.5 ? '?' : '♪', 'tavvy-fx-small'); }
+                        if (T.f === 1 && this.t > 2.4) { T.f = 2; if (Math.random() < 0.5) fx(this, '♪', 'tavvy-fx-small'); }
+                        if (this.t > T.dur) T.out = true;
+                    } else if (T.k === 'show') {                             // 자랑하기: up over its head, toward you
+                        if (this.side) this.dir = (stage.left + stage.right) / 2 >= this.x ? 1 : -1;
+                        T.px += (this.x - T.px) * u;
+                        T.lift += (H * 1.02 - T.lift) * Math.min(1, dt * 6);
+                        T.st = this.t > 0.5 && this.t < 1.9 ? 1.25 : 1;
+                        pose = this.role('happy', 'idle');
+                        this.tiltT = 0;
+                        if (this.t < 0.5) bob = Math.sin(this.t / 0.5 * Math.PI) * 5 * this.k;
+                        if (!T.f && this.t > 0.6) { T.f = 1; fx(this, '♥'); }
+                        if (T.f === 1 && this.t > 1.3) { T.f = 2; fx(this, '✦'); }
+                        if (this.t > 2.7) T.out = true;
+                    } else if (T.k === 'roll') {                             // 굴리며 놀기: a push, it rolls, after it
+                        T.px += T.vx * dt;
+                        if (T.px < lo || T.px > hi) { T.px = clamp(T.px, lo, hi); T.vx = -T.vx * 0.5; }
+                        T.rot += (T.vx * dt) / Math.max(8, hp / 2) * 57.3;
+                        T.vx *= Math.pow(0.3, dt);
+                        if (T.moving && Math.abs(T.vx) < 12) {               // stopped: next push goes where there's room
+                            T.moving = false; T.vx = 0;
+                            if ((T.s > 0 ? hi - T.px : T.px - lo) < 100) T.s = -T.s;
+                        }
+                        const tx = clamp(T.px - T.s * (this.w * 0.42 + hp * 0.32), ...this.range());
+                        if (!this.stepToward(tx, dt)) walking();
+                        else {
+                            if (this.side) this.dir = T.s;
+                            pose = this.role('look', 'idle');
+                            this.tiltT = T.s * 4;
+                            if (!T.moving) {
+                                T.wait += dt;
+                                if (T.n >= T.max) { if (!T.f) { T.f = 1; fx(this, '♪', 'tavvy-fx-small'); } if (T.wait > 0.9) T.out = true; }
+                                else if (T.wait > (T.n ? 0.35 : 0.5)) { T.n++; T.wait = 0; T.moving = true; T.vx = T.s * rand(150, 230); this.sq = 0.88; }
+                            }
+                        }
+                        if (this.t > 14) T.out = true;
+                    } else if (T.k === 'toss') {                             // 던졌다 받기
+                        if (T.ph === 0) {                                    // holding it up over its head
+                            T.px += (this.x - T.px) * u;
+                            T.lift += (hold - T.lift) * u;
+                            T.rot *= 0.8;
+                            pose = this.role('happy', 'idle');
+                            this.tiltT = 0;
+                            T.wait += dt;
+                            if (T.wait > (T.n ? 0.35 : 0.6)) {
+                                if (T.n >= T.max) { T.out = true; fx(this, '♪', 'tavvy-fx-small'); }
+                                else { T.ph = 1; T.wait = 0; T.vy = Math.sqrt(2 * TOY_G * H * rand(1.2, 2)); this.sq = 0.88; }
+                            }
+                        } else if (T.ph === 1) {                             // up… and down
+                            T.lift += T.vy * dt; T.vy -= TOY_G * dt;
+                            T.rot += 260 * dt * T.s;
+                            pose = this.role('look', 'idle');
+                            if (T.vy < 0 && T.lift <= hold) {
+                                if (!T.missed && Math.random() < 0.2) { T.missed = true; T.ph = 2; T.vx = T.s * rand(50, 90); fx(this, '!', 'tavvy-fx-small'); }
+                                else { T.lift = hold; T.vy = 0; T.n++; T.ph = 0; T.wait = 0; T.hop = 0.3; this.sq = 0.9; }
+                            }
+                        } else if (T.ph === 2) {                             // missed — it drops
+                            T.px = clamp(T.px + T.vx * dt, lo, hi); T.lift += T.vy * dt; T.vy -= TOY_G * dt;
+                            T.rot += T.vx * dt * 2;
+                            pose = this.role('surprise', 'look', 'idle');
+                            if (T.lift <= 0) {
+                                T.lift = 0;
+                                if (T.vy < -150) T.vy = -T.vy * 0.35; else { T.vy = 0; T.vx = 0; T.ph = 3; fx(this, '💦', 'tavvy-fx-small'); }
+                            }
+                        } else {                                             // walks over and picks it up
+                            const tx = clamp(T.px - T.s * (this.w * 0.35), ...this.range());
+                            if (!this.stepToward(tx, dt)) walking();
+                            else { T.ph = 0; T.wait = 0; T.n = T.max; }
+                        }
+                        if (T.hop > 0) { T.hop -= dt; bob = Math.max(0, Math.sin((1 - T.hop / 0.3) * Math.PI)) * 6 * this.k; }
+                        if (this.t > 15) T.out = true;
+                    } else {                                                 // recv: you just gave it — it drops in
+                        if (T.ph === 0) {
+                            T.vy -= TOY_G * dt; T.lift += T.vy * dt; T.rot += 200 * dt * T.s;
+                            pose = this.role('look', 'idle');
+                            if (this.side) this.dir = T.s;
+                            if (T.lift <= 0) {
+                                T.lift = 0;
+                                if (T.vy < -260) T.vy = -T.vy * 0.3;
+                                else { T.vy = 0; T.rot = 0; T.ph = 1; T.lt = 0; fx(this, '!'); this.sq = 0.88; this.gotGift(T.g); }
+                            }
+                        } else {
+                            const k = T.kind, lt = (T.lt += dt);
+                            if (this.side) this.dir = T.s;
+                            pose = this.role('happy', 'idle');
+                            this.tiltT = 0;
+                            if (k === 'aegyo') {                             // 통통 + ♥
+                                if (lt < 0.9) bob = Math.abs(Math.sin(lt / 0.45 * Math.PI)) * 6 * this.k;
+                                if (!T.f && lt > 0.3) { T.f = 1; fx(this, '♥'); }
+                                if (T.f === 1 && lt > 1.0) { T.f = 2; fx(this, '♥'); }
+                                if (lt > 2.4) T.out = true;
+                            } else if (k === 'saechim') {                    // 고개 홱 → 몰래 힐끔 → 작은 ♥
+                                if (lt < 1.1) { if (this.side) this.dir = -T.s; pose = this.role('flick', 'aside', 'idle'); this.tiltT = -T.s * 8; }
+                                else { pose = this.role('look', 'idle'); this.tiltT = T.s * 5; if (!T.f) { T.f = 1; fx(this, '♥', 'tavvy-fx-small'); } }
+                                if (lt > 2.6) T.out = true;
+                            } else if (k === 'neugut') {                     // ♪
+                                if (!T.f && lt > 0.5) { T.f = 1; fx(this, '♪'); }
+                                if (lt > 2.4) T.out = true;
+                            } else if (k === 'simsul') {                     // "흥" and it's whisked away
+                                pose = this.role('angry', 'idle');
+                                if (!T.f && lt > 0.25) { T.f = 1; fx(this, '흥', 'tavvy-fx-small'); }
+                                if (lt > 0.9) { T.out = true; T.fast = true; }
+                            } else {                                         // 무심: "…" then a small ♥
+                                pose = this.role('look', 'idle');
+                                if (!T.f && lt > 0.3) { T.f = 1; fx(this, '…', 'tavvy-fx-small'); }
+                                if (T.f === 1 && lt > 1.5) { T.f = 2; fx(this, '♥', 'tavvy-fx-small'); }
+                                if (lt > 2.6) T.out = true;
+                            }
+                        }
+                    }
                     break;
                 }
                 case 'hide': {                         // 빼꼼 숨기: half out of sight at the side, then a peek back at you
@@ -2837,6 +3067,7 @@ class Actor {
         const flip = (f === 'left' || f === 'right') && (f === 'right' ? this.dir < 0 : this.dir > 0);
         this.img.classList.toggle('tavvy-flip', flip);
         if (this.sayEl) this.placeSay();
+        this.drawProp();
     }
 
     /** A 키 맞추기 picture: its own size at the 기본 picture's scale, standing on the box's bottom middle. */
@@ -2997,7 +3228,7 @@ function bumpCheck() {
  * Food (stage 4) — counting, the bowl, sparkles, backups
  * ===================================================================== */
 
-const EATABLE = ['idle', 'walk', 'eat', 'look', 'wait', 'watch', 'perch', 'edge', 'me', 'peekin', 'follow', 'fidget', 'read', 'stare', 'where', 'skid'];
+const EATABLE = ['idle', 'walk', 'eat', 'look', 'wait', 'watch', 'perch', 'edge', 'me', 'peekin', 'follow', 'fidget', 'read', 'stare', 'where', 'skid', 'toy'];
 
 /** "2026-11-12" — the day starts at 6 a.m. */
 function dayKey(t = Date.now()) {
@@ -3307,7 +3538,7 @@ function ensureBed() {
     bed = document.createElement('div');
     bed.id = 'tavvy-bed';
     bed.title = 'Tavvy — 톡: 깨우기/재우기 · 끌기: 옮기기';
-    bed.innerHTML = '<span class="tavvy-bed-icon">🛏️</span><span class="tavvy-bed-z">z</span><span class="tavvy-bed-badge" hidden></span>';
+    bed.innerHTML = '<span class="tavvy-bed-icon">🛏️</span><span class="tavvy-bed-z">z</span><span class="tavvy-bed-badge" hidden></span><span class="tavvy-bed-gift" hidden>🎁</span>';
     ensureLayer().appendChild(bed);
 
     let down = null;
@@ -3679,6 +3910,8 @@ function refreshBed() {
     const show = !actors.length && n > 0 && root?.settings.badge !== false;
     badge.hidden = !show;
     if (show) badge.textContent = n > 999 ? '999+' : String(n);
+    const gm = bed.querySelector('.tavvy-bed-gift');                 // 0.10.0: a present waiting for it
+    if (gm) gm.hidden = actors.length > 0 || !here.some(p => (p.gifts || []).some(g => g?.fresh));
     placeBed();
 }
 
@@ -4138,7 +4371,7 @@ function addDays(key, n) {
     return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
 }
 
-const MOMENT_NAMES = { firstFeast: '첫 잔칫상', firstFull: '첫 배부름', moved: '이사한 날' };
+const MOMENT_NAMES = { firstFeast: '첫 잔칫상', firstFull: '첫 배부름', moved: '이사한 날', firstGift: '첫 선물 받은 날' };
 
 function togetherDays(p) {
     return daysBetween(dayKey(p.createdAt || Date.now()), dayKey()) + 1;
@@ -4210,7 +4443,7 @@ function journalHtml(p) {
 /** One behaviour in the 행동 tab: 끔 / 드물게 / 보통 / 자주 (or just 끔 / 켬). */
 function freqRow(p, u) {
     const off = MOVES[u.key] ? !movesOf(p).includes(u.key) : isAtt(u.key) ? !FREQ_X[p.freq?.[u.key]] : isOff(p, u.key);
-    const cur = off ? 'off' : (FREQ_X[p.freq?.[u.key]] ? p.freq[u.key] : 'norm');
+    const cur = off ? 'off' : (FREQ_X[p.freq?.[u.key]] ? p.freq[u.key] : isPres(u.key) ? 'rare' : 'norm');
     if (u.needs && !p.look?.roles?.[u.needs]?.length) {         // 앉기 without a 앉기 picture
         return `<div class="tw-frow tw-frow-off"><span class="tw-fname">${esc(u.name)}</span><span class="tw-sub">${esc(ROLE_DEFS[u.needs]?.name || u.name)} 그림을 넣으면 해요</span></div>`;
     }
@@ -4232,8 +4465,10 @@ function setFreq(key, v) {
     } else if (isAtt(key)) {                             // attitudes: stored only when on (보통 too)
         off.delete(key);
         if (FREQ_X[v]) freq[key] = v; else delete freq[key];
+    } else if (isPres(key)) {                            // 선물: 드물게 is the default, so 보통 is stored too
+        if (v === 'off') off.add(key); else { off.delete(key); if (FREQ_X[v]) freq[key] = v; }
     } else if (v === 'off') off.add(key); else off.delete(key);
-    if (!isAtt(key)) { if (v === 'rare' || v === 'often') freq[key] = v; else if (v !== 'off') delete freq[key]; }
+    if (!isAtt(key) && !isPres(key)) { if (v === 'rare' || v === 'often') freq[key] = v; else if (v !== 'off') delete freq[key]; }
     p.off = [...off];
     p.freq = freq;
     saveSoon();
@@ -4307,7 +4542,8 @@ function actsHtml(p) {
     const reacts = `<div class="tw-cap">반응 모습</div><div class="tw-sub">순간마다 어느 성격처럼 반응할지 골라요. 섞어 써도 돼요.</div><div class="tw-freqs">${REACT_MOMENTS.map(m =>
         `<div class="tw-frow"><span class="tw-fname">${esc(m.name)}</span><select class="tw-rsel" data-react="${m.key}"><option value="">기본 (${esc(baseName)})</option>${Object.entries(PERSONALITIES).map(([k, v]) =>
             `<option value="${k}"${react[m.key] === k ? ' selected' : ''}>${esc(v.name)}</option>`).join('')}</select></div>`).join('')}</div>`;
-    return `${head}${basic}${atts}${groups}<div class="tw-sub" style="margin:6px 0 4px">친해질수록 새 행동이 하나씩 열려요.</div>${reacts}`;
+    const pres = `<div class="tw-cap">선물</div><div class="tw-sub">선물 탭에서 선물을 줬을 때만 해요. 처음엔 드물게예요.</div><div class="tw-freqs">${PRESENT_ACTS.map(u => freqRow(p, u)).join('')}</div>`;
+    return `${head}${basic}${atts}${pres}${groups}<div class="tw-sub" style="margin:6px 0 4px">친해질수록 새 행동이 하나씩 열려요.</div>${reacts}`;
 }
 
 /* ---------- window ---------- */
@@ -4546,6 +4782,7 @@ function show(view, opts = {}) {
     win.talkBase = null;
     win.roleEdit = null;
     win.sheet = null;
+    win.giftPend = null;
     stopPreview();
     closeCutter();
     const back = view !== 'home';
@@ -4634,11 +4871,13 @@ function petHtml(p) {
   <div class="tw-tab" data-tab="edit">꾸미기</div>
   <div class="tw-tab" data-tab="roles">그림</div>
   <div class="tw-tab" data-tab="talk">대사</div>
+  <div class="tw-tab" data-tab="gifts">선물</div>
 </div>
 <div class="tw-pane" data-pane="journal" data-live="journal"></div>
 <div class="tw-pane" data-pane="acts" data-live="acts"></div>
 <div class="tw-pane" data-pane="roles"></div>
 <div class="tw-pane" data-pane="talk">${talkHtml(p)}</div>
+<div class="tw-pane" data-pane="gifts"></div>
 <div class="tw-pane tw-form" data-pane="edit">
   <label class="tw-label">이름 <input data-f="name" maxlength="20"></label>
   <label class="tw-label">기본 성격 <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
@@ -4682,6 +4921,7 @@ function showTab(tab) {
     win.body.querySelectorAll('.tw-tab').forEach(t => t.classList.toggle('tw-on', t.dataset.tab === tab));
     win.body.querySelectorAll('.tw-pane').forEach(pn => { pn.hidden = pn.dataset.pane !== tab; });
     if (tab === 'roles') drawRoles(); else stopPreview();
+    if (tab === 'gifts') drawGifts();
     refreshWin();
 }
 
@@ -5527,6 +5767,12 @@ async function exportPetFile(id) {
         delete pet.bowl;                      // food waiting belongs to that room
         delete pet.sounds;
         pet.look = { ...lookShape(p.look || {}), roles };
+        pet.gifts = [];                       // 0.10.0 선물: pictures packed in too
+        for (const g of p.gifts || []) {
+            if (typeof g?.src !== 'string') continue;
+            files.push(await fileToDataUrl(g.src));
+            pet.gifts.push({ name: g.name || '', size: g.size || 'm', at: g.at || 0, file: files.length - 1 });
+        }
         const data = { [PET_FILE]: 1, formatVersion: FORMAT_VERSION, pet, files };
         download(`tavvy_${safeName(p.name)}.json`, new Blob([JSON.stringify(data)], { type: 'application/json' }));
         say('펫 파일을 내려받았어요.');
@@ -5699,11 +5945,11 @@ function cleanPet(src, look) {
     splitScreen(src);                                   // a pet file from before 0.8.2
     splitFidget(src);                                   // …and before 0.9.0
     rec.moves = movesOf(src);
-    const actKey = (k) => BASIC_ACTS.some(b => b.key === k) || UNLOCKS.some(u => u.key === k);
+    const actKey = (k) => BASIC_ACTS.some(b => b.key === k) || UNLOCKS.some(u => u.key === k) || isPres(k);
     if (Array.isArray(src.off)) rec.off = src.off.filter(actKey);
     if (isObj(src.freq)) for (const [k, v] of Object.entries(src.freq)) {
         if (actKey(k) && (v === 'rare' || v === 'often')) rec.freq[k] = v;
-        else if (isAtt(k) && FREQ_X[v]) rec.freq[k] = v;          // 0.9.0 attitudes (보통 is stored too)
+        else if ((isAtt(k) || isPres(k)) && FREQ_X[v]) rec.freq[k] = v;   // 0.9.0 attitudes / 0.10.0 선물 (보통 is stored too)
     }
     if (PACES.some(x => x[0] === src.pace)) rec.pace = src.pace;
     if (RESTS.some(x => x[0] === src.screenRest)) rec.screenRest = src.screenRest;
@@ -5725,7 +5971,7 @@ function cleanPet(src, look) {
         if (typeof j.lastTalkDay === 'string') rec.journal.lastTalkDay = j.lastTalkDay;
         if (Array.isArray(j.moments)) rec.journal.moments = j.moments.filter(isObj).slice(0, 200).map(m => structuredClone(m));
     }
-    for (const k of Object.keys(src)) if (rec[k] === undefined && k !== 'home' && k !== 'bowl') { try { rec[k] = structuredClone(src[k]); } catch { /* skip */ } }   // things from a newer Tavvy stay
+    for (const k of Object.keys(src)) if (rec[k] === undefined && k !== 'home' && k !== 'bowl' && k !== 'gifts') { try { rec[k] = structuredClone(src[k]); } catch { /* skip */ } }   // things from a newer Tavvy stay
     return rec;
 }
 
@@ -5757,6 +6003,21 @@ async function importPicked(input) {
     }
 }
 
+/** 0.10.0 선물 from a pet file: each picture goes up as a file of its own (paths added to `uploaded`). */
+async function unpackGifts(list, files, uploaded) {
+    const out = [];
+    if (!Array.isArray(list) || !Array.isArray(files)) return out;
+    for (const g of list.slice(0, GIFT_MAX)) {
+        if (!isObj(g) || !Number.isInteger(g.file) || typeof files[g.file] !== 'string' || !DATA_IMG.test(files[g.file])) continue;
+        const [, ext] = /^data:image\/(\w+);/.exec(files[g.file]);
+        const id = 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+        const path = await uploadFile(`tavvy_gift_${id}.${ext === 'jpeg' ? 'jpg' : ext}`, files[g.file].split(',')[1]);
+        uploaded.push(path);
+        out.push({ id, src: path, name: String(g.name || '').slice(0, 20), size: GIFT_SIZES.some(x => x[0] === g.size) ? g.size : 'm', at: num(g.at) });
+    }
+    return out;
+}
+
 async function importPetFile(data) {
     if (!isObj(data) || data[PET_FILE] !== 1 || !isObj(data.pet) || !isObj(data.pet.look)) return say('Tavvy 펫 파일이 아니에요.');
     if (typeof data.formatVersion !== 'number' || data.formatVersion > FORMAT_VERSION) return say('더 새로운 버전의 Tavvy가 만든 파일이에요. 확장을 업데이트해 주세요.');
@@ -5766,6 +6027,7 @@ async function importPetFile(data) {
     const { roles, uploaded } = await unpackRoles(data.pet.look.roles, data.files, 'pet_' + id);
     const rec = cleanPet(data.pet, cleanLook(data.pet.look, roles));
     rec.id = id;
+    try { rec.gifts = await unpackGifts(data.pet.gifts, data.files, uploaded); } catch (e) { uploaded.forEach(deleteFile); throw e; }
     rec.home = homeOf(room);
     let added = null;
     if (!roles.idle[0].startsWith('builtin:')) {
@@ -5852,6 +6114,20 @@ function onWinClick(e) {
     if (pc) return setPace(pc.dataset.pace);
     if (act === 'aifill') return aiFill();
     if (act === 'adddate') return addDateRow();
+    if (act === 'giftpick') return pickGift();
+    if (act === 'giftok') return confirmGift();
+    if (act === 'giftno') { win.giftPend = null; return drawGifts(); }
+    if (act === 'giftcut') {
+        const pend = win.giftPend;
+        if (!pend?.file) return;
+        return openCutter(pend.file, { box: pend.cut, done: (cuts) => { if (win.giftPend !== pend) return; pend.cut = cuts?.[0] || null; redoGiftPreview(); } });
+    }
+    const gs = t.closest('[data-gsize]');
+    if (gs) return setGiftSize(gs.dataset.gsize, gs.dataset.gv);
+    const gw = t.closest('[data-gshow]');
+    if (gw) return showGiftNow(gw.dataset.gshow);
+    const gd = t.closest('[data-gdel]');
+    if (gd) return delGift(gd.dataset.gdel);
     if (act === 'rolesback') { win.roleEdit = null; return drawRoles(); }
     if (act === 'addframe') return win.body.querySelector('[data-f="rolefile"]')?.click();
     if (act === 'pendok') return confirmRolePend();
@@ -5910,6 +6186,16 @@ function onWinInput(e) {
     if (f === 'file' && e.type === 'change') return onFilePicked(t);
     if (f === 'importfile' && e.type === 'change') return importPicked(t);
     if (f === 'rolefile' && e.type === 'change') return addRoleFrames(t);
+    if (f === 'giftfile' && e.type === 'change') return giftPicked(t);
+    if (f === 'giftname' && win.giftPend) { win.giftPend.name = t.value; return; }
+    if ((f === 'giftcrop' || f === 'giftbg' || f === 'giftbgtol') && e.type === 'change' && win.giftPend) {
+        const pend = win.giftPend;
+        if (f === 'giftcrop') pend.crop = t.checked;
+        if (f === 'giftbg') pend.bg = t.checked;
+        if (f === 'giftbgtol') pend.tol = Number(t.value) || BG_TOL;
+        return redoGiftPreview();
+    }
+    if (t.dataset?.gname != null && e.type === 'change') return renameGift(t.dataset.gname, t.value);
     if (f === 'sheetfile' && e.type === 'change') return sheetPicked(t);
     if ((t.dataset?.sheetpick != null || t.dataset?.sheetrow != null || t.dataset?.sheetref != null) && e.type === 'change') return onSheetInput(t);
     if (t.dataset?.fitmode != null || t.dataset?.fitscale != null) return onFitInput(t, e.type === 'change');
@@ -5925,6 +6211,151 @@ function onWinInput(e) {
         if (s === 'talkProfile') return setSetting(s, String(t.value || ''));
         return setSetting(s, t.checked);
     }
+}
+
+/* ---------- 0.10.0 선물 tab: pictures you give the pet ---------- */
+
+function giftsHtml(p) {
+    const list = p.gifts || [];
+    const pend = win.giftPend?.pet === p ? win.giftPend : null;
+    const cards = list.map(g => `<div class="tw-gift">
+  <img class="tw-giftpic tw-checker" src="${esc(imgUrl(g.src))}" alt="">
+  <input class="tw-giftname" data-gname="${esc(g.id)}" maxlength="20" value="${esc(g.name || '')}" placeholder="이름 없음">
+  <span class="tw-fseg tw-giftsize">${GIFT_SIZES.map(([k, n]) => `<span class="tw-fbtn${(g.size || 'm') === k ? ' tw-fon' : ''}" data-gsize="${esc(g.id)}" data-gv="${k}">${n}</span>`).join('')}</span>
+  <div class="tw-giftbtns"><div class="tw-btn tw-btn-small" data-gshow="${esc(g.id)}">꺼내 보기</div><div class="tw-btn tw-btn-small" data-gdel="${esc(g.id)}">빼기</div></div>
+  ${g.fresh ? '<span class="tw-sub">아직 안 받았어요</span>' : ''}
+</div>`).join('');
+    const add = list.length < GIFT_MAX && !pend
+        ? '<div class="tw-gift tw-giftadd" data-act="giftpick"><i class="fa-solid fa-plus"></i><span>선물 주기</span><span class="tw-sub">그림 고르기</span></div>' : '';
+    const pendHtml = !pend ? '' : `<div class="tw-giftpend">
+  <div class="tw-row">${pend.prep ? `<img class="tw-prev tw-checker" src="${pend.prep.dataUrl}" alt="">` : '<span class="tw-sub">그림 준비 중…</span>'}<div>
+    <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="giftcut"><i class="fa-solid fa-crop-simple"></i> 직접 자르기</div><span class="tw-sub">${pend.cut ? '직접 자른 부분만 써요' : ''}</span></div>
+    <label class="tw-check"><input type="checkbox" data-f="giftcrop"${pend.crop ? ' checked' : ''}> 투명 여백 자르기</label>
+    <label class="tw-check"><input type="checkbox" data-f="giftbg"${pend.bg ? ' checked' : ''}> 배경 지우기 <span class="tw-sub">(하얀색 같은 단색 배경)</span></label>
+    <div class="tw-bgrow"${pend.bg ? '' : ' hidden'}><span class="tw-sub">조금</span><input type="range" min="6" max="80" step="2" value="${pend.tol}" data-f="giftbgtol"><span class="tw-sub">많이</span></div>
+  </div></div>
+  <label class="tw-label">이름 <span class="tw-sub">(안 적어도 돼요)</span> <input data-f="giftname" maxlength="20" value="${esc(pend.name || '')}"></label>
+  <div class="tw-row"><div class="tw-btn tw-btn-main" data-act="giftok">주기</div><div class="tw-btn" data-act="giftno">취소</div></div>
+</div>`;
+    return `<div class="tw-cap">받은 선물 ${list.length} / ${GIFT_MAX}</div>
+<div class="tw-sub">선물을 주면 가끔 꺼내서 구경하고, 갖고 놀고, 자랑해요. 얼마나 자주 할지는 행동 탭 "선물"에서 골라요.</div>
+<input type="file" accept="${PIC_ACCEPT}" data-f="giftfile">
+${pendHtml}
+<div class="tw-gifts">${cards}${add}</div>`;
+}
+
+function drawGifts() {
+    const pane = win?.body?.querySelector('[data-pane="gifts"]');
+    const p = curPet();
+    if (!pane || !p) return;
+    pane.innerHTML = giftsHtml(p);
+}
+
+const giftOf = (p, id) => (p?.gifts || []).find(g => g.id === id);
+
+function pickGift() {
+    const p = curPet();
+    if (!p) return;
+    if (readOnly) return say(readOnlyReason);
+    if ((p.gifts || []).length >= GIFT_MAX) return say(`선물은 ${GIFT_MAX}개까지 줄 수 있어요.`);
+    win.body.querySelector('[data-f="giftfile"]')?.click();   // SillyTavern hides file inputs
+}
+
+function giftPicked(input) {
+    const file = input.files?.[0], p = curPet();
+    input.value = '';
+    if (!file || !p) return;
+    if (file.size > 8 * 1024 * 1024) return say('그림이 너무 커요 (8MB 이하).');
+    win.giftPend = { pet: p, file, cut: null, crop: true, bg: true, tol: BG_TOL, name: '', prep: null };
+    return redoGiftPreview();
+}
+
+async function redoGiftPreview() {
+    const pend = win.giftPend;
+    if (!pend) return;
+    pend.prep = null;
+    drawGifts();
+    try {
+        const out = await preparePng(pend.file, pend.crop, pend.bg ? pend.tol : 0, pend.cut);
+        if (win.giftPend !== pend) return;
+        pend.prep = out;
+    } catch {
+        if (win.giftPend === pend) { win.giftPend = null; say('그림을 읽지 못했어요. 다른 그림(PNG·JPG)을 골라 주세요.'); }
+    }
+    drawGifts();
+}
+
+async function confirmGift() {
+    const pend = win.giftPend, p = curPet();
+    if (!pend?.prep || busy || p !== pend.pet) return;
+    if (readOnly) return say(readOnlyReason);
+    if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 해 주세요.');
+    if ((p.gifts || []).length >= GIFT_MAX) return say(`선물은 ${GIFT_MAX}개까지 줄 수 있어요.`);
+    busy = true;
+    try {
+        say('선물 올리는 중…');
+        const id = 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+        const path = await uploadFile(`tavvy_gift_${id}.png`, pend.prep.base64);
+        const g = { id, src: path, name: String(pend.name || '').trim().slice(0, 20), size: 'm', at: Date.now(), fresh: true };
+        (p.gifts ||= []).push(g);
+        const ok = await saveNow();
+        if (!ok && readOnly) { p.gifts.pop(); deleteFile(path); return say(readOnlyReason); }
+        if (!ok) saveSoon();
+        win.giftPend = null;
+        drawGifts();
+        refreshBed();
+        const awake = actors.some(a => a.rec === p);
+        say(awake ? `선물을 줬어요! 창을 닫으면 ${josa(p.name, '이', '가')} 받아요.` : `선물을 줬어요! 🛏️ 버튼으로 깨우면 ${josa(p.name, '이', '가')} 받아요.`);
+    } catch (e) {
+        say('선물을 올리지 못했어요: ' + (e.message || e));
+    } finally {
+        busy = false;
+    }
+}
+
+function setGiftSize(id, v) {
+    const g = giftOf(curPet(), id);
+    if (!g || readOnly || !GIFT_SIZES.some(x => x[0] === v)) return;
+    g.size = v;
+    saveSoon();
+    drawGifts();
+}
+
+function renameGift(id, v) {
+    const g = giftOf(curPet(), id);
+    if (!g || readOnly) return;
+    g.name = String(v || '').trim().slice(0, 20);
+    saveSoon();
+}
+
+async function delGift(id) {
+    const p = curPet(), g = giftOf(p, id);
+    if (!g || readOnly || busy) return;
+    if (!(await confirmBox(`${g.name ? `"${g.name}"` : '이 선물'}을(를) 뺄까요? 선물 그림도 지워져요.`))) return;
+    for (const a of actors) if (a.rec === p && (a.toy?.g === g || a.hug?.g === g)) { a.toy = null; a.hug = null; if (a.state === 'toy') a.setState('idle'); }
+    p.gifts = p.gifts.filter(x => x !== g);
+    const ok = await saveNow();
+    if (ok) { if (!fileInUse(g.src)) deleteFile(g.src); } else saveSoon();
+    drawGifts();
+    refreshBed();
+}
+
+/** "꺼내 보기": the window closes and it takes this one out right away. */
+function showGiftNow(id) {
+    const p = curPet(), g = giftOf(p, id);
+    if (!g) return;
+    const a = actors.find(x => x.rec === p);
+    if (!a) return say(`먼저 🛏️ 버튼으로 ${josa(p.name, '을', '를')} 깨워 주세요.`);
+    if (!a.free() || a.held || a.air || a.wallOn || ['eat', 'sniff', 'toy'].includes(a.state)) return say('지금은 바빠 보여요. 잠시 뒤 다시 눌러 보세요.');
+    closeWin();
+    const go = (n) => {
+        if (win?.open) { if (n < 40) setTimeout(() => go(n + 1), 250); return; }   // "저장 안 한 내용" may be asking first
+        if (a.gone || !a.free() || a.held || a.air || a.wallOn) return;
+        if (g.fresh) return void a.startToy('recv', g);
+        const kinds = a.plat ? ['look', 'show'] : ['look', 'show', 'roll', 'toss'];
+        a.startToy(kinds[Math.floor(Math.random() * kinds.length)], g);
+    };
+    setTimeout(() => go(0), 350);
 }
 
 /* ---------- 그림 tab: a picture (or several) for each action ---------- */
