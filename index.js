@@ -357,6 +357,8 @@ function defaultSettings() {
         heartMode: 'both',                     // closeness shown as 'both' (♥♥ 친구) / 'hearts' / 'name' / 'hide'
         winTheme: 'theme',                     // the Tavvy window: 'theme' (follow SillyTavern) / 'cream' / 'white' / 'night'
         talkProfile: '',                       // connection profile used to write speech lines with AI ('' = the current connection)
+        soundOn: false,                        // 0.10.5 소리 (off by default)
+        soundVol: 60,                          // 0..100
         backup: { lastDay: null, files: [] },  // daily backups: [{ day, path, pets }]
     };
 }
@@ -1106,6 +1108,70 @@ function fx(actor, text, cls = '') {
     layer.appendChild(el);
     el.addEventListener('animationend', () => el.remove());
     setTimeout(() => el.remove(), 2000);
+    if (text === '♥') playSound('heart', cls ? 0.6 : 1);
+}
+
+/* ---------- 0.10.5 소리: short sounds made in code (no files). Off unless turned on in ⚙ 설정. ---------- */
+
+const SND_GAP = 0.8;          // seconds before the same sound can play again
+let sndCtx = null, sndOut = null, sndTouched = false, sndBusyTill = 0, sndNoise = null;
+const sndLast = {};
+
+function sndTone(f, d, o = {}) {
+    const c = sndCtx, t = c.currentTime + (o.at || 0);
+    const os = c.createOscillator(), g = c.createGain();
+    os.type = o.type || 'sine';
+    os.frequency.setValueAtTime(f, t);
+    if (o.to) os.frequency.exponentialRampToValueAtTime(o.to, t + d);
+    const v = (o.v || 0.5) * (o.k || 1), a = o.atk || 0.005;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(v, t + a);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    let n = os;
+    if (o.lp) { const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = o.lp; os.connect(lp); n = lp; }
+    n.connect(g); g.connect(sndOut);
+    os.start(t); os.stop(t + d + 0.02);
+}
+
+// [length in seconds, play(k = loudness 0..1)]
+const SOUNDS = {
+    heart: [0.16, (k) => sndTone(600, 0.14, { to: 1200, v: 0.4, k })],                                         // 뿅
+    wake: [0.62, (k) => { sndTone(1046, 0.4, { v: 0.3, k }); sndTone(1568, 0.5, { v: 0.25, k, at: 0.12 }); }],   // 띠링
+    sleep: [0.62, (k) => sndTone(600, 0.6, { to: 300, v: 0.2, k, atk: 0.05 })],                                // 스르르
+    cheer: [0.76, (k) => {                                                                                      // 빰빠밤
+        sndTone(392, 0.12, { type: 'square', v: 0.1, k, lp: 2000 });
+        sndTone(392, 0.12, { type: 'square', v: 0.1, k, lp: 2000, at: 0.14 });
+        for (const f of [523, 659, 784]) sndTone(f, 0.45, { type: 'square', v: 0.07, k, lp: 2000, at: 0.3 });
+    }],
+};
+
+function sndReady() {
+    if (!sndCtx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return false;
+        try { sndCtx = new AC(); sndOut = sndCtx.createGain(); sndOut.connect(sndCtx.destination); } catch { sndCtx = null; return false; }
+    }
+    if (sndCtx.state === 'suspended') sndCtx.resume().catch(() => {});
+    return true;
+}
+
+/** Phones only allow sound after the first touch: get it ready then (only when sound is on). */
+function sndOnTouch() {
+    sndTouched = true;
+    if (root?.settings?.soundOn && sndCtx?.state !== 'running') sndReady();
+}
+
+/** test = from the ⚙ 설정 (plays even when the same sound just played). */
+function playSound(key, k = 1, test = false) {
+    const s = root?.settings, def = SOUNDS[key];
+    if (!def || !s?.soundOn || !sndTouched || document.hidden) return;
+    const now = performance.now() / 1000;
+    if (!test && (now < sndBusyTill || now - (sndLast[key] || -99) < SND_GAP)) return;   // one at a time
+    if (!sndReady()) return;
+    sndOut.gain.value = clamp(Number(s.soundVol ?? 60), 0, 100) / 100 * 0.6;
+    sndLast[key] = now;
+    sndBusyTill = now + def[0];
+    try { def[1](k); } catch { /* never let a sound break the pet */ }
 }
 
 /* =====================================================================
@@ -3339,8 +3405,8 @@ function dayKey(t = Date.now()) {
 /** The pet's "today" record, reset when the day has changed. */
 function rollToday(rec) {
     const day = dayKey();
-    rec.today ??= { day: null, eaten: 0, full: false };
-    if (rec.today.day !== day) { rec.today.day = day; rec.today.eaten = 0; rec.today.full = false; }
+    rec.today ??= { day: null, eaten: 0, full: false, tokens: 0 };
+    if (rec.today.day !== day) { rec.today.day = day; rec.today.eaten = 0; rec.today.full = false; rec.today.tokens = 0; }
     return rec.today;
 }
 
@@ -3371,6 +3437,9 @@ function takeBowl(rec) {
     const t = rollToday(rec);
     const wasFull = t.full || t.eaten >= FULL_AT;
     t.eaten += take.n;
+    t.tokens = (t.tokens || 0) + take.tokens;
+    const j = rec.journal;                                              // 0.10.5: the day it ate the most (counted from this version on)
+    if (j && t.tokens > (j.best?.tokens || 0)) j.best = { day: t.day, tokens: t.tokens, n: t.eaten };
     if (mealTier(take.n) === 'feast') { t.full = true; addMoment(rec, 'firstFeast'); }
     const full = t.full || t.eaten >= FULL_AT;
     if (full && !wasFull) { take.becameFull = true; addMoment(rec, 'firstFull'); }
@@ -3850,6 +3919,7 @@ function showCheer(a, from, to) {
 
 /** Coloured ✦ bursting out around the pet (closeness up, special days). */
 function burstStars(a) {
+    playSound('cheer');
     const top = stage.floorY - a.y - a.h;
     for (let i = 0; i < 14; i++) {
         const s = document.createElement('div');
@@ -4078,8 +4148,8 @@ function sleepInstant() {
 
 function toggleWake() {
     noteUserAct();
-    if (actors.length) sleepAll();
-    else wakeAll();
+    if (actors.length) { playSound('sleep'); sleepAll(); }
+    else if (!bedBusy && residents().length) { playSound('wake'); wakeAll(); }
 }
 
 /* =====================================================================
@@ -4528,16 +4598,26 @@ function heroHtml(p) {
 </div>`;
 }
 
+const tokWords = (tok) => (tok >= 10000 ? `약 ${(Math.round(tok / 1000) / 10).toLocaleString()}만` : `약 ${tok.toLocaleString()}`);
+
+/** 0.10.5 가장 많이 먹은 날 (counted from 0.10.5 on). */
+function bestTile(b) {
+    if (!b?.day) return `<div class="tw-tile tw-tile-wide"><span>가장 많이 먹은 날</span><b>아직 없어요</b><small>이번 업데이트부터 세기 시작해요</small></div>`;
+    const [y, m, d] = b.day.split('-').map(Number);
+    const date = `${y !== new Date().getFullYear() ? `${y}년 ` : ''}${m}월 ${d}일`;
+    return `<div class="tw-tile tw-tile-wide"><span>가장 많이 먹은 날</span><b>${esc(date)}</b><small>그날 ${esc(tokWords(b.tokens))} 토큰 · 메시지 ${Number(b.n) || 0}개</small></div>`;
+}
+
 function journalHtml(p) {
     const e = p.eaten || {}, j = p.journal || {};
     const tile = (label, value, sub = '') => `<div class="tw-tile"><span>${label}</span><b>${esc(value)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</div>`;
-    const tok = e.tokens || 0;
-    const tokText = tok >= 10000 ? `약 ${(Math.round(tok / 1000) / 10).toLocaleString()}만` : `약 ${tok.toLocaleString()}`;
+    const tokText = tokWords(e.tokens || 0);
     return `<div class="tw-tiles">
   ${tile('함께한 지', `${togetherDays(p)}일째`)}
   ${tile('대화한 날', `${j.talkDays || 0}일`)}
   ${tile('주고받은 메시지', `${(e.me || 0) + (e.them || 0)}`, `나 ${e.me || 0} · 상대 ${e.them || 0}`)}
   ${tile('먹은 토큰', tokText)}
+  ${bestTile(j.best)}
 </div>
 <div class="tw-cap">기념 순간</div>
 <div class="tw-moments">${journalMoments(p).map(m => `<div><span>${esc(m.day)}</span><b>${esc(m.name)}</b></div>`).join('')}</div>`;
@@ -5093,6 +5173,11 @@ function settingsHtml() {
     </select>
   </label>
 
+  <div class="tw-cap">소리</div>
+  <label class="tw-check"><input type="checkbox" data-s="soundOn"> 소리 켜기 (♥ · 깨우기 · 재우기 · 축하)</label>
+  <div class="tw-row"><span class="tw-sub">음량</span><input type="range" min="0" max="100" step="5" data-s="soundVol" class="tw-grow"><span class="tw-sub tw-volpct"></span></div>
+  <div class="tw-sub">다른 탭을 보고 있을 땐 소리가 나지 않아요. 폰은 화면을 한 번 누른 뒤부터 나요.</div>
+
   <div class="tw-cap">대사</div>
   <label class="tw-label tw-profrow">AI로 대사 만들 때 쓸 연결
     <select data-s="talkProfile"></select>
@@ -5126,6 +5211,11 @@ function fillSettings() {
     box.querySelector('[data-s="stroll"]').disabled = !stageIsChat();
     box.querySelector('[data-s="badge"]').checked = s.badge !== false;
     box.querySelector('[data-s="heartMode"]').value = s.heartMode || 'both';
+    box.querySelector('[data-s="soundOn"]').checked = !!s.soundOn;
+    const vol = box.querySelector('[data-s="soundVol"]');
+    vol.value = clamp(Number(s.soundVol ?? 60), 0, 100);
+    vol.disabled = !s.soundOn;
+    box.querySelector('.tw-volpct').textContent = `${vol.value}%`;
     box.querySelectorAll('[data-theme-pick]').forEach(t => t.classList.toggle('tw-on', t.dataset.themePick === (THEMES[s.winTheme] ? s.winTheme : 'theme')));
     // connection profiles (only when SillyTavern's Connection Manager is there)
     const profiles = connectionProfiles();
@@ -6118,12 +6208,13 @@ function cleanPet(src, look) {
     for (const k of ['me', 'them', 'tokens']) rec.eaten[k] = num(src.eaten?.[k]);
     rec.pats.score = num(src.pats?.score);
     if (typeof src.pats?.lastDay === 'string') rec.pats.lastDay = src.pats.lastDay;
-    if (isObj(src.today) && typeof src.today.day === 'string') rec.today = { day: src.today.day, eaten: num(src.today.eaten), full: !!src.today.full };
+    if (isObj(src.today) && typeof src.today.day === 'string') rec.today = { day: src.today.day, eaten: num(src.today.eaten), full: !!src.today.full, tokens: num(src.today.tokens) };
     if (isObj(src.celebrated)) for (const [k, v] of Object.entries(src.celebrated)) if (typeof v === 'string' && k === 'met') rec.celebrated.met = v;
     const j = src.journal;
     if (isObj(j)) {
         rec.journal.talkDays = num(j.talkDays);
         if (typeof j.lastTalkDay === 'string') rec.journal.lastTalkDay = j.lastTalkDay;
+        if (isObj(j.best) && /^\d{4}-\d\d-\d\d$/.test(j.best.day) && num(j.best.tokens) > 0) rec.journal.best = { day: j.best.day, tokens: num(j.best.tokens), n: num(j.best.n) };
         if (Array.isArray(j.moments)) rec.journal.moments = j.moments.filter(isObj).slice(0, 200).map(m => structuredClone(m));
     }
     for (const k of Object.keys(src)) if (rec[k] === undefined && k !== 'home' && k !== 'bowl' && k !== 'gifts') { try { rec[k] = structuredClone(src[k]); } catch { /* skip */ } }   // things from a newer Tavvy stay
@@ -6373,8 +6464,12 @@ function onWinInput(e) {
         if (s === 'stageMode') return setSetting(s, t.value === 'floor' ? 'floor' : 'chat');
         if (s === 'heartMode') return setSetting(s, ['both', 'hearts', 'name', 'hide'].includes(t.value) ? t.value : 'both');
         if (s === 'talkProfile') return setSetting(s, String(t.value || ''));
-        return setSetting(s, t.checked);
+        if (s === 'soundVol') { setSetting(s, clamp(Math.round(Number(t.value) || 0), 0, 100)); fillSettings(); return playSound('heart', 1, true); }
+        setSetting(s, t.checked);
+        if (s === 'soundOn') { fillSettings(); if (t.checked) { sndTouched = true; playSound('heart', 1, true); } }
+        return;
     }
+    if (s === 'soundVol') { const pct = win.body.querySelector('.tw-volpct'); if (pct) pct.textContent = `${t.value}%`; }
 }
 
 /* ---------- 0.10.0 선물 tab: pictures you give the pet ---------- */
@@ -7700,6 +7795,8 @@ function onReady() {
     const seeHand = (e) => { if (!actors.length) return; hand.x = e.clientX; hand.y = e.clientY; hand.t = performance.now(); };
     document.addEventListener('pointermove', seeHand, { capture: true, passive: true });
     document.addEventListener('pointerdown', seeHand, { capture: true, passive: true });
+    document.addEventListener('pointerdown', sndOnTouch, { capture: true, passive: true });
+    document.addEventListener('keydown', sndOnTouch, { capture: true, passive: true });
     // 0.9.3 졸졸 따라다니기: a short tap anywhere (not on a pet / the bed / the Tavvy window, not a scroll)
     const taps = new Map();
     const notMine = (t) => !t?.closest?.('.tavvy-pet, #tavvy-bed, #tavvy-win, .tavvy-bubble');

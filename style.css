@@ -1200,3 +1200,4 @@
 
 /* 0.10.4: cancel the upload box */
 .tavvy-win .tw-uploadno { justify-content: flex-end; }
+.tavvy-win .tw-tile-wide { grid-column: 1 / -1; }
