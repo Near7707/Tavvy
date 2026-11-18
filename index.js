@@ -2328,7 +2328,7 @@ class Actor {
                     this.x = clamp(this.x + this.skv * dt, Ls, Math.max(Ls, Rs));
                     this.tiltT = -Math.sign(this.skv || 1) * 9;
                     this.sqT = 0.92;
-                    pose = this.rp('surprise');
+                    pose = this.rec.look.roles?.surprise?.length ? this.rp('surprise') : this.role('walk');   // 0.9.2: no 놀람 picture → still the walking one
                     if (this.t > this.until) { this.tiltT = 0; this.sqT = 1; if (Math.random() < 0.3) fx(this, '💦', 'tavvy-fx-small'); this.setState('idle'); }
                     break;
                 }
@@ -2345,7 +2345,12 @@ class Actor {
                     if (this.side && Math.abs(dr) > 2) this.dir = Math.sign(dr);
                     pose = this.role('look', 'idle');
                     this.tiltT = (this.side ? this.dir : 1) * 6;
-                    if (Math.abs(dr) > spr * dt) { this.x += Math.sign(dr) * spr * dt; bob = Math.abs(Math.sin(this.t * Math.PI * 1.6)) * 1.5 * this.k; }
+                    if (Math.abs(dr) > spr * dt) {                     // 0.9.2: moving → the walking picture (no gliding)
+                        this.x += Math.sign(dr) * spr * dt;
+                        this.walkPh = (this.walkPh || 0) + (spr / 22) * dt;
+                        bob = Math.pow(Math.sin((this.walkPh % 1) * Math.PI), 0.7) * 2 * this.k;
+                        pose = this.role('walk');
+                    }
                     else if (!rd.end) { rd.end = this.t + 1.1; if (Math.random() < 0.7) fx(this, Math.random() < 0.5 ? '!' : '♪', 'tavvy-fx-small'); }
                     if (!rd.f && this.t > 1.3) { rd.f = 1; fx(this, Math.random() < 0.6 ? '?' : '…', 'tavvy-fx-small'); }
                     if ((rd.end && this.t > rd.end) || this.t > 14) { this.tiltT = 0; this.setState('idle'); }
@@ -2358,12 +2363,12 @@ class Actor {
                     const ease = (a, b, u) => a + (b - a) * (1 - Math.pow(1 - clamp(u, 0, 1), 2));
                     const hideX = h.E + h.s * this.w * 0.12, peekX = h.E - h.s * this.w * 0.18;
                     this.clipEdge = h;
-                    if (this.t < 0.6) { this.dir = this.side ? h.s : this.dir; this.x = ease(h.x0, hideX, this.t / 0.6); }
+                    if (this.t < 0.6) { this.dir = this.side ? h.s : this.dir; this.x = ease(h.x0, hideX, this.t / 0.6); pose = this.role('walk'); }   // 0.9.2: walking in
                     else if (this.t < h.wait) { this.x = hideX; pose = this.rp('aside'); }
                     else if (this.t < h.wait + 0.5) {
                         if (this.side) this.dir = -h.s;
                         this.x = ease(hideX, peekX, (this.t - h.wait) / 0.5);
-                        pose = this.role('look', 'idle');
+                        pose = this.role('walk');                  // 0.9.2: a step out, walking
                         this.tiltT = -h.s * 8;
                     } else {
                         this.x = peekX;
@@ -4385,8 +4390,11 @@ function ensureTyper() {
     el.innerHTML = `<div class="tavvy-typer-box"><div class="tavvy-typer-head"><span></span><div class="tw-btn" data-typer="done">완료</div></div><div class="tavvy-typer-slot"></div></div>`;
     document.body.appendChild(el);
     typer = { el, field: null, target: null, open: false };
-    // tap "완료" without the field losing focus first
-    el.querySelector('[data-typer="done"]').addEventListener('pointerdown', (e) => { e.preventDefault(); closeTyper(true); });
+    // tap "완료" without the field losing focus first (pointerdown keeps the focus) — and close on the click itself,
+    // so the tap ends on 완료 and doesn't land on the window's ✕ underneath (0.9.2)
+    const done = el.querySelector('[data-typer="done"]');
+    done.addEventListener('pointerdown', (e) => e.preventDefault());
+    done.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); closeTyper(true); });
     const place = () => {
         if (!typer.open) return;
         const vv = window.visualViewport;
