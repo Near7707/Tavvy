@@ -289,6 +289,8 @@ const TALK_MOMENTS = [
     { key: 'reunion', name: '오랜만에 만났을 때', ex: '{{user}}, 보고 싶었어!' },
     { key: 'reply', name: '답이 왔을 때', ex: '오, 왔다!' },
     { key: 'sent', name: '내가 보냈을 때', ex: '잘 보냈어?' },
+    { key: 'greet', name: '다른 펫에게 말 걸 때', ex: '{{pet}}야, 뭐 해?' },     // 0.10.8 펫끼리 말하기
+    { key: 'answer', name: '다른 펫이 말 걸어 오면', ex: '응? 왜 불러~' },
 ];
 const TALK_FREQ = { off: '끔', some: '가끔', often: '자주' };
 const TALK_CHANCE = { some: 0.35, often: 0.7 };          // a moment comes → says something
@@ -323,6 +325,13 @@ const TALK_GAP = 8;              // s — ordinary lines not closer together tha
 const SAY_MS = 2600;             // how long a speech bubble stays
 const LINE_MAX = 40;             // characters in one line
 const LINES_MAX = 10;            // lines per moment
+// 0.10.8 펫끼리 말하기: talks two pets in the same room share (root.duets)
+const DUET_MAX = 30;             // talks kept per two pets
+const DUET_LINES = 4;            // lines in one talk
+const DUET_ADD = 10;             // talks the AI writes per press
+const DUET_STEP = 1.3;           // s between two lines of a talk
+const MEET_DIST = 0.9;           // × (sum of both widths) — close enough to talk
+const MEET_REST = 120;           // s — the same two pets don't talk again sooner than this
 const PERS_DESC = {
     aegyo: '애교 많고 다정해요', saechim: '새침하고 쑥스러움을 잘 타요', neugut: '느긋하고 늘 졸려요',
     simsul: '툴툴대지만 속은 다정해요', musim: '말수가 적고 무심해요',
@@ -366,7 +375,7 @@ function defaultSettings() {
 }
 
 function newRoot() {
-    return { formatVersion: FORMAT_VERSION, settings: defaultSettings(), pets: [], looks: [] };
+    return { formatVersion: FORMAT_VERSION, settings: defaultSettings(), pets: [], looks: [], duets: {} };
 }
 
 function newPetRecord({ id, name, personality, look }) {
@@ -467,6 +476,7 @@ function migrate(r) {
         });
     }
     for (const l of r.looks) if (l && typeof l === 'object' && (!l.roleOpts || typeof l.roleOpts !== 'object')) l.roleOpts = {};
+    if (!r.duets || typeof r.duets !== 'object' || Array.isArray(r.duets)) r.duets = {};   // 0.10.8: 'idA+idB' → [[[id, line], …], …]
     // future: if (r.formatVersion < 2) { ...; r.formatVersion = 2; }
 }
 
@@ -1152,19 +1162,38 @@ const SOUNDS = {
 };
 
 function sndReady() {
+    if (sndCtx?.state === 'closed') sndCtx = null;
     if (!sndCtx) {
         const AC = window.AudioContext || window.webkitAudioContext;
         if (!AC) return false;
         try { sndCtx = new AC(); sndOut = sndCtx.createGain(); sndOut.connect(sndCtx.destination); } catch { sndCtx = null; return false; }
     }
-    if (sndCtx.state === 'suspended') sndCtx.resume().catch(() => {});
+    // 0.10.8: iPhone also has 'interrupted' (after another app / the screen going off) — wake it from any not-running state
+    if (sndCtx.state !== 'running') sndCtx.resume().catch(() => {});
     return true;
 }
 
-/** Phones only allow sound after the first touch: get it ready then (only when sound is on). */
+let sndStuck = false;     // a wake-up during a touch did not work → next touch makes a new one
+
+/** During a real touch / click: wake the sound up (iPhone: a stuck one is thrown away and made again). */
+function sndWake() {
+    if (sndCtx && (sndStuck || sndCtx.state === 'interrupted')) {
+        try { sndCtx.close(); } catch { /* already gone */ }
+        sndCtx = null; sndStuck = false; sndBufs.clear();
+    }
+    if (!sndReady()) return;
+    const c = sndCtx;
+    try {                                                   // a silent blip — iPhone opens the sound only for one played during a touch
+        const b = c.createBuffer(1, 1, 22050), src = c.createBufferSource();
+        src.buffer = b; src.connect(c.destination); src.start(0);
+    } catch { /* fine */ }
+    if (c.state !== 'running') setTimeout(() => { if (sndCtx === c && c.state !== 'running') sndStuck = true; }, 400);
+}
+
+/** Phones only allow sound after a touch: get it ready then (only when sound is on). */
 function sndOnTouch() {
     sndTouched = true;
-    if (root?.settings?.soundOn && sndCtx?.state !== 'running') sndReady();
+    if (root?.settings?.soundOn && sndCtx?.state !== 'running') sndWake();
 }
 
 /** test = a try-out button (plays even when sound is off or the same sound just played). rec = the pet (its own sound file, if any). */
@@ -1174,6 +1203,7 @@ function playSound(key, k = 1, test = false, rec = null) {
     if (!test && (!s.soundOn || !sndTouched)) return;
     const now = performance.now() / 1000;
     if (!test && (now < sndBusyTill || now - (sndLast[key] || -99) < SND_GAP)) return;   // one at a time
+    if (test && sndCtx?.state !== 'running') sndWake();                 // try-out buttons are touches
     if (!sndReady()) return;
     sndOut.gain.value = clamp(Number(s.soundVol ?? 60), 0, 100) / 100 * 0.6;
     sndLast[key] = now;
@@ -2154,6 +2184,7 @@ class Actor {
         if (this.mealPending) return this.setState('sniff');
         if (this.food > 0) return this.setState('eat');
         if (this.levelPending()) return this.startCheer();          // e.g. a pat tipped it over
+        if (this.chatTill && performance.now() < this.chatTill) return this.setState('idle');   // 0.10.8: talking with another pet
         if (this.afterMeal) { const el = this.afterMeal; this.afterMeal = null; if (el.isConnected && !this.waiting) { this.watchReply(el); if (this.state !== 'idle') return; } }
         if (gen.active && this.waiting) return this.setState('wait');
         const fresh = (this.rec.gifts || []).find(g => g?.fresh && typeof g.src === 'string');
@@ -3389,7 +3420,7 @@ function tick(t) {
         if (ox !== stage.ox || oy !== stage.oy) placeBed();
     }
     for (const a of [...actors]) a.step(dt);
-    if (actors.length > 1) { bumpCheck(); apartCheck(dt); }
+    if (actors.length > 1) { bumpCheck(); apartCheck(dt); meetCheck(); }
     if (sparkles.length) stepSparkles(dt);
     if (actors.length) raf = requestAnimationFrame(tick);
 }
@@ -3442,7 +3473,111 @@ function bumpCheck() {
             const d = a.x < b.x ? -1 : a.x > b.x ? 1 : (Math.random() < 0.5 ? -1 : 1);
             a.bump(d, b); b.bump(-d, a);
             const t = performance.now(); a.bumpedAt.set(b, t); b.bumpedAt.set(a, t);
+            setTimeout(() => startDuet(a, b, true), 2400);      // 0.10.8: a word after the bump (once they have landed and reacted)
             a.passing.add(b); b.passing.add(a);    // no second bump until they have parted
+        }
+    }
+}
+
+/* ---------- 0.10.8 펫끼리 말하기: two pets in the same room say something to each other ---------- */
+let duetOn = null;                       // the talk going on now (one at a time)
+const duetDeck = new Map();              // 'idA+idB' → talks not used yet this time round (indices)
+const metAt = new Map();                 // 'idA+idB' → when they last talked
+const meetSeen = new Set();              // pairs already rolled for this meeting (until they part)
+
+const duetKey = (a, b) => [a, b].sort().join('+');
+
+/** The talks two pets share (each: [[pet id, line], …]). */
+function duetsOf(a, b) {
+    const list = root?.duets?.[duetKey(a, b)];
+    if (!Array.isArray(list)) return [];
+    return list.filter(t => Array.isArray(t) && t.length && t.every(l => Array.isArray(l) && (l[0] === a || l[0] === b) && typeof l[1] === 'string' && l[1].trim()));
+}
+
+/** One talk, not repeating until all have been used (then shuffled again). */
+function duetPick(a, b) {
+    const list = duetsOf(a, b);
+    if (!list.length) return null;
+    const k = duetKey(a, b);
+    let d = duetDeck.get(k);
+    if (!d || d.n !== list.length || !d.left.length) {
+        d = { n: list.length, left: list.map((_, i) => i).sort(() => Math.random() - 0.5) };
+        duetDeck.set(k, d);
+    }
+    return list[d.left.pop()];
+}
+
+const talkFreqOf = (a) => TALK_FREQ[a.rec.talkFreq] ? a.rec.talkFreq : 'some';
+const linesOf = (a, m) => (a.rec.lines?.[m] || []).filter(x => typeof x === 'string' && x.trim());
+const fillPet = (text, other) => String(text || '').replace(/\{\{pet\}\}/gi, other?.rec?.name || '');
+const duetAlive = (x) => actors.includes(x) && !x.gone && !x.held;
+
+/** No words back: the personality's reaction (the same as after a bump). */
+function duetReact(x, other) {
+    const k = persOf(x, 'land').bump;
+    if (k === 'aside') return fx(x, '…');
+    if (x.state !== 'idle' && x.state !== 'perch') return fx(x, k === 'flick' ? '…' : k);
+    x.after = x.state;
+    x.startLook(k, other.x);
+}
+
+/** Start a talk between a and b. bump = right after bumping (no dice roll, no reaction twice). */
+function startDuet(a, b, bump = false) {
+    if (duetOn || !duetAlive(a) || !duetAlive(b) || a.plat !== b.plat) return false;
+    const k = duetKey(a.rec.id, b.rec.id);
+    const now = performance.now();
+    if (!bump && now - (metAt.get(k) ?? -1e9) < MEET_REST * 1000) return false;
+    const [i, r] = Math.random() < 0.5 ? [a, b] : [b, a];
+    const fi = talkFreqOf(i), fr = talkFreqOf(r);
+    const talks = fi !== 'off' && fr !== 'off' && duetsOf(a.rec.id, b.rec.id).length;
+    let first = i, second = r;
+    let greet = fi !== 'off' && linesOf(i, 'greet').length;
+    if (!greet && !talks && fr !== 'off' && linesOf(r, 'greet').length) { first = r; second = i; greet = true; }   // the other one starts
+    if (!greet && !talks) return false;
+    if (!bump && Math.random() >= TALK_CHANCE[talkFreqOf(first)]) { metAt.set(k, now); return false; }
+    let script;
+    if (talks && (!greet || Math.random() < 0.5)) {
+        const t = duetPick(a.rec.id, b.rec.id);
+        script = t.slice(0, DUET_LINES).map(([id, line]) => [id === a.rec.id ? a : b, line]);
+    } else {
+        const g = linesOf(first, 'greet'), ans = talkFreqOf(second) !== 'off' ? linesOf(second, 'answer') : [];
+        script = [[first, g[Math.floor(Math.random() * g.length)]]];
+        if (ans.length) script.push([second, ans[Math.floor(Math.random() * ans.length)]]);
+        else if (!bump) script.push([second, null]);               // no words → a look / "…"
+    }
+    metAt.set(k, now);
+    const till = now + (script.length * DUET_STEP + 1.5) * 1000;
+    for (const [x, y] of [[a, b], [b, a]]) {
+        x.chatTill = till;
+        if (x.side && x.state !== 'walk' && Math.abs(y.x - x.x) > 8) x.dir = y.x >= x.x ? 1 : -1;   // turn to each other
+    }
+    const me = duetOn = { a, b };
+    script.forEach(([x, line], n) => setTimeout(() => {
+        if (duetOn !== me) return;
+        if (!duetAlive(a) || !duetAlive(b)) { duetOn = null; a.chatTill = b.chatTill = 0; return; }
+        const y = x === a ? b : a;
+        if (line === null) return duetReact(x, y);
+        x.lastTalk = performance.now();
+        x.speak(fillPet(line, y));
+    }, n * DUET_STEP * 1000));
+    setTimeout(() => { if (duetOn === me) duetOn = null; }, script.length * DUET_STEP * 1000 + 800);
+    return true;
+}
+
+/** Two pets resting near each other on the same floor / ledge → maybe a talk (once per meeting). */
+function meetCheck() {
+    if (duetOn) return;
+    const calm = (x) => !x.held && !x.air && !x.gone && (x.state === 'idle' || x.state === 'perch') && !(gen.active && x.waiting);
+    for (let i = 0; i < actors.length; i++) {
+        for (let j = i + 1; j < actors.length; j++) {
+            const a = actors[i], b = actors[j];
+            const k = duetKey(a.rec.id, b.rec.id);
+            const near = (a.w + b.w) * MEET_DIST;
+            const dist = Math.abs(a.x - b.x);
+            if (a.plat !== b.plat || dist > near * 1.4) { meetSeen.delete(k); continue; }
+            if (dist > near || meetSeen.has(k) || !calm(a) || !calm(b)) continue;
+            meetSeen.add(k);
+            if (startDuet(a, b)) return;
         }
     }
 }
@@ -3709,7 +3844,7 @@ async function maybeBackup() {
     if (b.lastDay === day) return;
     backingUp = true;
     try {
-        const data = JSON.stringify({ tavvyBackup: 1, formatVersion: FORMAT_VERSION, day, savedAt: Date.now(), pets: root.pets });
+        const data = JSON.stringify({ tavvyBackup: 1, formatVersion: FORMAT_VERSION, day, savedAt: Date.now(), pets: root.pets, duets: root.duets || {} });
         const path = await uploadFile(`tavvy_backup_${day}.json`, toBase64(data));
         b.files = b.files.filter(f => f && f.day !== day);
         b.files.push({ day, path, pets: root.pets.length });
@@ -3744,6 +3879,7 @@ async function restoreBackup(day) {
     }
     sleepInstant();
     root.pets = data.pets;
+    if (data.duets && typeof data.duets === 'object') root.duets = data.duets;   // 0.10.8 (older backups have none: keep today's)
     migrate(root);
     const ok = await saveNow();
     refreshBed();
@@ -5969,6 +6105,7 @@ async function deletePet(id) {
     if (!(await confirmBox(`${josa(pet.name, '과', '와')} 작별할까요? 함께한 기록도 모두 사라져요. 되돌릴 수 없어요.`))) return;
     for (const a of [...actors]) if (a.rec === pet) { a.onGone = null; a.vanish(); }
     root.pets.splice(i, 1);
+    for (const k of Object.keys(root.duets || {})) if (k.split('+').includes(pet.id)) delete root.duets[k];   // 0.10.8: its talks with others
     const ok = await saveNow();
     // files only after the record is safely saved, and only ones nothing else uses (saved looks stay)
     if (ok) for (const f of petFiles(pet)) { if (!fileInUse(f)) deleteFile(f); }
@@ -6529,6 +6666,7 @@ function onWinClick(e) {
     const pc = t.closest('[data-pace]');
     if (pc) return setPace(pc.dataset.pace);
     if (act === 'aifill') return aiFill();
+    if (act === 'aiduet') return aiDuet(t.closest('[data-with]')?.dataset.with);
     if (act === 'adddate') return addDateRow();
     if (act === 'giftpick') return pickGift();
     if (act === 'giftok') return confirmGift(false);
@@ -7712,10 +7850,11 @@ function talkHtml(p) {
   <label class="tw-label">말하는 빈도
     <select data-t="freq">${Object.entries(TALK_FREQ).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
   </label>
-  <div class="tw-sub">순간마다 한 줄에 하나씩 적어요. 여러 줄이면 그때그때 하나를 골라 펫 머리 위 말풍선으로 말해요. <b>{{user}}</b>는 내 이름으로 바뀌어요. 한 줄은 ${LINE_MAX}자까지예요.</div>
+  <div class="tw-sub">순간마다 한 줄에 하나씩 적어요. 여러 줄이면 그때그때 하나를 골라 펫 머리 위 말풍선으로 말해요. <b>{{user}}</b>는 내 이름으로, <b>{{pet}}</b>은 말 거는 상대 펫 이름으로 바뀌어요. 한 줄은 ${LINE_MAX}자까지예요.</div>
   ${TALK_MOMENTS.map(m => `<label class="tw-label">${esc(m.name)}<textarea data-line="${m.key}" rows="2" placeholder="예) ${esc(m.ex)}"></textarea></label>`).join('')}
   <div class="tw-btn tw-wide" data-act="aifill"><i class="fa-solid fa-wand-magic-sparkles"></i> AI로 빈 칸 채우기</div>
   <div class="tw-sub">누를 때만 한 번 만들어요. AI에게는 펫 이름과 성격만 보내요. 마음에 안 드는 줄은 저장하기 전에 고치거나 지우면 돼요.</div>
+${duetHtml(p)}
 
   <div class="tw-cap">기념일</div>
   <label class="tw-check"><input type="checkbox" data-t="met"> 만난 날(${met[0]}월 ${met[1]}일)도 매년 축하하기</label>
@@ -7735,6 +7874,10 @@ function fillTalk(p) {
     box.querySelector('[data-t="met"]').checked = p.metOn !== false;
     for (const m of TALK_MOMENTS) box.querySelector(`[data-line="${m.key}"]`).value = (p.lines?.[m.key] || []).join('\n');
     box.querySelector('.tw-dates').innerHTML = (p.dates || []).map(dateRowHtml).join('');
+    for (const ta of box.querySelectorAll('[data-duet]')) {
+        const o = root.pets.find(x => x.id === ta.dataset.duet);
+        ta.value = o ? duetText(p, o) : '';
+    }
     win.talkBase = JSON.stringify(readTalk());
 }
 
@@ -7757,7 +7900,13 @@ function readTalk() {
         return { id: row.dataset.date, kind, md: `${pad2(m)}-${pad2(d)}`, msg: row.querySelector('[data-dmsg]').value.trim().slice(0, LINE_MAX) };
     });
     const freq = box.querySelector('[data-t="freq"]').value;
-    return { freq: TALK_FREQ[freq] ? freq : 'some', met: !!box.querySelector('[data-t="met"]').checked, lines, dates };
+    const duets = {};
+    const p = curPet();
+    for (const ta of box.querySelectorAll('[data-duet]')) {
+        const o = root.pets.find(x => x.id === ta.dataset.duet);
+        if (p && o) duets[o.id] = parseDuet(ta.value, p, o);
+    }
+    return { freq: TALK_FREQ[freq] ? freq : 'some', met: !!box.querySelector('[data-t="met"]').checked, lines, dates, duets };
 }
 
 function talkDirty() {
@@ -7772,12 +7921,18 @@ async function saveTalk() {
     if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 눌러 주세요.');
     if (!talkDirty()) return say('바뀐 게 없어요.');
     const box = win.body.querySelector('[data-pane="talk"]');
-    const long = TALK_MOMENTS.some(m => splitLines(box.querySelector(`[data-line="${m.key}"]`).value).some(x => x.length > LINE_MAX));
+    const long = TALK_MOMENTS.some(m => splitLines(box.querySelector(`[data-line="${m.key}"]`).value).some(x => x.length > LINE_MAX))
+        || [...box.querySelectorAll('[data-duet]')].some(ta => splitLines(ta.value).some(x => x.replace(/^[^:：]{1,24}[:：]\s*/, '').length > LINE_MAX));
     const v = readTalk();
     p.talkFreq = v.freq;
     p.metOn = v.met;
     p.lines = v.lines;
     p.dates = v.dates;
+    for (const [oid, list] of Object.entries(v.duets || {})) {       // 0.10.8: talks with pets in the same room
+        const k = duetKey(p.id, oid);
+        if (list.length) root.duets[k] = list; else delete root.duets[k];
+        duetDeck.delete(k);
+    }
     if (p.celebrated) for (const id of Object.keys(p.celebrated)) if (id !== 'met' && !v.dates.some(d => d.id === id)) delete p.celebrated[id];
     busy = true;
     try {
@@ -7796,6 +7951,112 @@ function addDateRow() {
     box.insertAdjacentHTML('beforeend', dateRowHtml({ id: 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind: 'me', md: `${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`, msg: '' }));
 }
 
+/* ---------- 0.10.8 대사 탭: talks with the other pets in the same room ---------- */
+
+/** Pets living in the same room as p. */
+function roommates(p) {
+    const h = p?.home;
+    if (!h) return [];
+    return root.pets.filter(o => o !== p && o.home && o.home.chatId === h.chatId && (o.home.integrity || '') === (h.integrity || ''));
+}
+
+/** The names written before each line (two pets of the same name get ① ②). */
+function duetLabels(p, o) {
+    const a = String(p.name || '펫'), b = String(o.name || '펫');
+    return a === b ? [a + '①', b + '②'] : [a, b];
+}
+
+function duetText(p, o) {
+    const [la, lb] = duetLabels(p, o);
+    return duetsOf(p.id, o.id).map(t => t.map(([id, line]) => `${id === p.id ? la : lb}: ${line}`).join('\n')).join('\n\n');
+}
+
+/** "이름: 말" lines, a blank line between talks. A line without a known name = the other one's turn. */
+function parseDuet(text, p, o) {
+    const [la, lb] = duetLabels(p, o);
+    const out = [];
+    for (const block of String(text || '').split(/\n\s*\n/)) {
+        const talk = [];
+        for (const raw of block.split('\n')) {
+            const s = raw.replace(/\s+/g, ' ').trim();
+            if (!s) continue;
+            const m = /^(.{1,24}?)\s*[:：]\s*(.*)$/.exec(s);
+            let id = null, line = s;
+            if (m && (m[1] === la || m[1] === lb)) { id = m[1] === la ? p.id : o.id; line = m[2].trim(); }
+            if (!id) id = talk.length ? (talk[talk.length - 1][0] === p.id ? o.id : p.id) : p.id;
+            line = line.slice(0, LINE_MAX);
+            if (line && talk.length < DUET_LINES) talk.push([id, line]);
+        }
+        if (talk.length) out.push(talk);
+        if (out.length >= DUET_MAX) break;
+    }
+    return out;
+}
+
+function duetHtml(p) {
+    const others = roommates(p);
+    if (!others.length) return '';
+    return `<div class="tw-cap">다른 펫과 나누는 대화</div>
+  <div class="tw-sub">같은 방 펫과 가까이 마주치거나 부딪히면, 위의 "말 걸 때 / 말 걸어 오면" 한 마디나 여기 적은 대화 중 하나를 주고받아요. 한 줄에 <b>이름: 말</b>, 대화 사이는 빈 줄이에요. 대화 하나는 ${DUET_LINES}줄까지, ${DUET_MAX}개까지 모여요. 다 쓰면 다시 섞어서 써요. 둘 중 하나라도 말하는 빈도가 "끔"이면 이 대화는 안 해요.</div>
+  ${others.map(o => { const [la, lb] = duetLabels(p, o); return `<label class="tw-label">${esc(josa(o.name, '과', '와'))}<textarea data-duet="${esc(o.id)}" rows="6" placeholder="${esc(`${la}: 또 자?\n${lb}: …응\n${la}: 나도 옆에서 잘래`)}"></textarea></label>
+  <div class="tw-btn tw-btn-small" data-act="aiduet" data-with="${esc(o.id)}"><i class="fa-solid fa-wand-magic-sparkles"></i> AI로 ${DUET_ADD}개 더 만들기</div>`; }).join('\n  ')}
+  <div class="tw-sub">누를 때만 한 번 만들어 아래에 붙여요. AI에게는 두 펫의 이름과 성격만 보내요. 저장을 눌러야 바뀌어요.</div>`;
+}
+
+async function aiDuet(oid) {
+    const p = curPet(), o = root.pets.find(x => x.id === oid);
+    if (!p || !o || busy) return;
+    const box = win.body.querySelector('[data-pane="talk"]');
+    const ta = box?.querySelector(`[data-duet="${CSS.escape(oid)}"]`);
+    const btn = box?.querySelector(`[data-act="aiduet"][data-with="${CSS.escape(oid)}"]`);
+    if (!ta || !btn) return;
+    const have = parseDuet(ta.value, p, o).length;
+    if (have >= DUET_MAX) return say(`대화는 ${DUET_MAX}개까지예요. 몇 개 지운 뒤 눌러 주세요.`);
+    const want = Math.min(DUET_ADD, DUET_MAX - have);
+    const label = btn.innerHTML;
+    busy = true;
+    btn.classList.add('tw-busy');
+    btn.textContent = '만드는 중…';
+    say('');
+    try {
+        const kp = p.personality?.base, ko = o.personality?.base;
+        const system = 'You write very short dialogues between two tiny pets that live on a chat app screen. Answer with JSON only, no other text.';
+        const user = [
+            `펫 A: ${p.name} — 성격 ${persName(p)} (${PERS_DESC[kp] || ''})`,
+            `펫 B: ${o.name} — 성격 ${persName(o)} (${PERS_DESC[ko] || ''})`,
+            '두 펫은 채팅 앱 화면에 같이 사는 작은 동반자예요. 화면에서 마주쳤을 때 나눌 짧은 한국어 대화를 써 주세요.',
+            `- 대화 ${want}개, 하나는 2~${DUET_LINES}줄, A와 B가 번갈아 말하기 (누가 먼저든 괜찮아요)`,
+            '- 한 줄은 25자 안쪽, 반말, 두 펫의 성격이 잘 드러나게, 대화마다 다른 이야기',
+            '- 이모지는 가끔만',
+            '- 화면 앞의 사람을 부를 때는 {{user}}라고 쓰기',
+            'JSON으로만 답하기. 예: {"talks": [[["A", "…"], ["B", "…"]], [["B", "…"], ["A", "…"], ["B", "…"]]]}',
+        ].join('\n');
+        const { text, fellBack } = await askAI(system, user);
+        if (curPet() !== p || !ta.isConnected) return;
+        const raw = looseJson(text)?.talks;
+        const [la, lb] = duetLabels(p, o);
+        const clean = (x) => String(x ?? '').replace(/\s+/g, ' ').trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').slice(0, LINE_MAX);
+        const add = [];
+        for (const t of Array.isArray(raw) ? raw : []) {
+            if (!Array.isArray(t)) continue;
+            const lines = t.filter(l => Array.isArray(l) && /^[AB]$/i.test(String(l[0]).trim()) && clean(l[1]))
+                .slice(0, DUET_LINES).map(l => `${/^a$/i.test(String(l[0]).trim()) ? la : lb}: ${clean(l[1])}`);
+            if (lines.length >= 2) add.push(lines.join('\n'));
+            if (add.length >= want) break;
+        }
+        if (!add.length) return say('AI 답을 알아보지 못했어요. 한 번 더 눌러 보세요.');
+        ta.value = [ta.value.trim(), ...add].filter(Boolean).join('\n\n');
+        say(`대화 ${add.length}개를 붙였어요. 마음에 들면 저장을 눌러 주세요.${fellBack ? ' (고른 연결을 찾지 못해서 지금 연결로 만들었어요)' : ''}`);
+    } catch (e) {
+        console.error('[Tavvy] AI talks failed', e);
+        say('대화를 만들지 못했어요: ' + (e?.cause?.message || e?.message || e));
+    } finally {
+        busy = false;
+        btn.classList.remove('tw-busy');
+        btn.innerHTML = label;
+    }
+}
+
 /* ---------- AI: fill in the empty moments (only when the button is pressed) ---------- */
 
 const TALK_PROMPT_MOMENTS = {
@@ -7803,6 +8064,7 @@ const TALK_PROMPT_MOMENTS = {
     meal: '밥(채팅 메시지)을 다 먹었을 때', play: '혼자 놀고 있을 때', wait: '상대의 답을 기다릴 때',
     level: '사람과 한 단계 더 친해졌을 때', reunion: '며칠 만에 다시 만났을 때',
     reply: '상대(캐릭터)의 답이 막 도착했을 때', sent: '사람이 방금 메시지를 보냈을 때',
+    greet: '같은 방에 사는 다른 펫에게 먼저 말을 걸 때', answer: '다른 펫이 말을 걸어 와서 대답할 때',
 };
 
 /** Ask the chosen connection (or the current one). Returns the text of the answer. */
@@ -7850,6 +8112,7 @@ async function aiFill() {
             '- 한 줄은 25자 안쪽, 반말, 성격이 잘 드러나게',
             '- 이모지는 가끔만',
             '- 화면 앞의 사람을 부를 때는 {{user}}라고 쓰기',
+            ...(empty.some(m => m.key === 'greet' || m.key === 'answer') ? ['- 다른 펫을 부를 때는 {{pet}}이라고 쓰기'] : []),
             '순간:',
             ...empty.map(m => `${m.key}: ${TALK_PROMPT_MOMENTS[m.key]}`),
             `JSON으로만 답하기. 예: {"${empty[0].key}": ["…", "…", "…"]}`,
@@ -7969,8 +8232,8 @@ function onReady() {
     const seeHand = (e) => { if (!actors.length) return; hand.x = e.clientX; hand.y = e.clientY; hand.t = performance.now(); };
     document.addEventListener('pointermove', seeHand, { capture: true, passive: true });
     document.addEventListener('pointerdown', seeHand, { capture: true, passive: true });
-    document.addEventListener('pointerdown', sndOnTouch, { capture: true, passive: true });
-    document.addEventListener('keydown', sndOnTouch, { capture: true, passive: true });
+    // 0.10.8: phones count a touch when the finger lifts (pointerup / touchend / click), not when it lands
+    for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) document.addEventListener(ev, sndOnTouch, { capture: true, passive: true });
     // 0.9.3 졸졸 따라다니기: a short tap anywhere (not on a pet / the bed / the Tavvy window, not a scroll)
     const taps = new Map();
     const notMine = (t) => !t?.closest?.('.tavvy-pet, #tavvy-bed, #tavvy-win, .tavvy-bubble');
