@@ -859,8 +859,35 @@ function roleKeyOf(look, list) {
 
 /** {{user}} → your name. */
 function fillUser(text) {
-    const me = ctx().name1 || '나';
-    return String(text || '').replace(/\{\{user\}\}/gi, me).trim();
+    return fillName(text, 'user', ctx().name1 || '나').trim();
+}
+
+/* 0.10.10 이름 뒤 조사 맞추기: 적힌 조사가 받침과 안 맞으면 바꿈. [받침 있을 때, 없을 때] */
+const JOSA_PAIRS = [['이라도', '라도'], ['이에요', '예요'], ['이랑', '랑'], ['이나', '나'], ['이야', '야'], ['으로', '로'],
+    ['은', '는'], ['이', '가'], ['을', '를'], ['과', '와'], ['아', '야']];
+const JOSA_OF = {};   // 적힌 조사 → 짝 (앞에 있는 짝이 우선: '야'는 부르는 말 '아/야'로)
+for (const pr of JOSA_PAIRS.slice().reverse()) for (const w of pr) JOSA_OF[w] = pr;
+const JOSA_RE = new RegExp(`^(${Object.keys(JOSA_OF).sort((a, b) => b.length - a.length).join('|')})`);
+JOSA_OF['야'] = ['아', '야'];
+
+/** {{tag}} → name, and fix the particle right after it to match the name's last syllable. */
+function fillName(text, tag, name) {
+    const parts = String(text || '').split(new RegExp(`\\{\\{${tag}\\}\\}`, 'i'));
+    const c = name ? name.charCodeAt(name.length - 1) : 0;
+    const hangul = c >= 0xAC00 && c <= 0xD7A3;   // 영어·숫자로 끝나는 이름은 적힌 그대로
+    const jong = hangul ? (c - 0xAC00) % 28 : 0;
+    let out = parts[0];
+    for (let i = 1; i < parts.length; i++) {
+        let rest = parts[i];
+        const j = hangul && rest.match(JOSA_RE)?.[1];
+        if (j) {
+            const pr = JOSA_OF[j];
+            const want = pr[0] === '으로' ? (jong && jong !== 8 ? '으로' : '로') : pr[jong ? 0 : 1];
+            rest = want + rest.slice(j.length);
+        }
+        out += name + rest;
+    }
+    return out;
 }
 
 function petFiles(pet) {
@@ -3556,7 +3583,7 @@ function duetPick(a, b) {
 
 const talkFreqOf = (a) => TALK_FREQ[a.rec.talkFreq] ? a.rec.talkFreq : 'some';
 const linesOf = (a, m) => (a.rec.lines?.[m] || []).filter(x => typeof x === 'string' && x.trim());
-const fillPet = (text, other) => String(text || '').replace(/\{\{pet\}\}/gi, other?.rec?.name || '');
+const fillPet = (text, other) => fillName(text, 'pet', other?.rec?.name || '');
 const duetAlive = (x) => actors.includes(x) && !x.gone && !x.held;
 
 /** No words back: the personality's reaction (the same as after a bump). */
@@ -8050,7 +8077,7 @@ function talkHtml(p) {
   <label class="tw-label">말하는 빈도
     <select data-t="freq">${Object.entries(TALK_FREQ).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
   </label>
-  <div class="tw-sub">순간마다 한 줄에 하나씩 적어요. 여러 줄이면 그때그때 하나를 골라 펫 머리 위 말풍선으로 말해요. <b>{{user}}</b>는 내 이름으로, <b>{{pet}}</b>은 말 거는 상대 펫 이름으로 바뀌어요. 한 줄은 ${LINE_MAX}자까지예요.</div>
+  <div class="tw-sub">순간마다 한 줄에 하나씩 적어요. 여러 줄이면 그때그때 하나를 골라 펫 머리 위 말풍선으로 말해요. <b>{{user}}</b>는 내 이름으로, <b>{{pet}}</b>은 말 거는 상대 펫 이름으로 바뀌어요. 바로 뒤 조사(은/는·이/가 등)는 이름에 맞게 저절로 바뀌어요. 한 줄은 ${LINE_MAX}자까지예요.</div>
   ${TALK_MOMENTS.map(m => `<label class="tw-label">${esc(m.name)}<textarea data-line="${m.key}" rows="2" placeholder="예) ${esc(m.ex)}"></textarea></label>`).join('')}
   <div class="tw-btn tw-wide" data-act="aifill"><i class="fa-solid fa-wand-magic-sparkles"></i> AI로 빈 칸 채우기</div>
   <div class="tw-sub">누를 때만 한 번 만들어요. AI에게는 펫 이름과 성격만 보내요. 마음에 안 드는 줄은 저장하기 전에 고치거나 지우면 돼요.</div>
