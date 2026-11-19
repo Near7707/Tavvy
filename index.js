@@ -112,8 +112,8 @@ const WATCH_MIN_CHARS = 150;    // a reply this long is worth climbing up to loo
 const LONG_WAIT = 20;           // s — a reply taking this long makes everyone glance at the chat more ("?")
 const LATE_WAIT = 60;           // s — 0.10.6: still not a word of the reply after this long → "답이 늦어질 때" line (once per reply)
 const BUMP_DIST = 0.42;         // × (sum of both widths) — how close two pets get before they bump
-const BUMP_CHANCE = 0.05;       // the rest just walk past each other
-const BUMP_REST = 300;          // seconds — after a bump, the same two pets just pass each other for this long
+const BUMP_CHANCE = 0.15;       // × 빈도 (부딪히기, the lower of the two) — the rest just walk past each other (0.10.9: was 0.05)
+const BUMP_REST = 120;          // seconds — after a bump, the same two pets just pass each other for this long (0.10.9: was 300)
 
 // food (stage 4)
 const COUNT_TYPES = ['normal', 'command', '', undefined];   // new replies / command messages count; regenerate, swipe, continue… don't
@@ -330,8 +330,11 @@ const DUET_MAX = 30;             // talks kept per two pets
 const DUET_LINES = 4;            // lines in one talk
 const DUET_ADD = 10;             // talks the AI writes per press
 const DUET_STEP = 1.3;           // s between two lines of a talk
-const MEET_DIST = 0.9;           // × (sum of both widths) — close enough to talk
-const MEET_REST = 120;           // s — the same two pets don't talk again sooner than this
+const MEET_DIST = 1.2;           // × (sum of both widths) — close enough to talk (0.10.9: was 0.9)
+const MEET_REST = 60;            // s — the same two pets don't talk again sooner than this
+const VISIT_P = 0.06;            // × 빈도 — each "what next?"; missed (not on the same floor) → it tries again at the next ones
+const VISIT_TO = ['idle', 'fidget', 'look', 'perch', 'read', 'walk'];   // what the other one may be doing
+const VISIT_WAIT = 8;            // s the other one stays put while it comes over
 const PERS_DESC = {
     aegyo: '애교 많고 다정해요', saechim: '새침하고 쑥스러움을 잘 타요', neugut: '느긋하고 늘 졸려요',
     simsul: '툴툴대지만 속은 다정해요', musim: '말수가 적고 무심해요',
@@ -406,6 +409,7 @@ function newPetRecord({ id, name, personality, look }) {
         today: { day: null, eaten: 0, full: false },
         lastVisit: now,
         journal: { talkDays: 0, lastTalkDay: null, moments: [] },
+        places: [],                                   // 0.10.9 함께한 곳: [{ id, name, grp, from, to, n, memo, at: { chatId, integrity } | null, hide? }]
     };
 }
 
@@ -983,6 +987,8 @@ const BASIC_ACTS = [
     { key: 'peek',   name: '빼꼼 숨기' },
     { key: 'roll',   name: '구르기' },
     { key: 'me',     name: '나 보며 반응' },
+    { key: 'visit',  name: '말 걸러 가기', many: true },   // 0.10.9: walks over to another pet to talk
+    { key: 'bump',   name: '부딪히기', many: true },       // 0.10.9: was always rare
 ];
 // 0.8.0: the personality is a preset — how often each thing happens and which reaction shows can be set freely.
 const FREQS = [['off', '끔'], ['rare', '드물게'], ['norm', '보통'], ['often', '자주']];
@@ -1809,6 +1815,12 @@ class Actor {
         if (go.k === 'hide') { this.setState('hide'); this.hd = { s: go.s, E: go.E, x0: this.x, wait: 0.6 + rand(1.2, 2.4), f: 0 }; return; }
         if (go.k === 'where') return this.setState('where');
         if (go.k === 'stare') return this.setState('stare');
+        if (go.k === 'visit') {                                      // 0.10.9 말 걸러 가기: there — say something if still close
+            this.setState('idle');
+            const b = go.who;
+            if (duetAlive(b) && b.plat === this.plat && Math.abs(b.x - this.x) <= (this.w + b.w) * 1.6) startDuet(this, b, 'visit');
+            return;
+        }
         this.setState('idle');
     }
 
@@ -1820,6 +1832,33 @@ class Actor {
         if (Math.abs(tx - this.x) <= 20) return this.arrive({ k: 'where' });
         this.walkTo(tx);
         this.go = { k: 'where' };
+    }
+
+    /** 0.10.9 말 걸러 가기: walk over to another pet on the same floor / ledge that it has something to say to. */
+    startVisit() {
+        if (duetOn) return false;
+        const now = performance.now();
+        const ok = (b) => b !== this && duetAlive(b) && !b.air && b.plat === this.plat && VISIT_TO.includes(b.state)
+            && now - (metAt.get(duetKey(this.rec.id, b.rec.id)) ?? -1e9) >= MEET_REST * 1000 && duetCan(this, b);
+        const others = actors.filter(ok);
+        if (!others.length) {                                        // on another floor / ledge: get over there first
+            const far = actors.filter(b => b !== this && duetAlive(b) && !b.air && b.plat !== this.plat && VISIT_TO.includes(b.state)
+                && now - (metAt.get(duetKey(this.rec.id, b.rec.id)) ?? -1e9) >= MEET_REST * 1000 && duetCan(this, b));
+            if (!far.length || !this.free()) return false;
+            if (this.plat && far.some(b => !b.plat)) { this.hopOff(); return 'near'; }      // it is down on the floor: hop off
+            const up = far.map(b => b.plat && plats.find(q => q.el === b.plat)).find(q => q && this.reachable().includes(q));
+            if (up && this.climbTo(up, 'idle')) return 'near';                              // up on a message it can reach
+            return false;
+        }
+        const b = others[Math.floor(Math.random() * others.length)];
+        const [L, R] = this.range();
+        const side = this.x <= b.x ? -1 : 1;                         // stop on this side of it
+        const tx = clamp(b.x + side * (this.w + b.w) * 0.6, L, Math.max(L, R));
+        b.chatTill = Math.max(b.chatTill || 0, now + VISIT_WAIT * 1000);   // it stays put a moment
+        if (Math.abs(tx - this.x) <= 12) { this.arrive({ k: 'visit', who: b }); return 'go'; }
+        this.walkTo(tx);
+        this.go = { k: 'visit', who: b };
+        return 'go';
     }
 
     /** 글 쓰면 빤히: over to the input box to watch you write. */
@@ -2185,6 +2224,10 @@ class Actor {
         if (this.food > 0) return this.setState('eat');
         if (this.levelPending()) return this.startCheer();          // e.g. a pat tipped it over
         if (this.chatTill && performance.now() < this.chatTill) return this.setState('idle');   // 0.10.8: talking with another pet
+        if (this.wantTalk && !gen.active && fr(this, 'visit') > 0) {                // 0.10.9 말 걸러 가기: still wants to — before anything else
+            const v = this.startVisit();
+            if (v) { this.wantTalk = v === 'near'; return; }
+        }
         if (this.afterMeal) { const el = this.afterMeal; this.afterMeal = null; if (el.isConnected && !this.waiting) { this.watchReply(el); if (this.state !== 'idle') return; } }
         if (gen.active && this.waiting) return this.setState('wait');
         const fresh = (this.rec.gifts || []).find(g => g?.fresh && typeof g.src === 'string');
@@ -2208,6 +2251,11 @@ class Actor {
                 if ((k === 'roll' || k === 'toss') && this.plat) continue;
                 if (Math.random() < chance(this, key, PRESENT_P[key])) return void this.startToy(k);
             }
+        }
+        if (!gen.active && !this.wantTalk && Math.random() < chance(this, 'visit', VISIT_P)) {                             // 0.10.9 말 걸러 가기
+            const v = this.startVisit();
+            if (v) { this.wantTalk = v === 'near'; return; }          // 'near' = on its way to the other one's floor / ledge first
+            if (actors.length > 1) this.wantTalk = true;              // nobody to go to now (asleep…) → it tries first thing next time
         }
         if (this.plat && Math.random() < chance(this, 'read', READ_ON) && this.startRead()) return;                        // 글 읽는 척
         if (!this.plat && ledgesOn() && Math.random() < chance(this, 'read', READ_CLIMB)) {
@@ -2597,12 +2645,10 @@ class Actor {
                     } else if (this.t < 2.4) {
                         if (!b.shown) { b.shown = true; showGift(this, b.item); fx(this, '♥'); }
                         pose = this.role('gift', 'happy', 'idle');
-                        this.tiltT = 0;
-                        this.scale += (1.18 - this.scale) * Math.min(1, dt * 6);   // leans out toward you
+                        this.tiltT = 0;                                  // 0.10.9: no more growing bigger — just holds it out
                     } else {
-                        this.scale += (1 - this.scale) * Math.min(1, dt * 6);
                         pose = this.role('happy', 'idle');
-                        if (this.t > 2.9) { this.scale = 1; this.setState('idle'); }
+                        if (this.t > 2.9) this.setState('idle');
                     }
                     break;
                 }
@@ -3469,11 +3515,11 @@ function bumpCheck() {
             if (!into(a, b) && !into(b, a)) continue;
             const last = a.bumpedAt.get(b);
             const resting = last !== undefined && (performance.now() - last) / 1000 < BUMP_REST;
-            if (resting || Math.random() >= BUMP_CHANCE) { a.passing.add(b); b.passing.add(a); continue; }
+            if (resting || Math.random() >= BUMP_CHANCE * Math.min(fr(a, 'bump'), fr(b, 'bump'))) { a.passing.add(b); b.passing.add(a); continue; }
             const d = a.x < b.x ? -1 : a.x > b.x ? 1 : (Math.random() < 0.5 ? -1 : 1);
             a.bump(d, b); b.bump(-d, a);
             const t = performance.now(); a.bumpedAt.set(b, t); b.bumpedAt.set(a, t);
-            setTimeout(() => startDuet(a, b, true), 2400);      // 0.10.8: a word after the bump (once they have landed and reacted)
+            setTimeout(() => startDuet(a, b, 'bump'), 2400);      // 0.10.8: a word after the bump (once they have landed and reacted)
             a.passing.add(b); b.passing.add(a);    // no second bump until they have parted
         }
     }
@@ -3484,6 +3530,7 @@ let duetOn = null;                       // the talk going on now (one at a time
 const duetDeck = new Map();              // 'idA+idB' → talks not used yet this time round (indices)
 const metAt = new Map();                 // 'idA+idB' → when they last talked
 const meetSeen = new Set();              // pairs already rolled for this meeting (until they part)
+const MEET_CALM = ['idle', 'perch', 'fidget', 'look', 'read'];   // 0.10.9: also while humming / looking about / sitting
 
 const duetKey = (a, b) => [a, b].sort().join('+');
 
@@ -3521,20 +3568,28 @@ function duetReact(x, other) {
     x.startLook(k, other.x);
 }
 
-/** Start a talk between a and b. bump = right after bumping (no dice roll, no reaction twice). */
-function startDuet(a, b, bump = false) {
+/** Is there anything for a and b to say (lines or talks, and neither on 끔 when it matters)? */
+function duetCan(a, b) {
+    const fa = talkFreqOf(a), fb = talkFreqOf(b);
+    if (fa !== 'off' && fb !== 'off' && duetsOf(a.rec.id, b.rec.id).length) return true;
+    return (fa !== 'off' && linesOf(a, 'greet').length > 0) || (fb !== 'off' && linesOf(b, 'greet').length > 0);
+}
+
+/** Start a talk between a and b. how: 'bump' (right after a bump: no dice, no second reaction) / 'visit' (came over to talk: no dice) / '' (met). */
+function startDuet(a, b, how = '') {
+    const bump = how === 'bump';
     if (duetOn || !duetAlive(a) || !duetAlive(b) || a.plat !== b.plat) return false;
     const k = duetKey(a.rec.id, b.rec.id);
     const now = performance.now();
-    if (!bump && now - (metAt.get(k) ?? -1e9) < MEET_REST * 1000) return false;
-    const [i, r] = Math.random() < 0.5 ? [a, b] : [b, a];
+    if (!how && now - (metAt.get(k) ?? -1e9) < MEET_REST * 1000) return false;
+    const [i, r] = how === 'visit' || Math.random() < 0.5 ? [a, b] : [b, a];   // the one who came over speaks first
     const fi = talkFreqOf(i), fr = talkFreqOf(r);
     const talks = fi !== 'off' && fr !== 'off' && duetsOf(a.rec.id, b.rec.id).length;
     let first = i, second = r;
     let greet = fi !== 'off' && linesOf(i, 'greet').length;
     if (!greet && !talks && fr !== 'off' && linesOf(r, 'greet').length) { first = r; second = i; greet = true; }   // the other one starts
     if (!greet && !talks) return false;
-    if (!bump && Math.random() >= TALK_CHANCE[talkFreqOf(first)]) { metAt.set(k, now); return false; }
+    if (!how && Math.random() >= TALK_CHANCE[talkFreqOf(first)]) { metAt.set(k, now); return false; }
     let script;
     if (talks && (!greet || Math.random() < 0.5)) {
         const t = duetPick(a.rec.id, b.rec.id);
@@ -3546,6 +3601,7 @@ function startDuet(a, b, bump = false) {
         else if (!bump) script.push([second, null]);               // no words → a look / "…"
     }
     metAt.set(k, now);
+    a.wantTalk = b.wantTalk = false;
     const till = now + (script.length * DUET_STEP + 1.5) * 1000;
     for (const [x, y] of [[a, b], [b, a]]) {
         x.chatTill = till;
@@ -3567,7 +3623,7 @@ function startDuet(a, b, bump = false) {
 /** Two pets resting near each other on the same floor / ledge → maybe a talk (once per meeting). */
 function meetCheck() {
     if (duetOn) return;
-    const calm = (x) => !x.held && !x.air && !x.gone && (x.state === 'idle' || x.state === 'perch') && !(gen.active && x.waiting);
+    const calm = (x) => !x.held && !x.air && !x.gone && MEET_CALM.includes(x.state) && !(gen.active && x.waiting);
     for (let i = 0; i < actors.length; i++) {
         for (let j = i + 1; j < actors.length; j++) {
             const a = actors[i], b = actors[j];
@@ -3624,6 +3680,8 @@ function takeBowl(rec) {
     const take = { me: b.me || 0, them: b.them || 0, tokens: b.tokens || 0 };
     take.n = take.me + take.them;
     if (!take.n && !take.tokens) return take;
+    const pl = notePlace(rec);                                          // 0.10.9 함께한 곳: messages eaten at this home
+    if (pl) pl.n = (pl.n || 0) + take.n;
     e.me = (e.me || 0) + take.me; e.them = (e.them || 0) + take.them; e.tokens = (e.tokens || 0) + take.tokens;
     b.me = 0; b.them = 0; b.tokens = 0;
     const t = rollToday(rec);
@@ -4487,7 +4545,7 @@ async function onChatChanged() {
         for (const p of root.pets) {
             const res = checkHome(p, room);
             if (res.changed) changed = true;
-            if (res.here) { prevVisit.set(p.id, p.lastVisit); p.lastVisit = now; }
+            if (res.here) { prevVisit.set(p.id, p.lastVisit); p.lastVisit = now; notePlace(p); }
         }
     }
     if (changed) await saveNow(); else if (residents().length) saveSoon();
@@ -4822,10 +4880,137 @@ function journalHtml(p) {
 <div class="tw-moments">${journalMoments(p).map(m => `<div><span>${esc(m.day)}</span><b>${esc(m.name)}</b></div>`).join('')}</div>`;
 }
 
+/* ---------- 0.10.9 함께한 곳: the homes a pet has lived in (기록 탭) — the character there, how long, messages eaten ---------- */
+const PLACE_MAX = 100;
+const PLACE_NAME = 30;
+const PLACE_MEMO = 100;
+
+/** Who lives in the chat open now: the character (or the group) name. */
+function roomCharName() {
+    const c = ctx();
+    if (c.groupId) {
+        const g = (c.groups || []).find(x => String(x.id) === String(c.groupId));
+        return { name: String(g?.name || '그룹 채팅').slice(0, PLACE_NAME), grp: true };
+    }
+    return { name: String(c.name2 || '').slice(0, PLACE_NAME), grp: false };
+}
+
+const sameAt = (a, b) => !!a && !!b && (a.integrity && b.integrity ? a.integrity === b.integrity : a.chatId === b.chatId);
+
+/** The pet's place for its home right now (made when it is home and has none yet). */
+function notePlace(p) {
+    if (!p?.home || !Array.isArray(p.places)) return null;
+    let pl = p.places.find(x => x.at && !x.to && sameAt(x.at, p.home));
+    if (pl) {
+        if (pl.at.chatId !== p.home.chatId) pl.at = { chatId: p.home.chatId, integrity: p.home.integrity || '' };   // renamed chat
+        return pl;
+    }
+    if (!room || !checkHome(p, room).here) return null;     // only while it is home (so the name is the right one)
+    const today = dayKey();
+    for (const x of p.places) if (x.at && !x.to) x.to = today;   // it moved: the old home ends today
+    const who = roomCharName();
+    pl = { id: 'pl' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name: who.name || '이름 없는 곳', grp: who.grp,
+        from: today, to: null, n: 0, memo: '', at: { chatId: p.home.chatId, integrity: p.home.integrity || '' } };
+    p.places.push(pl);
+    if (p.places.length > PLACE_MAX) p.places.splice(0, p.places.length - PLACE_MAX);
+    saveSoon();
+    return pl;
+}
+
+function placeDate(d) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d || '')) return '';
+    const [y, m, dd] = d.split('-').map(Number);
+    return `${y !== new Date().getFullYear() ? y + '년 ' : ''}${m}월 ${dd}일`;
+}
+
+function placeDays(from) {
+    const a = Date.parse(from + 'T00:00:00'), b = Date.parse(dayKey() + 'T00:00:00');
+    return Number.isFinite(a) && b >= a ? Math.round((b - a) / 864e5) + 1 : 0;
+}
+
+function placeCard(p, pl) {
+    const here = pl.at && !pl.to && sameAt(pl.at, p.home);
+    if (win.placeEdit === pl.id) return placeForm(pl);
+    const when = pl.to ? `${placeDate(pl.from)} ~ ${placeDate(pl.to)}` : pl.from ? `${placeDate(pl.from)}부터 · ${placeDays(pl.from)}일째` : '';
+    const bits = [when, pl.at || pl.n ? `먹은 메시지 ${pl.n || 0}` : ''].filter(Boolean).join(' · ');
+    return `<div class="tw-place${here ? ' tw-place-here' : ''}">
+  <div class="tw-place-top"><b>${esc(pl.name || '이름 없는 곳')}${pl.grp ? ' <small>(그룹)</small>' : ''}</b>${here ? '<span class="tw-place-tag">지금 집</span>' : ''}<span class="tw-place-edit" data-act="placeedit" data-pl="${esc(pl.id)}"><i class="fa-solid fa-pen"></i> 고치기</span></div>
+  ${bits ? `<div class="tw-sub">${esc(bits)}</div>` : ''}
+  ${pl.memo ? `<div class="tw-place-memo">${esc(pl.memo)}</div>` : ''}
+</div>`;
+}
+
+function placeForm(pl) {
+    const neu = !pl.id;
+    return `<div class="tw-place tw-place-form" data-plform="${esc(pl.id || 'new')}">
+  <label class="tw-label">이름 <input data-pf="name" maxlength="${PLACE_NAME}" value="${esc(pl.name || '')}" placeholder="캐릭터나 방 이름"></label>
+  <div class="tw-place-dates">
+    <label class="tw-label">처음 <input type="date" data-pf="from" value="${esc(pl.from || '')}"></label>
+    ${pl.at && !pl.to ? '' : `<label class="tw-label">마지막 <input type="date" data-pf="to" value="${esc(pl.to || '')}"></label>`}
+  </div>
+  ${pl.at && !pl.to ? '<div class="tw-sub">지금 사는 곳이라 마지막 날은 없어요(이사하면 그날로 적혀요).</div>' : ''}
+  <label class="tw-label">메모 <textarea data-pf="memo" rows="2" maxlength="${PLACE_MEMO}" placeholder="이곳에서 있었던 일">${esc(pl.memo || '')}</textarea></label>
+  <div class="tw-place-btns">
+    <div class="tw-btn tw-btn-main" data-act="placesave">저장</div>
+    ${neu ? '' : '<div class="tw-btn" data-act="placedel">빼기</div>'}
+    <div class="tw-btn" data-act="placecancel">취소</div>
+  </div>
+</div>`;
+}
+
+/** The 함께한 곳 list (not a live part: a form being filled in must not be redrawn under your fingers). */
+function drawPlaces() {
+    const box = win?.body.querySelector('[data-pane="journal"] .tw-places');
+    const p = curPet();
+    if (!box || !p) return;
+    notePlace(p);
+    const list = (p.places || []).filter(x => !x.hide).slice().sort((a, b) => (!a.to) - (!b.to) || String(b.to || b.from || '').localeCompare(String(a.to || a.from || '')));
+    list.sort((a, b) => ((!b.to && b.at) ? 1 : 0) - ((!a.to && a.at) ? 1 : 0));   // the home it lives in now first
+    box.innerHTML = `<div class="tw-cap">함께한 곳</div>
+  ${list.map(pl => placeCard(p, pl)).join('')}
+  ${win.placeEdit === 'new' ? placeForm({ name: '', from: '', to: '', memo: '' }) : '<div class="tw-btn tw-btn-small tw-wide" data-act="placeadd"><i class="fa-solid fa-plus"></i> 직접 넣기</div>'}
+  <div class="tw-sub">사는 방마다 자동으로 적혀요(0.10.9부터). 그 전 일은 직접 넣을 수 있어요. 펫 파일에는 안 담겨요.</div>`;
+}
+
+function placeAct(act, t) {
+    const p = curPet();
+    if (!p) return;
+    if (act === 'placeedit') { win.placeEdit = t.closest('[data-pl]')?.dataset.pl || null; return drawPlaces(); }
+    if (act === 'placeadd') { win.placeEdit = 'new'; return drawPlaces(); }
+    if (act === 'placecancel') { win.placeEdit = null; return drawPlaces(); }
+    if (readOnly) return say(readOnlyReason);
+    const form = t.closest('[data-plform]');
+    const id = form?.dataset.plform;
+    if (!form) return;
+    const pl = id === 'new' ? null : (p.places || []).find(x => x.id === id);
+    if (act === 'placedel') {
+        if (!pl) return;
+        if (pl.at && !pl.to && sameAt(pl.at, p.home)) pl.hide = true;    // the home it lives in now: hidden (else it would come right back)
+        else p.places = p.places.filter(x => x !== pl);
+    } else if (act === 'placesave') {
+        const v = (k) => form.querySelector(`[data-pf="${k}"]`)?.value || '';
+        const okDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : '';
+        let from = okDay(v('from')), to = okDay(v('to'));
+        if (from && to && to < from) [from, to] = [to, from];
+        const data = { name: v('name').replace(/\s+/g, ' ').trim().slice(0, PLACE_NAME) || '이름 없는 곳', memo: v('memo').trim().slice(0, PLACE_MEMO), from };
+        if (pl) Object.assign(pl, data, pl.at && !pl.to ? {} : { to: to || null });
+        else {
+            p.places ??= [];
+            p.places.push({ id: 'pl' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), ...data, to: to || null, n: 0, grp: false, at: null });
+        }
+    }
+    win.placeEdit = null;
+    saveSoon();
+    drawPlaces();
+}
+
 /** One behaviour in the 행동 tab: 끔 / 드물게 / 보통 / 자주 (or just 끔 / 켬). */
 function freqRow(p, u) {
     const off = MOVES[u.key] ? !movesOf(p).includes(u.key) : isAtt(u.key) ? !FREQ_X[p.freq?.[u.key]] : isOff(p, u.key);
     const cur = off ? 'off' : (FREQ_X[p.freq?.[u.key]] ? p.freq[u.key] : isPres(u.key) ? 'rare' : 'norm');
+    if (u.many && !roommates(p).length) {                          // 0.10.9: needs another pet in the same room
+        return `<div class="tw-frow tw-frow-off"><span class="tw-fname">${esc(u.name)}</span><span class="tw-sub">같은 방에 펫이 둘 이상이면 해요</span></div>`;
+    }
     if (u.needs && !p.look?.roles?.[u.needs]?.length) {         // 앉기 without a 앉기 picture
         return `<div class="tw-frow tw-frow-off"><span class="tw-fname">${esc(u.name)}</span><span class="tw-sub">${esc(ROLE_DEFS[u.needs]?.name || u.name)} 그림을 넣으면 해요</span></div>`;
     }
@@ -5165,6 +5350,7 @@ function show(view, opts = {}) {
     win.roleEdit = null;
     win.sheet = null;
     win.giftPend = null;
+    win.placeEdit = null;
     stopPreview();
     closeCutter();
     const back = view !== 'home';
@@ -5267,7 +5453,7 @@ function petHtml(p) {
   <div class="tw-tab" data-tab="talk">대사</div>
   <div class="tw-tab" data-tab="gifts">선물</div>
 </div>
-<div class="tw-pane" data-pane="journal" data-live="journal"></div>
+<div class="tw-pane" data-pane="journal"><div data-live="journal"></div><div class="tw-places"></div></div>
 <div class="tw-pane" data-pane="acts" data-live="acts"></div>
 <div class="tw-pane" data-pane="roles"></div>
 <div class="tw-pane" data-pane="talk">${talkHtml(p)}</div>
@@ -5396,6 +5582,7 @@ function showTab(tab) {
     win.body.querySelectorAll('.tw-pane').forEach(pn => { pn.hidden = pn.dataset.pane !== tab; });
     if (tab === 'roles') drawRoles(); else stopPreview();
     if (tab === 'gifts') drawGifts();
+    if (tab === 'journal') drawPlaces();
     refreshWin();
 }
 
@@ -6290,6 +6477,7 @@ async function exportPetFile(id) {
         const pet = structuredClone(p);
         delete pet.home;                      // which room it lives in stays here (room names can hold names and dates)
         delete pet.bowl;                      // food waiting belongs to that room
+        delete pet.places;                    // 0.10.9 함께한 곳 stays here too (it remembers rooms)
         pet.sounds = {};                      // 0.10.6 내 소리: packed in too (a file that can't be read is left out)
         for (const [k] of SOUND_SLOTS) {
             const path = p.sounds?.[k];
@@ -6666,6 +6854,7 @@ function onWinClick(e) {
     const pc = t.closest('[data-pace]');
     if (pc) return setPace(pc.dataset.pace);
     if (act === 'aifill') return aiFill();
+    if (act?.startsWith?.('place')) return placeAct(act, t);
     if (act === 'aiduet') return aiDuet(t.closest('[data-with]')?.dataset.with);
     if (act === 'adddate') return addDateRow();
     if (act === 'giftpick') return pickGift();
@@ -7256,6 +7445,13 @@ async function confirmRolePend() {
         } catch (e) {
             return say('키를 맞추지 못했어요: ' + (e.message || e));
         }
+        if (pend.fit) {                                                  // 0.10.9: remember the size picked (shown again in 다시 맞추기)
+            const opts = pend.pet.look.roleOpts ??= {};
+            const o = { ...(opts[pend.key] || {}) };
+            const pct = Math.round((pend.fit.scale || 1) * 100);
+            if (pend.fit.mode === 'off' || pct === 100) delete o.fitPct; else o.fitPct = pct;
+            if (Object.keys(o).length) opts[pend.key] = o; else delete opts[pend.key];
+        }
         await putRoleFrames(pend.pet, pend.key, imgs, pend.skipped);
     } finally {
         busy = false;
@@ -7607,12 +7803,12 @@ const fitMatches = (F) => F.mode === 'fit' || (F.mode === 'auto' && fitRef(F).d 
 function fitKOf(F) {
     const { i } = fitRef(F);
     if (F.mode === 'off' || i < 0) return 0;
-    const k = fitMatches(F) ? F.base.box.sh / F.boxes[i].sh : F.cur[i];
-    return k * (F.scale || 1);
+    if (fitMatches(F)) return F.base.box.sh / F.boxes[i].sh * (F.scale || 1);
+    return F.cur[i] * (F.scale || 1) / (F.prev || 1);        // 0.10.9: already at prev (e.g. 105%) → only the difference
 }
 
 /** Nothing would change: plain pictures kept at the size they already show at. */
-const fitIdle = (F) => !fitKOf(F) || (!fitMatches(F) && (F.scale || 1) === 1 && F.cur.every((k, i) => Math.abs(k - Math.min(F.base.w / F.imgs[i].w, F.base.h / F.imgs[i].h)) < 1e-6));
+const fitIdle = (F) => !fitKOf(F) || (!fitMatches(F) && (F.scale || 1) === (F.prev || 1) && F.cur.every((k, i) => Math.abs(k - Math.min(F.base.w / F.imgs[i].w, F.base.h / F.imgs[i].h)) < 1e-6));
 
 function fitHtml(F) {
     if (!F.base || !F.boxes) return F.boxes === undefined ? '<div class="tw-sub">크기 재는 중…</div>' : '';
@@ -7626,7 +7822,7 @@ function fitHtml(F) {
 <div class="tw-sub">${F.mode === 'off' ? '펫 칸에 맞춰 줄여 넣어요 (예전 방식).' : like || F.mode === 'fit' ? '그림 속 키가 기본 그림 속 키와 같아지게 맞춰요.' : '기본 그림과 모양이 달라서(누운 그림 등) 지금 보이는 크기에서 시작해요. 막대로 맞춰요.'}</div>`
         + (k > 0 ? `<div class="tw-fitprev"><img class="tw-fit-base" alt=""><img class="tw-fit-ref" alt=""></div>
 <div class="tw-row"><span class="tw-sub">크기</span><input type="range" min="30" max="200" step="5" value="${pct}" data-fitscale="1" class="tw-grow"><span class="tw-sub tw-fitpct">${pct}%</span></div>
-<div class="tw-sub">흐린 그림이 지금 기본 그림이에요.</div>` : '');
+<div class="tw-sub">흐린 그림이 지금 기본 그림이에요.${F.prev ? ' 크기를 여러 번 바꾸면 그림이 조금씩 흐려질 수 있어요.' : ''}</div>` : '');
 }
 
 /** The preview: the reference picture over the 기본 picture, standing on the same ground, at screen scale. */
@@ -7669,7 +7865,7 @@ function onFitInput(t, change) {
     if (t.dataset.fitmode != null) {
         if (!change) return;
         c.F.mode = ['auto', 'fit', 'off'].includes(t.value) ? t.value : 'auto';
-        c.F.scale = 1;
+        c.F.scale = c.F.prev || 1;
         return drawFit();
     }
     c.F.scale = clamp(Number(t.value) || 100, 30, 200) / 100;
@@ -7690,7 +7886,8 @@ async function openRefit() {
     const list = p?.look.roles[key];
     if (!list?.length || key === 'idle') return;
     win.rolePend = null; drawRolePend();
-    const F = { pet: p, key, imgs: [], mode: 'auto', scale: 1 };
+    const prev = clamp((Number(p.look.roleOpts?.[key]?.fitPct) || 100) / 100, 0.3, 2);   // 0.10.9: the size picked last time
+    const F = { pet: p, key, imgs: [], mode: 'auto', scale: prev, prev };
     win.refit = F;
     const box = win.body.querySelector('.tw-refit');
     if (box) box.hidden = false;
@@ -7752,6 +7949,9 @@ async function confirmRefit() {
         const ok = await changeRoles(p, (look) => {
             const cur = look.roles[F.key] || [];
             look.roles[F.key] = cur.map(f => { const j = olds.indexOf(f); return j >= 0 ? uploaded[j] : f; });
+            const o = { ...(look.roleOpts[F.key] || {}) };            // 0.10.9: remember the size picked (shown again next time)
+            if (F.mode === 'off' || Math.round((F.scale || 1) * 100) === 100) delete o.fitPct; else o.fitPct = Math.round(F.scale * 100);
+            look.roleOpts[F.key] = o;
         });
         say(ok ? '크기를 맞췄어요.' : '바꿨지만 저장이 늦어지고 있어요.');
     } catch (e) {
