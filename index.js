@@ -1140,6 +1140,10 @@ const SOUNDS = {
     heart: [0.16, (k) => sndTone(600, 0.14, { to: 1200, v: 0.4, k })],                                         // 뿅
     wake: [0.62, (k) => { sndTone(1046, 0.4, { v: 0.3, k }); sndTone(1568, 0.5, { v: 0.25, k, at: 0.12 }); }],   // 띠링
     sleep: [0.62, (k) => sndTone(600, 0.6, { to: 300, v: 0.2, k, atk: 0.05 })],                                // 스르르
+    reply: [0.7, (k) => {                                                                                      // 딩동 (0.10.7 답 도착)
+        sndTone(988, 0.35, { type: 'triangle', v: 0.3, k });
+        sndTone(784, 0.5, { type: 'triangle', v: 0.3, k, at: 0.18 });
+    }],
     cheer: [0.76, (k) => {                                                                                      // 빰빠밤
         sndTone(392, 0.12, { type: 'square', v: 0.1, k, lp: 2000 });
         sndTone(392, 0.12, { type: 'square', v: 0.1, k, lp: 2000, at: 0.14 });
@@ -1193,7 +1197,7 @@ function playSound(key, k = 1, test = false, rec = null) {
 
 /* ---------- 0.10.6 내 소리: a short file per pet and per sound (empty = the usual sound) ---------- */
 
-const SOUND_SLOTS = [['heart', '♥ 하트'], ['wake', '깨우기'], ['sleep', '재우기'], ['cheer', '축하']];
+const SOUND_SLOTS = [['heart', '♥ 하트'], ['wake', '깨우기'], ['sleep', '재우기'], ['cheer', '축하'], ['reply', '답 도착']];
 const SND_MAX_SEC = 3;
 const SND_MAX_BYTES = 2 * 1024 * 1024;
 const SND_ACCEPT = 'audio/mpeg,audio/wav,audio/x-wav,audio/ogg,audio/mp4,audio/x-m4a,audio/aac,.mp3,.wav,.ogg,.m4a';
@@ -4275,6 +4279,11 @@ function msgEl(id) {
 function onReplyReceived(id, type) {
     if (gen.active) onGenEnd();
     const eaters = COUNT_TYPES.includes(type) ? (onCounted(id) || []) : [];
+    if (['normal', undefined, '', 'regenerate', 'swipe', 'continue'].includes(type) && room) {     // 0.10.7 답 도착: asleep too
+        const rm = ctx().chat?.[id];
+        const pet = actors[0]?.rec || residents()[0];
+        if (pet && rm && !rm.is_user && !rm.is_system) playSound('reply', 1, false, pet);
+    }
     if (!actors.length || !['normal', undefined, '', 'regenerate', 'swipe'].includes(type)) return;
     const m = ctx().chat?.[id];
     if (!m || m.is_user) return;
@@ -5308,7 +5317,7 @@ function settingsHtml() {
   </label>
 
   <div class="tw-cap">소리</div>
-  <label class="tw-check"><input type="checkbox" data-s="soundOn"> 소리 켜기 (♥ · 깨우기 · 재우기 · 축하)</label>
+  <label class="tw-check"><input type="checkbox" data-s="soundOn"> 소리 켜기 (♥ · 깨우기 · 재우기 · 축하 · 답 도착)</label>
   <div class="tw-row"><span class="tw-sub">음량</span><input type="range" min="0" max="100" step="5" data-s="soundVol" class="tw-grow"><span class="tw-sub tw-volpct"></span></div>
   <div class="tw-sub">다른 탭을 보고 있을 땐 소리가 나지 않아요. 폰은 화면을 한 번 누른 뒤부터 나요.</div>
 
