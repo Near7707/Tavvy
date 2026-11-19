@@ -371,7 +371,10 @@ function defaultSettings() {
         heartMode: 'both',                     // closeness shown as 'both' (♥♥ 친구) / 'hearts' / 'name' / 'hide'
         winTheme: 'theme',                     // the Tavvy window: 'theme' (follow SillyTavern) / 'cream' / 'white' / 'night'
         talkProfile: '',                       // connection profile used to write speech lines with AI ('' = the current connection)
-        soundOn: false,                        // 0.10.5 소리 (off by default)
+        soundOn: false,                        // 0.10.5 소리 (off by default) — 0.10.11부터 펫 소리만 (♥·깨우기·재우기·축하)
+        replyOn: false,                        // 0.10.11 답 도착 알림 (따로 켜고 끔)
+        replyOff: [],                          // 0.10.11 답 도착 소리 중 끈 것 (기본 소리 key / 내 파일 id)
+        replyFiles: [],                        // 0.10.11 답 도착 내 소리 파일: [{ id, path, name }]
         soundVol: 60,                          // 0..100
         backup: { lastDay: null, files: [] },  // daily backups: [{ day, path, pets }]
     };
@@ -447,7 +450,11 @@ function splitFidget(p) {
 }
 
 function migrate(r) {
-    fillDefaults(r.settings ??= {}, defaultSettings());
+    r.settings ??= {};
+    if (r.settings.replyOn === undefined && r.settings.soundOn !== undefined) r.settings.replyOn = !!r.settings.soundOn;   // 0.10.11: 나누기 전에 켜 뒀으면 둘 다 켜짐
+    fillDefaults(r.settings, defaultSettings());
+    if (!Array.isArray(r.settings.replyOff)) r.settings.replyOff = [];
+    if (!Array.isArray(r.settings.replyFiles)) r.settings.replyFiles = [];
     for (const p of r.pets) {
         if (!p || typeof p !== 'object') continue;
         splitScreen(p);
@@ -1194,6 +1201,44 @@ const SOUNDS = {
     }],
 };
 
+// 0.10.11 답 도착 소리: 체크한 것만 답이 올 때마다 돌아가며. [key, 이름, 길이(초), play(k)]
+const REPLY_SOUNDS = [
+    ['dingdong', '딩동', 0.7, (k) => SOUNDS.reply[1](k)],
+    ['bell', '방울', 0.72, (k) => { sndTone(1318, 0.7, { v: 0.3, k }); sndTone(2637, 0.4, { v: 0.08, k }); }],
+    ['tok', '톡톡', 0.21, (k) => { sndTone(1200, 0.07, { v: 0.35, k }); sndTone(1200, 0.07, { v: 0.3, k, at: 0.12 }); }],
+    ['boing', '뽀롱', 0.32, (k) => { sndTone(500, 0.15, { to: 900, v: 0.35, k }); sndTone(900, 0.18, { to: 1400, v: 0.3, k, at: 0.12 }); }],
+    ['marimba', '마림바', 0.46, (k) => { sndTone(659, 0.22, { v: 0.4, k }); sndTone(523, 0.3, { v: 0.4, k, at: 0.14 }); }],
+    ['arrive', '도착', 0.37, (k) => { sndTone(1047, 0.1, { type: 'square', v: 0.08, k, lp: 1800 }); sndTone(1319, 0.25, { type: 'square', v: 0.08, k, lp: 1800, at: 0.1 }); }],
+    ['orgel', '오르골', 1.14, (k) => { sndTone(1568, 0.6, { v: 0.18, k }); sndTone(2093, 0.6, { v: 0.15, k, at: 0.16 }); sndTone(1760, 0.8, { v: 0.15, k, at: 0.32 }); }],
+    ['whistle', '휘파람', 0.56, (k) => { sndTone(900, 0.25, { to: 1300, v: 0.22, k, atk: 0.06 }); sndTone(1300, 0.3, { to: 1000, v: 0.22, k, atk: 0.03, at: 0.24 }); }],
+    ['bubble', '뾱', 0.11, (k) => sndTone(300, 0.09, { to: 1200, v: 0.4, k })],
+    ['letter', '편지 종', 1.02, (k) => {
+        sndTone(880, 0.6, { v: 0.25, k }); sndTone(1760, 0.3, { v: 0.06, k });
+        sndTone(660, 0.7, { v: 0.25, k, at: 0.3 }); sndTone(1320, 0.3, { v: 0.05, k, at: 0.3 });
+    }],
+    ['trill', '피리릭', 0.25, (k) => { [1568, 1760, 2093].forEach((f, i) => sndTone(f, 0.09, { type: 'square', v: 0.06, k, lp: 2400, at: i * 0.07 })); }],
+    ['sparkle', '반짝', 0.34, (k) => { [2093, 2637, 3136].forEach((f, i) => sndTone(f, 0.18, { v: 0.1, k, at: i * 0.07 })); }],
+];
+const REPLY_FILES_MAX = 10;
+let replyLast = '';
+
+/** One answer sound by id (built-in key or my file id): { id, len, play } or { id, path }. */
+function replyById(id) {
+    const b = REPLY_SOUNDS.find(x => x[0] === id);
+    if (b) return { id, len: b[2], play: b[3] };
+    const f = (root?.settings?.replyFiles || []).find(x => x?.id === id);
+    return f && typeof f.path === 'string' ? { id, path: f.path } : null;
+}
+
+/** The next answer sound: a checked one, not the same as last time when there are others. */
+function pickReply() {
+    const s = root?.settings || {}, off = Array.isArray(s.replyOff) ? s.replyOff : [];
+    const ids = [...REPLY_SOUNDS.map(x => x[0]), ...(s.replyFiles || []).map(x => x?.id)].filter(id => id && !off.includes(id));
+    const pool = ids.length > 1 ? ids.filter(id => id !== replyLast) : ids;
+    const r = pool.length ? replyById(pool[Math.floor(Math.random() * pool.length)]) : null;
+    return r || replyById('dingdong');     // 다 꺼 두면 딩동
+}
+
 function sndReady() {
     if (sndCtx?.state === 'closed') sndCtx = null;
     if (!sndCtx) {
@@ -1226,26 +1271,32 @@ function sndWake() {
 /** Phones only allow sound after a touch: get it ready then (only when sound is on). */
 function sndOnTouch() {
     sndTouched = true;
-    if (root?.settings?.soundOn && sndCtx?.state !== 'running') sndWake();
+    if ((root?.settings?.soundOn || root?.settings?.replyOn) && sndCtx?.state !== 'running') sndWake();
 }
 
-/** test = a try-out button (plays even when sound is off or the same sound just played). rec = the pet (its own sound file, if any). */
-function playSound(key, k = 1, test = false, rec = null) {
+/** test = a try-out button (plays even when sound is off or the same sound just played). rec = the pet (its own sound file, if any).
+ *  pick = which answer sound (settings ▶); none = the next one in turn. */
+function playSound(key, k = 1, test = false, rec = null, pick = null) {
     const s = root?.settings, def = SOUNDS[key];
     if (!def || !s || document.hidden) return;
-    if (!test && (!s.soundOn || !sndTouched)) return;
+    if (!test && (!(key === 'reply' ? s.replyOn : s.soundOn) || !sndTouched)) return;   // 0.10.11: 답 도착은 따로 켜고 끔
     const now = performance.now() / 1000;
     if (!test && (now < sndBusyTill || now - (sndLast[key] || -99) < SND_GAP)) return;   // one at a time
     if (test && sndCtx?.state !== 'running') sndWake();                 // try-out buttons are touches
     if (!sndReady()) return;
     sndOut.gain.value = clamp(Number(s.soundVol ?? 60), 0, 100) / 100 * 0.6;
     sndLast[key] = now;
-    const path = rec?.sounds?.[key];
+    let path = rec?.sounds?.[key], len = def[0], play = def[1];
+    if (key === 'reply' && typeof path !== 'string') {                  // 0.10.11: 그 펫의 내 소리가 없으면 설정의 답 도착 소리
+        const r = pick || pickReply();
+        replyLast = r.id;
+        if (r.path) path = r.path; else { len = r.len; play = r.play; }
+    }
     if (typeof path === 'string') {                                     // 0.10.6: the pet's own sound file
         sndBusyTill = now + SND_MAX_SEC;
         sndBuf(path).then((b) => {
             try {
-                if (!b) return def[1](k);                               // could not read it → the usual sound
+                if (!b) return SOUNDS[key][1](k);                       // could not read it → the usual sound
                 const src = sndCtx.createBufferSource(), g = sndCtx.createGain();
                 src.buffer = b; g.gain.value = k;
                 src.connect(g); g.connect(sndOut); src.start();
@@ -1254,8 +1305,8 @@ function playSound(key, k = 1, test = false, rec = null) {
         });
         return;
     }
-    sndBusyTill = now + def[0];
-    try { def[1](k); } catch { /* never let a sound break the pet */ }
+    sndBusyTill = now + len;
+    try { play(k); } catch { /* never let a sound break the pet */ }
 }
 
 /* ---------- 0.10.6 내 소리: a short file per pet and per sound (empty = the usual sound) ---------- */
@@ -4725,7 +4776,8 @@ function lookFiles(l) {
 /** Is this server file still used by a pet (other than `except`) or kept in the look library? */
 function fileInUse(path, except = null) {
     return (root?.pets || []).some(p => p !== except && petFiles(p).includes(path))
-        || (root?.looks || []).some(l => lookFiles(l).includes(path));
+        || (root?.looks || []).some(l => lookFiles(l).includes(path))
+        || (root?.settings?.replyFiles || []).some(f => f?.path === path);     // 0.10.11 답 도착 내 소리
 }
 
 /** Pets wearing this saved look. */
@@ -5549,26 +5601,97 @@ async function saveSoundChange(p, key, old, fresh) {
     if (old && !fileInUse(old)) deleteFile(old);
 }
 
+/** Check a picked sound file (kind, size, length) and upload it: { path, buf } or null (the reason is told with say). */
+async function sndLoad(file, base, say) {
+    const ext = sndExt(file.name, file.type);
+    if (!ext) return say('mp3 · wav · ogg · m4a 파일만 넣을 수 있어요.'), null;
+    if (file.size > SND_MAX_BYTES) return say('파일이 너무 커요. 짧은 효과음(3초까지)을 넣어 주세요.'), null;
+    if (!sndReady()) return say('이 브라우저에서는 소리를 쓸 수 없어요.'), null;
+    say('읽는 중…');
+    const bytes = await file.arrayBuffer();
+    let buf;
+    try { buf = await sndCtx.decodeAudioData(bytes.slice(0)); } catch { return say('소리를 읽지 못했어요. 다른 파일로 해 주세요.'), null; }
+    if (buf.duration > SND_MAX_SEC + 0.05) return say(`${Math.round(buf.duration * 10) / 10}초짜리예요. ${SND_MAX_SEC}초까지만 넣을 수 있어요.`), null;
+    try {
+        const b64 = await blobToDataUrl(new Blob([bytes])).then(u => u.split(',')[1]);
+        return { path: await uploadFile(`${base}.${ext}`, b64), buf };
+    } catch (e) { return say('올리지 못했어요: ' + (e.message || e)), null; }
+}
+
+/* ---------- 0.10.11 답 도착 소리 (settings) ---------- */
+
+function repliesHtml() {
+    const s = root.settings, off = s.replyOff || [];
+    const row = (id, name, mine) => `<div class="tw-sndrow"><label class="tw-check tw-grow"><input type="checkbox" data-replyck="${esc(id)}"${off.includes(id) ? '' : ' checked'}> <span class="tw-sndname">${esc(name)}</span>${mine ? ' <span class="tw-chip">내 소리</span>' : ''}</label>
+  <div class="tw-btn tw-btn-small" data-replyplay="${esc(id)}" title="듣기"><i class="fa-solid fa-play"></i></div>${mine ? `<div class="tw-btn tw-btn-small" data-replydel="${esc(id)}" title="빼기">✕</div>` : ''}</div>`;
+    return REPLY_SOUNDS.map(([k, name]) => row(k, name, false)).join('')
+        + (s.replyFiles || []).filter(f => f?.id).map(f => row(f.id, f.name || '내 소리', true)).join('');
+}
+
+function drawReplies() {
+    const box = win?.body.querySelector('.tw-replies');
+    if (box && root) box.innerHTML = repliesHtml();
+}
+
+function replySay(text) {
+    const m = win?.body.querySelector('.tw-replymsg');
+    if (m) m.textContent = text;
+}
+
+function toggleReply(id, on) {
+    const s = root.settings;
+    s.replyOff = (s.replyOff || []).filter(x => x !== id);
+    if (!on) s.replyOff.push(id);
+    saveSoon();
+}
+
+async function replyPicked(input) {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file || !root) return;
+    if (readOnly) return replySay(readOnlyReason);
+    if ((root.settings.replyFiles || []).length >= REPLY_FILES_MAX) return replySay(`내 소리는 ${REPLY_FILES_MAX}개까지 넣을 수 있어요.`);
+    const got = await sndLoad(file, `tavvy_reply_${Date.now().toString(36)}`, replySay);
+    if (!got) return;
+    const f = { id: 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), path: got.path,
+        name: String(file.name || '').replace(/\.[^.]+$/, '').trim().slice(0, 20) || '내 소리' };
+    root.settings.replyFiles.push(f);
+    sndBufs.set(f.path, Promise.resolve(got.buf));
+    drawReplies();
+    replySay('');
+    playSound('reply', 1, true, null, replyById(f.id));
+    const ok = await saveNow();                         // the screen changed already; saving can take seconds on a phone
+    if (!ok && readOnly) {
+        root.settings.replyFiles = root.settings.replyFiles.filter(x => x !== f);
+        deleteFile(f.path);
+        drawReplies();
+        return replySay(readOnlyReason);
+    }
+    if (!ok) saveSoon();
+}
+
+async function removeReply(id) {
+    const s = root?.settings, f = (s?.replyFiles || []).find(x => x?.id === id);
+    if (!f || readOnly) return;
+    s.replyFiles = s.replyFiles.filter(x => x !== f);
+    s.replyOff = (s.replyOff || []).filter(x => x !== id);
+    drawReplies();
+    replySay('');
+    const ok = await saveNow();
+    if (!ok && readOnly) { s.replyFiles.push(f); drawReplies(); return replySay(readOnlyReason); }
+    if (!ok) return saveSoon();
+    if (!fileInUse(f.path)) deleteFile(f.path);         // files go only after the save worked
+}
+
 async function sndPicked(input) {
     const file = input.files?.[0];
     input.value = '';
     const key = win?.sndKey, p = curPet();
     if (!file || !p || !SOUNDS[key]) return;
     if (readOnly) return sndSay(readOnlyReason);
-    const ext = sndExt(file.name, file.type);
-    if (!ext) return sndSay('mp3 · wav · ogg · m4a 파일만 넣을 수 있어요.');
-    if (file.size > SND_MAX_BYTES) return sndSay('파일이 너무 커요. 짧은 효과음(3초까지)을 넣어 주세요.');
-    if (!sndReady()) return sndSay('이 브라우저에서는 소리를 쓸 수 없어요.');
-    sndSay('읽는 중…');
-    const bytes = await file.arrayBuffer();
-    let buf;
-    try { buf = await sndCtx.decodeAudioData(bytes.slice(0)); } catch { return sndSay('소리를 읽지 못했어요. 다른 파일로 해 주세요.'); }
-    if (buf.duration > SND_MAX_SEC + 0.05) return sndSay(`${Math.round(buf.duration * 10) / 10}초짜리예요. ${SND_MAX_SEC}초까지만 넣을 수 있어요.`);
-    let path;
-    try {
-        const b64 = await blobToDataUrl(new Blob([bytes])).then(u => u.split(',')[1]);
-        path = await uploadFile(`tavvy_snd_${p.id}_${key}_${Date.now().toString(36)}.${ext}`, b64);
-    } catch (e) { return sndSay('올리지 못했어요: ' + (e.message || e)); }
+    const got = await sndLoad(file, `tavvy_snd_${p.id}_${key}_${Date.now().toString(36)}`, sndSay);
+    if (!got) return;
+    const { path, buf } = got;
     if (!root.pets.includes(p)) return deleteFile(path);   // said goodbye meanwhile
     const old = typeof p.sounds?.[key] === 'string' ? p.sounds[key] : null;
     if (!isObj(p.sounds)) p.sounds = {};
@@ -5667,7 +5790,13 @@ function settingsHtml() {
   </label>
 
   <div class="tw-cap">소리</div>
-  <label class="tw-check"><input type="checkbox" data-s="soundOn"> 소리 켜기 (♥ · 깨우기 · 재우기 · 축하 · 답 도착)</label>
+  <label class="tw-check"><input type="checkbox" data-s="replyOn"> 답 도착 알림</label>
+  <div class="tw-sub">체크한 소리가 답이 올 때마다 돌아가며 나요. 펫 꾸미기 탭에서 그 펫의 답 도착 소리를 올려 두었으면 그게 먼저예요.</div>
+  <div class="tw-sounds tw-replies">${repliesHtml()}</div>
+  <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="replyup">내 소리 올리기</div><span class="tw-sub">mp3 · wav · ogg · m4a, ${SND_MAX_SEC}초까지, ${REPLY_FILES_MAX}개까지</span></div>
+  <input type="file" accept="${SND_ACCEPT}" data-f="replyfile">
+  <div class="tw-msg tw-replymsg"></div>
+  <label class="tw-check"><input type="checkbox" data-s="soundOn"> 펫 소리 (♥ · 깨우기 · 재우기 · 축하)</label>
   <div class="tw-row"><span class="tw-sub">음량</span><input type="range" min="0" max="100" step="5" data-s="soundVol" class="tw-grow"><span class="tw-sub tw-volpct"></span></div>
   <div class="tw-sub">다른 탭을 보고 있을 땐 소리가 나지 않아요. 폰은 화면을 한 번 누른 뒤부터 나요.</div>
 
@@ -5705,9 +5834,10 @@ function fillSettings() {
     box.querySelector('[data-s="badge"]').checked = s.badge !== false;
     box.querySelector('[data-s="heartMode"]').value = s.heartMode || 'both';
     box.querySelector('[data-s="soundOn"]').checked = !!s.soundOn;
+    box.querySelector('[data-s="replyOn"]').checked = !!s.replyOn;
     const vol = box.querySelector('[data-s="soundVol"]');
     vol.value = clamp(Number(s.soundVol ?? 60), 0, 100);
-    vol.disabled = !s.soundOn;
+    vol.disabled = !s.soundOn && !s.replyOn;
     box.querySelector('.tw-volpct').textContent = `${vol.value}%`;
     box.querySelectorAll('[data-theme-pick]').forEach(t => t.classList.toggle('tw-on', t.dataset.themePick === (THEMES[s.winTheme] ? s.winTheme : 'theme')));
     // connection profiles (only when SillyTavern's Connection Manager is there)
@@ -6853,6 +6983,7 @@ function onWinClick(e) {
     if (act === 'close') return closeWin();
     if (act === 'back') return leave(() => show('home'));
     if (act === 'settings') return show('settings');
+    if (act === 'replyup') { sndTouched = true; return win.body.querySelector('[data-f="replyfile"]')?.click(); }   // 0.10.11
     if (act === 'gohome') return show('home');
     if (act === 'uploadno') return cancelUpload();
     if (act === 'new') return show('new');
@@ -6950,6 +7081,10 @@ function onWinClick(e) {
     if (su) { sndTouched = true; win.sndKey = su.dataset.sndup; return win.body.querySelector('[data-f="sndfile"]')?.click(); }
     const sd = t.closest('[data-snddel]');
     if (sd) return removeSound(sd.dataset.snddel);
+    const rp = t.closest('[data-replyplay]');
+    if (rp) { sndTouched = true; return playSound('reply', 1, true, null, replyById(rp.dataset.replyplay)); }
+    const rd = t.closest('[data-replydel]');
+    if (rd) return removeReply(rd.dataset.replydel);
     const look = t.closest('[data-look]');
     if (look) return pickLook(look.dataset.look);
     const theme = t.closest('[data-theme-pick]');
@@ -6968,6 +7103,8 @@ function onWinInput(e) {
     if (f === 'rolefile' && e.type === 'change') return addRoleFrames(t);
     if (f === 'giftfile' && e.type === 'change') return giftPicked(t);
     if (f === 'sndfile' && e.type === 'change') return sndPicked(t);
+    if (f === 'replyfile' && e.type === 'change') return replyPicked(t);
+    if (t.dataset?.replyck != null && e.type === 'change') return toggleReply(t.dataset.replyck, t.checked);
     if (f === 'giftname' && win.giftPend) { win.giftPend.name = t.value; return; }
     if ((f === 'giftcrop' || f === 'giftbg' || f === 'giftbgtol') && e.type === 'change' && win.giftPend) {
         const pend = win.giftPend;
@@ -6992,9 +7129,9 @@ function onWinInput(e) {
         if (s === 'stageMode') return setSetting(s, t.value === 'floor' ? 'floor' : 'chat');
         if (s === 'heartMode') return setSetting(s, ['both', 'hearts', 'name', 'hide'].includes(t.value) ? t.value : 'both');
         if (s === 'talkProfile') return setSetting(s, String(t.value || ''));
-        if (s === 'soundVol') { setSetting(s, clamp(Math.round(Number(t.value) || 0), 0, 100)); fillSettings(); return playSound('heart', 1, true); }
+        if (s === 'soundVol') { setSetting(s, clamp(Math.round(Number(t.value) || 0), 0, 100)); fillSettings(); return playSound(root.settings.soundOn || !root.settings.replyOn ? 'heart' : 'reply', 1, true); }
         setSetting(s, t.checked);
-        if (s === 'soundOn') { fillSettings(); if (t.checked) { sndTouched = true; playSound('heart', 1, true); } }
+        if (s === 'soundOn' || s === 'replyOn') { fillSettings(); if (t.checked) { sndTouched = true; playSound(s === 'soundOn' ? 'heart' : 'reply', 1, true); } }
         return;
     }
     if (s === 'soundVol') { const pct = win.body.querySelector('.tw-volpct'); if (pct) pct.textContent = `${t.value}%`; }
