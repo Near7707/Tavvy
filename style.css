@@ -1201,3 +1201,6 @@
 /* 0.10.4: cancel the upload box */
 .tavvy-win .tw-uploadno { justify-content: flex-end; }
 .tavvy-win .tw-tile-wide { grid-column: 1 / -1; }
+.tavvy-win .tw-sndrow { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--tw-line); }
+.tavvy-win .tw-sndrow:last-child { border-bottom: none; }
+.tavvy-win .tw-sndname { flex: 1; min-width: 0; }

@@ -110,6 +110,7 @@ const OFF_DELAY = [1.2, 2.6];   // s — gone with a ledge that left the top of 
 const EDGE_CHANCE = 0.2;        // on a ledge: chance a walk goes to the end (then hops / drops off)
 const WATCH_MIN_CHARS = 150;    // a reply this long is worth climbing up to look at
 const LONG_WAIT = 20;           // s — a reply taking this long makes everyone glance at the chat more ("?")
+const LATE_WAIT = 60;           // s — 0.10.6: still not a word of the reply after this long → "답이 늦어질 때" line (once per reply)
 const BUMP_DIST = 0.42;         // × (sum of both widths) — how close two pets get before they bump
 const BUMP_CHANCE = 0.05;       // the rest just walk past each other
 const BUMP_REST = 300;          // seconds — after a bump, the same two pets just pass each other for this long
@@ -283,6 +284,7 @@ const TALK_MOMENTS = [
     { key: 'meal', name: '밥 다 먹고', ex: '잘 먹었다!' },
     { key: 'play', name: '혼자 놀 때', ex: '흥얼흥얼~' },
     { key: 'wait', name: '답 기다릴 때', ex: '언제 와?' },
+    { key: 'late', name: '답이 늦어질 때', ex: '왜 이렇게 오래 걸려…' },
     { key: 'level', name: '단계 오를 때', ex: '우리 더 친해졌다!' },
     { key: 'reunion', name: '오랜만에 만났을 때', ex: '{{user}}, 보고 싶었어!' },
     { key: 'reply', name: '답이 왔을 때', ex: '오, 왔다!' },
@@ -291,7 +293,7 @@ const TALK_MOMENTS = [
 const TALK_FREQ = { off: '끔', some: '가끔', often: '자주' };
 const TALK_CHANCE = { some: 0.35, often: 0.7 };          // a moment comes → says something
 const TALK_PLAY = { some: 0.05, often: 0.12 };           // each "what next?" while playing alone
-const TALK_ALWAYS = ['level', 'reunion'];                // these always speak (unless 끔)
+const TALK_ALWAYS = ['level', 'reunion', 'late'];        // these always speak (unless 끔) — 'late' comes rarely
 const TALK_HALF = ['reply', 'sent'];                     // messages come often → half the usual chance
 const FULL_DOZE = 0;             // full tummy: no extra naps (it was sleeping the day away) …
 const FULL_DOZE_LEN = 1;         // … nor longer ones
@@ -1108,7 +1110,7 @@ function fx(actor, text, cls = '') {
     layer.appendChild(el);
     el.addEventListener('animationend', () => el.remove());
     setTimeout(() => el.remove(), 2000);
-    if (text === '♥') playSound('heart', cls ? 0.6 : 1);
+    if (text === '♥') playSound('heart', cls ? 0.6 : 1, false, actor.rec);
 }
 
 /* ---------- 0.10.5 소리: short sounds made in code (no files). Off unless turned on in ⚙ 설정. ---------- */
@@ -1161,17 +1163,63 @@ function sndOnTouch() {
     if (root?.settings?.soundOn && sndCtx?.state !== 'running') sndReady();
 }
 
-/** test = from the ⚙ 설정 (plays even when the same sound just played). */
-function playSound(key, k = 1, test = false) {
+/** test = a try-out button (plays even when sound is off or the same sound just played). rec = the pet (its own sound file, if any). */
+function playSound(key, k = 1, test = false, rec = null) {
     const s = root?.settings, def = SOUNDS[key];
-    if (!def || !s?.soundOn || !sndTouched || document.hidden) return;
+    if (!def || !s || document.hidden) return;
+    if (!test && (!s.soundOn || !sndTouched)) return;
     const now = performance.now() / 1000;
     if (!test && (now < sndBusyTill || now - (sndLast[key] || -99) < SND_GAP)) return;   // one at a time
     if (!sndReady()) return;
     sndOut.gain.value = clamp(Number(s.soundVol ?? 60), 0, 100) / 100 * 0.6;
     sndLast[key] = now;
+    const path = rec?.sounds?.[key];
+    if (typeof path === 'string') {                                     // 0.10.6: the pet's own sound file
+        sndBusyTill = now + SND_MAX_SEC;
+        sndBuf(path).then((b) => {
+            try {
+                if (!b) return def[1](k);                               // could not read it → the usual sound
+                const src = sndCtx.createBufferSource(), g = sndCtx.createGain();
+                src.buffer = b; g.gain.value = k;
+                src.connect(g); g.connect(sndOut); src.start();
+                sndBusyTill = performance.now() / 1000 + Math.min(b.duration, SND_MAX_SEC);
+            } catch { /* never let a sound break the pet */ }
+        });
+        return;
+    }
     sndBusyTill = now + def[0];
     try { def[1](k); } catch { /* never let a sound break the pet */ }
+}
+
+/* ---------- 0.10.6 내 소리: a short file per pet and per sound (empty = the usual sound) ---------- */
+
+const SOUND_SLOTS = [['heart', '♥ 하트'], ['wake', '깨우기'], ['sleep', '재우기'], ['cheer', '축하']];
+const SND_MAX_SEC = 3;
+const SND_MAX_BYTES = 2 * 1024 * 1024;
+const SND_ACCEPT = 'audio/mpeg,audio/wav,audio/x-wav,audio/ogg,audio/mp4,audio/x-m4a,audio/aac,.mp3,.wav,.ogg,.m4a';
+const sndBufs = new Map();            // file path → Promise<AudioBuffer | null>
+
+function sndBuf(path) {
+    if (!sndBufs.has(path)) {
+        sndBufs.set(path, (async () => {
+            try {
+                const res = await fetch(imgUrl(path));
+                if (!res.ok) return null;
+                return await sndCtx.decodeAudioData(await res.arrayBuffer());
+            } catch { return null; }
+        })().then((b) => { if (!b) sndBufs.delete(path); return b; }));   // a failed read is tried again next time
+    }
+    return sndBufs.get(path);
+}
+
+function sndExt(name, type) {
+    const e = /\.(mp3|wav|ogg|m4a)$/i.exec(name || '')?.[1]?.toLowerCase();
+    if (e) return e;
+    if (/mpeg|mp3/.test(type)) return 'mp3';
+    if (/wav/.test(type)) return 'wav';
+    if (/ogg/.test(type)) return 'ogg';
+    if (/mp4|m4a|aac/.test(type)) return 'm4a';
+    return null;
 }
 
 /* =====================================================================
@@ -3324,6 +3372,11 @@ function tick(t) {
         remeasureT = 0; measure();
         // missed "generation ended" signal (stopped / error) → stop waiting
         if (gen.active && document.body.dataset.generating !== 'true' && t - gen.t0 > 3000) onGenEnd();
+        // 0.10.6: not a word of the reply yet after LATE_WAIT → "답이 늦어질 때" (once per reply)
+        if (gen.active && !gen.firstToken && !gen.late && t - gen.t0 > LATE_WAIT * 1000) {
+            gen.late = true;
+            for (const a of actors) if (canChat(a) && !a.held) a.talk('late');
+        }
         checkIdle();
     }
     else {
@@ -3919,7 +3972,7 @@ function showCheer(a, from, to) {
 
 /** Coloured ✦ bursting out around the pet (closeness up, special days). */
 function burstStars(a) {
-    playSound('cheer');
+    playSound('cheer', 1, false, a.rec);
     const top = stage.floorY - a.y - a.h;
     for (let i = 0; i < 14; i++) {
         const s = document.createElement('div');
@@ -4148,8 +4201,8 @@ function sleepInstant() {
 
 function toggleWake() {
     noteUserAct();
-    if (actors.length) { playSound('sleep'); sleepAll(); }
-    else if (!bedBusy && residents().length) { playSound('wake'); wakeAll(); }
+    if (actors.length) { playSound('sleep', 1, false, actors[0].rec); sleepAll(); }
+    else if (!bedBusy && residents().length) { playSound('wake', 1, false, residents()[0]); wakeAll(); }
 }
 
 /* =====================================================================
@@ -4157,7 +4210,7 @@ function toggleWake() {
  * ===================================================================== */
 
 // target = the message being written ("…" box / streaming reply), when there is one on screen
-const gen = { active: false, type: '', startLen: 0, t0: 0, firstToken: false, target: null };
+const gen = { active: false, type: '', startLen: 0, t0: 0, firstToken: false, late: false, target: null };
 const watched = new Set();   // replies already looked at ("같은 답은 한 번만")
 
 function chatMsgs() {
@@ -4189,6 +4242,7 @@ function onGenStart(type, opts, dryRun) {
     gen.startLen = ctx().chat?.length ?? 0;
     gen.t0 = performance.now();
     gen.firstToken = false;
+    gen.late = false;
     gen.target = null;
     for (const a of actors) a.restless = false;
     // regenerate removes the old reply right after this signal → look a moment later
@@ -5087,6 +5141,11 @@ function petHtml(p) {
   ${facingHtml()}
   <div class="tw-btn tw-btn-main tw-wide" data-act="save">저장</div>
   <div class="tw-msg"></div>
+  <div class="tw-cap">소리</div>
+  <div class="tw-sounds">${soundsHtml(p)}</div>
+  <input type="file" accept="${SND_ACCEPT}" data-f="sndfile">
+  <div class="tw-sub">mp3 · wav · ogg · m4a, ${SND_MAX_SEC}초까지. 비워 두면 기본 소리예요. 올리거나 빼면 바로 저장돼요. 소리는 ⚙ 설정에서 켜야 나요(▶ 듣기는 꺼져 있어도 들려요).</div>
+  <div class="tw-msg tw-sndmsg"></div>
   <div class="tw-cap">내보내기</div>
   <div class="tw-row"><div class="tw-btn" data-act="exportpet"><i class="fa-solid fa-file-arrow-down"></i> 펫 파일</div><span class="tw-sub">기록까지 모두 담긴 백업 파일이에요.</span></div>
   <div class="tw-row"><div class="tw-btn" data-act="exportcard"><i class="fa-solid fa-image"></i> PNG 카드</div><span class="tw-sub">외형과 동작 그림만 담긴 그림이에요. 남에게 나눠 줄 때 써요.</span></div>
@@ -5096,6 +5155,81 @@ function petHtml(p) {
     <div class="tw-sub">함께한 기록은 사라지고 되돌릴 수 없어요. 외형은 "내가 올린 외형"에 남아요.</div>
   </div>
 </div>`;
+}
+
+function soundsHtml(p) {
+    return SOUND_SLOTS.map(([k, name]) => {
+        const mine = typeof p.sounds?.[k] === 'string';
+        return `<div class="tw-sndrow"><span class="tw-sndname">${name}</span>${mine ? '<span class="tw-chip">내 소리</span>' : '<span class="tw-sub">기본 소리</span>'}
+  <div class="tw-btn tw-btn-small" data-sndplay="${k}" title="듣기"><i class="fa-solid fa-play"></i></div>
+  ${mine ? `<div class="tw-btn tw-btn-small" data-snddel="${k}" title="기본으로">✕</div>` : `<div class="tw-btn tw-btn-small" data-sndup="${k}">올리기</div>`}</div>`;
+    }).join('');
+}
+
+function drawSounds(p) {
+    const box = win?.body.querySelector('.tw-sounds');
+    if (box && p) box.innerHTML = soundsHtml(p);
+}
+
+function sndSay(text) {
+    const m = win?.body.querySelector('.tw-sndmsg');
+    if (m) m.textContent = text;
+}
+
+/** Save behind the screen (it can take seconds on a phone); old files go only after the save worked. */
+async function saveSoundChange(p, key, old, fresh) {
+    const ok = await saveNow();
+    if (!ok && readOnly) {                            // could not save at all → put it back
+        if ((p.sounds[key] ?? null) === fresh) {
+            if (old) p.sounds[key] = old; else delete p.sounds[key];
+        }
+        if (fresh) deleteFile(fresh);
+        drawSounds(p);
+        return sndSay(readOnlyReason);
+    }
+    if (!ok) return saveSoon();
+    if (old && !fileInUse(old)) deleteFile(old);
+}
+
+async function sndPicked(input) {
+    const file = input.files?.[0];
+    input.value = '';
+    const key = win?.sndKey, p = curPet();
+    if (!file || !p || !SOUNDS[key]) return;
+    if (readOnly) return sndSay(readOnlyReason);
+    const ext = sndExt(file.name, file.type);
+    if (!ext) return sndSay('mp3 · wav · ogg · m4a 파일만 넣을 수 있어요.');
+    if (file.size > SND_MAX_BYTES) return sndSay('파일이 너무 커요. 짧은 효과음(3초까지)을 넣어 주세요.');
+    if (!sndReady()) return sndSay('이 브라우저에서는 소리를 쓸 수 없어요.');
+    sndSay('읽는 중…');
+    const bytes = await file.arrayBuffer();
+    let buf;
+    try { buf = await sndCtx.decodeAudioData(bytes.slice(0)); } catch { return sndSay('소리를 읽지 못했어요. 다른 파일로 해 주세요.'); }
+    if (buf.duration > SND_MAX_SEC + 0.05) return sndSay(`${Math.round(buf.duration * 10) / 10}초짜리예요. ${SND_MAX_SEC}초까지만 넣을 수 있어요.`);
+    let path;
+    try {
+        const b64 = await blobToDataUrl(new Blob([bytes])).then(u => u.split(',')[1]);
+        path = await uploadFile(`tavvy_snd_${p.id}_${key}_${Date.now().toString(36)}.${ext}`, b64);
+    } catch (e) { return sndSay('올리지 못했어요: ' + (e.message || e)); }
+    if (!root.pets.includes(p)) return deleteFile(path);   // said goodbye meanwhile
+    const old = typeof p.sounds?.[key] === 'string' ? p.sounds[key] : null;
+    if (!isObj(p.sounds)) p.sounds = {};
+    p.sounds[key] = path;
+    sndBufs.set(path, Promise.resolve(buf));
+    drawSounds(p);
+    sndSay('');
+    playSound(key, 1, true, p);
+    saveSoundChange(p, key, old, path);
+}
+
+function removeSound(key) {
+    const p = curPet();
+    if (!p || readOnly || typeof p.sounds?.[key] !== 'string') return;
+    const old = p.sounds[key];
+    delete p.sounds[key];
+    drawSounds(p);
+    sndSay('');
+    saveSoundChange(p, key, old, null);
 }
 
 function fillEdit(p) {
@@ -6010,7 +6144,12 @@ async function exportPetFile(id) {
         const pet = structuredClone(p);
         delete pet.home;                      // which room it lives in stays here (room names can hold names and dates)
         delete pet.bowl;                      // food waiting belongs to that room
-        delete pet.sounds;
+        pet.sounds = {};                      // 0.10.6 내 소리: packed in too (a file that can't be read is left out)
+        for (const [k] of SOUND_SLOTS) {
+            const path = p.sounds?.[k];
+            if (typeof path !== 'string') continue;
+            try { files.push(await fileToDataUrl(path)); pet.sounds[k] = { file: files.length - 1 }; } catch { /* skip */ }
+        }
         pet.look = { ...lookShape(p.look || {}), roles };
         pet.gifts = [];                       // 0.10.0 선물: pictures packed in too
         for (const g of p.gifts || []) {
@@ -6265,6 +6404,22 @@ async function unpackGifts(list, files, uploaded) {
     return out;
 }
 
+/** 0.10.6 내 소리 from a pet file. */
+async function unpackSounds(src, files, uploaded, petId) {
+    const out = {};
+    if (!isObj(src) || !Array.isArray(files)) return out;
+    for (const [k] of SOUND_SLOTS) {
+        const i = src[k]?.file;
+        const m = Number.isInteger(i) && typeof files[i] === 'string' ? /^data:([\w/.+-]+);base64,([A-Za-z0-9+/=]+)$/.exec(files[i]) : null;
+        const ext = m && m[1].startsWith('audio/') ? sndExt('', m[1]) : null;
+        if (!ext || m[2].length > SND_MAX_BYTES * 1.4) continue;
+        const path = await uploadFile(`tavvy_snd_${petId}_${k}_${Date.now().toString(36)}.${ext}`, m[2]);
+        uploaded.push(path);
+        out[k] = path;
+    }
+    return out;
+}
+
 async function importPetFile(data) {
     if (!isObj(data) || data[PET_FILE] !== 1 || !isObj(data.pet) || !isObj(data.pet.look)) return say('Tavvy 펫 파일이 아니에요.');
     if (typeof data.formatVersion !== 'number' || data.formatVersion > FORMAT_VERSION) return say('더 새로운 버전의 Tavvy가 만든 파일이에요. 확장을 업데이트해 주세요.');
@@ -6274,7 +6429,10 @@ async function importPetFile(data) {
     const { roles, uploaded } = await unpackRoles(data.pet.look.roles, data.files, 'pet_' + id);
     const rec = cleanPet(data.pet, cleanLook(data.pet.look, roles));
     rec.id = id;
-    try { rec.gifts = await unpackGifts(data.pet.gifts, data.files, uploaded); } catch (e) { uploaded.forEach(deleteFile); throw e; }
+    try {
+        rec.gifts = await unpackGifts(data.pet.gifts, data.files, uploaded);
+        rec.sounds = await unpackSounds(data.pet.sounds, data.files, uploaded, id);
+    } catch (e) { uploaded.forEach(deleteFile); throw e; }
     rec.home = homeOf(room);
     let added = null;
     if (!roles.idle[0].startsWith('builtin:')) {
@@ -6423,6 +6581,12 @@ function onWinClick(e) {
     if (tab) return showTab(tab.dataset.tab);
     const dl = t.closest('[data-dellook]');
     if (dl) return deleteLook(dl.dataset.dellook);
+    const sp = t.closest('[data-sndplay]');
+    if (sp) { sndTouched = true; return playSound(sp.dataset.sndplay, 1, true, curPet()); }
+    const su = t.closest('[data-sndup]');
+    if (su) { sndTouched = true; win.sndKey = su.dataset.sndup; return win.body.querySelector('[data-f="sndfile"]')?.click(); }
+    const sd = t.closest('[data-snddel]');
+    if (sd) return removeSound(sd.dataset.snddel);
     const look = t.closest('[data-look]');
     if (look) return pickLook(look.dataset.look);
     const theme = t.closest('[data-theme-pick]');
@@ -6440,6 +6604,7 @@ function onWinInput(e) {
     if (f === 'importfile' && e.type === 'change') return importPicked(t);
     if (f === 'rolefile' && e.type === 'change') return addRoleFrames(t);
     if (f === 'giftfile' && e.type === 'change') return giftPicked(t);
+    if (f === 'sndfile' && e.type === 'change') return sndPicked(t);
     if (f === 'giftname' && win.giftPend) { win.giftPend.name = t.value; return; }
     if ((f === 'giftcrop' || f === 'giftbg' || f === 'giftbgtol') && e.type === 'change' && win.giftPend) {
         const pend = win.giftPend;
