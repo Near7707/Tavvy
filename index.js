@@ -1227,6 +1227,8 @@ const SOUNDS = {
         sndTone(392, 0.12, { type: 'square', v: 0.1, k, lp: 2000, at: 0.14 });
         for (const f of [523, 659, 784]) sndTone(f, 0.45, { type: 'square', v: 0.07, k, lp: 2000, at: 0.3 });
     }],
+    bump: [0.15, (k) => sndTone(720, 0.13, { to: 360, type: 'triangle', v: 0.35, k })],                       // 0.10.13 부딪힐 때 콩
+    chat: [0.3, (k) => [470, 560, 500].forEach((f, i) => sndTone(f, 0.08, { to: f * 1.1, type: 'triangle', v: 0.18, k, at: i * 0.1 }))],   // 0.10.13 펫끼리 말할 때 웅얼
 };
 
 // 0.10.11 답 도착 소리: 체크한 것만 답이 올 때마다 돌아가며. [key, 이름, 길이(초), play(k)]
@@ -1339,7 +1341,7 @@ function playSound(key, k = 1, test = false, rec = null, pick = null) {
 
 /* ---------- 0.10.6 내 소리: a short file per pet and per sound (empty = the usual sound) ---------- */
 
-const SOUND_SLOTS = [['heart', '♥ 하트'], ['wake', '깨우기'], ['sleep', '재우기'], ['cheer', '축하'], ['reply', '답 도착']];
+const SOUND_SLOTS = [['heart', '♥ 하트'], ['wake', '깨우기'], ['sleep', '재우기'], ['cheer', '축하'], ['bump', '부딪힐 때'], ['chat', '펫끼리 말할 때'], ['reply', '답 도착']];
 const SND_MAX_SEC = 3;
 const SND_MAX_BYTES = 2 * 1024 * 1024;
 const SND_ACCEPT = 'audio/mpeg,audio/wav,audio/x-wav,audio/ogg,audio/mp4,audio/x-m4a,audio/aac,.mp3,.wav,.ogg,.m4a';
@@ -3791,6 +3793,7 @@ function bumpCheck() {
             if (resting || Math.random() >= BUMP_CHANCE * Math.min(fr(a, 'bump'), fr(b, 'bump'))) { a.passing.add(b); b.passing.add(a); continue; }
             const d = a.x < b.x ? -1 : a.x > b.x ? 1 : (Math.random() < 0.5 ? -1 : 1);
             a.bump(d, b); b.bump(-d, a);
+            playSound('bump', 1, false, (Math.random() < 0.5 ? a : b).rec);   // 0.10.13 콩 (둘이 한 번)
             const t = performance.now(); a.bumpedAt.set(b, t); b.bumpedAt.set(a, t);
             setTimeout(() => startDuet(a, b, 'bump'), 2400);      // 0.10.8: a word after the bump (once they have landed and reacted)
             a.passing.add(b); b.passing.add(a);    // no second bump until they have parted
@@ -3887,6 +3890,7 @@ function startDuet(a, b, how = '') {
         const y = x === a ? b : a;
         if (line === null) return duetReact(x, y);
         x.lastTalk = performance.now();
+        playSound('chat', 1, false, x.rec);                       // 0.10.13 웅얼
         x.speak(fillPet(line, y));
     }, n * DUET_STEP * 1000));
     setTimeout(() => { if (duetOn === me) duetOn = null; }, script.length * DUET_STEP * 1000 + 800);
@@ -3930,7 +3934,7 @@ function nightCheck(a) {
             said = true;
             if (b.side && b.state !== 'walk' && dx > 8) b.dir = a.x >= b.x ? 1 : -1;
             const lines = talkFreqOf(b) !== 'off' ? linesOf(b, 'night') : [];
-            if (lines.length) { b.lastTalk = performance.now(); b.speak(fillPet(lines[Math.floor(Math.random() * lines.length)], a)); }
+            if (lines.length) { b.lastTalk = performance.now(); playSound('chat', 1, false, b.rec); b.speak(fillPet(lines[Math.floor(Math.random() * lines.length)], a)); }
             else fx(b, NIGHT_FX[kindOf(b, '')] || '…', 'tavvy-fx-small');
         }
         if (Math.random() < chance(b, 'napwith', NAP_P[kindOf(b, '')] ?? 0.1)) setTimeout(() => b.startNapWith(a), said ? 1800 : 400);
@@ -6035,7 +6039,7 @@ function settingsHtml() {
   <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="replyup">내 소리 올리기</div><span class="tw-sub">mp3 · wav · ogg · m4a, ${SND_MAX_SEC}초까지, ${REPLY_FILES_MAX}개까지</span></div>
   <input type="file" accept="${SND_ACCEPT}" data-f="replyfile">
   <div class="tw-msg tw-replymsg"></div>
-  <label class="tw-check"><input type="checkbox" data-s="soundOn"> 펫 소리 (♥ · 깨우기 · 재우기 · 축하)</label>
+  <label class="tw-check"><input type="checkbox" data-s="soundOn"> 펫 소리 (♥ · 깨우기 · 재우기 · 축하 · 콩 · 웅얼)</label>
   <div class="tw-row"><span class="tw-sub">음량</span><input type="range" min="0" max="100" step="5" data-s="soundVol" class="tw-grow"><span class="tw-sub tw-volpct"></span></div>
   <div class="tw-sub">다른 탭을 보고 있을 땐 소리가 나지 않아요. 폰은 화면을 한 번 누른 뒤부터 나요.</div>
 
