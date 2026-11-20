@@ -291,6 +291,7 @@ const TALK_MOMENTS = [
     { key: 'sent', name: '내가 보냈을 때', ex: '잘 보냈어?' },
     { key: 'greet', name: '다른 펫에게 말 걸 때', ex: '{{pet}}야, 뭐 해?' },     // 0.10.8 펫끼리 말하기
     { key: 'answer', name: '다른 펫이 말 걸어 오면', ex: '응? 왜 불러~' },
+    { key: 'night', name: '다른 펫이 졸 때', ex: '잘 자, {{pet}}' },              // 0.10.12
 ];
 const TALK_FREQ = { off: '끔', some: '가끔', often: '자주' };
 const TALK_CHANCE = { some: 0.35, often: 0.7 };          // a moment comes → says something
@@ -334,7 +335,28 @@ const MEET_DIST = 1.2;           // × (sum of both widths) — close enough to 
 const MEET_REST = 60;            // s — the same two pets don't talk again sooner than this
 const VISIT_P = 0.06;            // × 빈도 — each "what next?"; missed (not on the same floor) → it tries again at the next ones
 const VISIT_TO = ['idle', 'fidget', 'look', 'perch', 'read', 'walk'];   // what the other one may be doing
-const VISIT_WAIT = 8;            // s the other one stays put while it comes over
+const VISIT_WAIT = 8;
+// 0.10.12 여러 마리 더 · 멍 — each "× 빈도" is the 행동 탭 setting (끔 / 드물게 / 보통 / 자주)
+const ZONE_P = { musim: 0.09, neugut: 0.07, aegyo: 0.03, saechim: 0.035, simsul: 0.03 };   // 멍 (로딩 중): × 빈도, each "what next?"
+const ZONE_LEN = { musim: [4, 7], neugut: [3, 6], aegyo: [2, 3.2], saechim: [2, 3.5], simsul: [2, 3] };   // s
+const ZONE_GEN = 3;              // × while a reply is being written (같이 로딩 중)
+const NIGHT_FROM = ['idle', 'walk', 'perch', 'fidget', 'look', 'read', 'watch'];   // awake and not busy
+const NIGHT_P = 0.6;             // 잘 자: × 빈도 — a pet close by starts dozing
+const NIGHT_REST = 120;          // s — the same two, not again sooner
+const NIGHT_FX = { aegyo: '♥', saechim: '흥', neugut: '하암', simsul: '💢', musim: '…' };   // no line written → this
+const NAP_P = { neugut: 0.5, aegyo: 0.4, saechim: 0.15, simsul: 0.15, musim: 0.08 };   // 같이 졸기: × 빈도
+const NAP_NEAR = 320;            // px — how far away it still walks over to doze next to it
+const TAG_P = { simsul: 0.04, aegyo: 0.025, saechim: 0.015, neugut: 0.01, musim: 0.006 };   // 쫓아가기 장난: × 빈도, each "what next?"
+const TAG_CHASE = { aegyo: 0.9, simsul: 0.9, saechim: 0.7, neugut: 0.5, musim: 0.2 };   // the one tapped runs after it
+const TAG_END = { aegyo: '♥', saechim: '흥', neugut: '♪', simsul: '💢', musim: '…' };    // caught up
+const TAG_NEAR = 260;            // px
+const TAG_REST = 90;             // s
+const RACE_P = 0.35;             // 먼저 달려가기: × 빈도 (the lower one) — two or more go to look at a new reply
+const RACE_LATE = { aegyo: '♥', saechim: '흥', neugut: '?', simsul: '💢', musim: '…' };  // got there second
+const SHARE_P = 0.5;             // 나눠 먹기: × 빈도 — done eating, another one still eating close by
+const SHARE_NEAR = 300;          // px
+const SHARE_REST = 120;          // s
+const SHARE_MINE = { aegyo: '♥', neugut: '♪', saechim: '흥', musim: '…', simsul: '💢' };   // the eater (심술: turns its back)            // s the other one stays put while it comes over
 const PERS_DESC = {
     aegyo: '애교 많고 다정해요', saechim: '새침하고 쑥스러움을 잘 타요', neugut: '느긋하고 늘 졸려요',
     simsul: '툴툴대지만 속은 다정해요', musim: '말수가 적고 무심해요',
@@ -1021,8 +1043,14 @@ const BASIC_ACTS = [
     { key: 'peek',   name: '빼꼼 숨기' },
     { key: 'roll',   name: '구르기' },
     { key: 'me',     name: '나 보며 반응' },
+    { key: 'zone',   name: '멍 (로딩 중)' },           // 0.10.12: a little wheel spins over its head
     { key: 'visit',  name: '말 걸러 가기', many: true },   // 0.10.9: walks over to another pet to talk
     { key: 'bump',   name: '부딪히기', many: true },       // 0.10.9: was always rare
+    { key: 'night',  name: '잘 자', many: true },          // 0.10.12: another one nods off close by
+    { key: 'napwith', name: '같이 졸기', many: true },     // 0.10.12
+    { key: 'tag',    name: '쫓아가기 장난', many: true },  // 0.10.12
+    { key: 'race',   name: '먼저 달려가기', many: true },  // 0.10.12: up to a new reply first
+    { key: 'share',  name: '나눠 먹기', many: true },      // 0.10.12: a bite of the other one's meal (a show only)
 ];
 // 0.8.0: the personality is a preset — how often each thing happens and which reaction shows can be set freely.
 const FREQS = [['off', '끔'], ['rare', '드물게'], ['norm', '보통'], ['often', '자주']];
@@ -1548,6 +1576,7 @@ class Actor {
         if (this.reunionMeal) { this.reunionMeal = false; if (this.afterReunionMeal()) return; }
         if (this.fullNow) { this.fullNow = false; this.fk = 'tummy'; return this.setState('fidget'); }   // full now: pats its tummy ♪
         const el = this.afterMeal; this.afterMeal = null;
+        if (!el && actors.length > 1 && this.startShare()) return;     // 0.10.12 나눠 먹기: the other one is still eating
         this.setState('idle');
         if (el && el.isConnected && !this.waiting) this.watchReply(el);
     }
@@ -1893,6 +1922,26 @@ class Actor {
         if (go.k === 'hide') { this.setState('hide'); this.hd = { s: go.s, E: go.E, x0: this.x, wait: 0.6 + rand(1.2, 2.4), f: 0 }; return; }
         if (go.k === 'where') return this.setState('where');
         if (go.k === 'stare') return this.setState('stare');
+        if (go.k === 'napwith') {                                    // 0.10.12 같이 졸기: next to it — nods off too
+            const b = go.who;
+            if (duetAlive(b) && b.state === 'doze' && b.plat === this.plat && !this.waiting) {
+                if (this.side && Math.abs(b.x - this.x) > 4) this.dir = b.x >= this.x ? 1 : -1;
+                return this.setState('doze');
+            }
+            return this.setState('idle');
+        }
+        if (go.k === 'tag') return this.tagTap(go.who);              // 0.10.12 쫓아가기 장난
+        if (go.k === 'tagchase') {
+            this.setState('idle');
+            const b = go.who;
+            if (duetAlive(b) && b.plat === this.plat && Math.abs(b.x - this.x) <= (this.w + b.w) * 1.5) {
+                if (this.side && Math.abs(b.x - this.x) > 4) this.dir = b.x >= this.x ? 1 : -1;
+                fx(this, TAG_END[kindOf(this, '')] || '♪', 'tavvy-fx-small');
+            }
+            return;
+        }
+        if (go.k === 'race') { this.setState('idle'); raceLand(this, go.el); return this.watchReply(go.el); }   // 0.10.12 먼저 달려가기: there — up if it can
+        if (go.k === 'share') return this.shareBite(go.who);         // 0.10.12 나눠 먹기
         if (go.k === 'visit') {                                      // 0.10.9 말 걸러 가기: there — say something if still close
             this.setState('idle');
             const b = go.who;
@@ -1937,6 +1986,120 @@ class Actor {
         this.walkTo(tx);
         this.go = { k: 'visit', who: b };
         return 'go';
+    }
+
+    /* ---------- 0.10.12 멍 (로딩 중): a little wheel over its head (the body stays as it is) ---------- */
+    drawZone() {
+        if (!this.zoneEl) {
+            this.zoneEl = document.createElement('div');
+            this.zoneEl.className = 'tavvy-zone';
+            this.zoneEl.innerHTML = '<i></i>'.repeat(8);
+            layer.appendChild(this.zoneEl);
+        }
+        this.zoneEl.style.left = (this.x - stage.ox) + 'px';
+        this.zoneEl.style.top = (stage.floorY - this.y - this.h * this.scale - 4 - stage.oy) + 'px';
+    }
+
+    unzone() {
+        this.zoneT = 0;
+        this.zoneEl?.remove();
+        this.zoneEl = null;
+    }
+
+    /** 0.10.12 같이 졸기: walk over next to a pet that is dozing. */
+    startNapWith(a) {
+        if (!duetAlive(this) || !duetAlive(a) || a.state !== 'doze' || this.plat !== a.plat || this.air || this.wallOn || this.waiting
+            || !this.free() || !NIGHT_FROM.includes(this.state) || this.food > 0 || this.mealPending) return;
+        const [L, R] = this.range();
+        const side = this.x <= a.x ? -1 : 1;
+        const tx = clamp(a.x + side * (this.w + a.w) * 0.42, L, Math.max(L, R));
+        this.passing.add(a); a.passing.add(this);                   // no bumping into the sleeper
+        if (Math.abs(tx - this.x) <= 10) return this.arrive({ k: 'napwith', who: a });
+        this.walkTo(tx);
+        this.go = { k: 'napwith', who: a };
+    }
+
+    /** 0.10.12 쫓아가기 장난: over to another pet on the floor, a tap, then off it runs. */
+    startTag() {
+        const now = performance.now();
+        const ok = (b) => b !== this && duetAlive(b) && !b.air && !b.wallOn && !b.plat && ['idle', 'fidget', 'look'].includes(b.state) && !b.waiting
+            && fr(b, 'tag') > 0 && Math.abs(b.x - this.x) < TAG_NEAR && pairOk('tag', this, b, TAG_REST);
+        const list = actors.filter(ok);
+        if (!list.length) return false;
+        const b = list[Math.floor(Math.random() * list.length)];
+        pairMark('tag', this, b);
+        const [L, R] = this.range();
+        const side = this.x <= b.x ? -1 : 1;
+        const tx = clamp(b.x + side * (this.w + b.w) * 0.5, L, Math.max(L, R));
+        b.chatTill = Math.max(b.chatTill || 0, now + 6000);            // it stays put a moment
+        this.passing.add(b); b.passing.add(this);
+        if (Math.abs(tx - this.x) <= 10) { this.arrive({ k: 'tag', who: b }); return true; }
+        this.walkTo(tx);
+        this.go = { k: 'tag', who: b };
+        return true;
+    }
+
+    tagTap(b) {
+        this.setState('idle');
+        if (!duetAlive(b) || b.plat !== this.plat || b.air || Math.abs(b.x - this.x) > (this.w + b.w) * 1.2) { if (b) b.chatTill = 0; return; }
+        if (this.side && Math.abs(b.x - this.x) > 4) this.dir = b.x >= this.x ? 1 : -1;
+        b.chatTill = 0;
+        b.sq = 0.85; this.sq = 0.9;                                 // 톡
+        fx(b, '!', 'tavvy-fx-small');
+        const [L, R] = this.range();
+        let away = this.x <= b.x ? -1 : 1;
+        let tx = clamp(this.x + away * rand(150, 260), L, Math.max(L, R));
+        if (Math.abs(tx - this.x) < 80) return;                      // a wall right behind: just the tap
+        this.walkTo(tx);
+        this.gait = 'run';
+        this.go = { k: 'tagrun' };
+        const run = this;
+        if (Math.random() < (TAG_CHASE[kindOf(b, '')] ?? 0.5)) setTimeout(() => b.chaseTag(run), 500);
+        else setTimeout(() => { if (duetAlive(b) && b.state === 'idle') duetReact(b, run); }, 400);
+    }
+
+    chaseTag(a) {
+        if (!duetAlive(this) || !duetAlive(a) || this.air || this.plat !== a.plat || !['idle', 'fidget', 'look'].includes(this.state)) return;
+        const [L, R] = this.range();
+        const to = clamp(a.state === 'walk' ? a.tx : a.x, L, Math.max(L, R));   // where it is running to
+        const side = this.x <= to ? -1 : 1;
+        const tx = clamp(to + side * (this.w + a.w) * 0.55, L, Math.max(L, R));
+        if (Math.abs(tx - this.x) <= 10) return;
+        this.walkTo(tx);
+        if (kindOf(this, '') !== 'neugut') this.gait = 'run';       // 느긋: walks after it
+        this.go = { k: 'tagchase', who: a };
+    }
+
+    /** 0.10.12 나눠 먹기: another one is eating close by → over for a bite (a show only: nobody's record changes). */
+    startShare() {
+        const ok = (b) => b !== this && duetAlive(b) && b.state === 'eat' && !b.air && b.plat === this.plat
+            && Math.abs(b.x - this.x) < SHARE_NEAR && pairOk('share', this, b, SHARE_REST);
+        const b = actors.find(ok);
+        if (!b || this.air || this.wallOn || Math.random() >= chance(this, 'share', SHARE_P)) return false;
+        pairMark('share', this, b);
+        const [L, R] = this.range();
+        const side = this.x <= b.x ? -1 : 1;
+        const tx = clamp(b.x + side * (this.w + b.w) * 0.5, L, Math.max(L, R));
+        this.passing.add(b); b.passing.add(this);
+        if (Math.abs(tx - this.x) <= 10) { this.arrive({ k: 'share', who: b }); return true; }
+        this.walkTo(tx);
+        this.go = { k: 'share', who: b };
+        return true;
+    }
+
+    shareBite(b) {
+        if (!duetAlive(b) || b.state !== 'eat' || b.plat !== this.plat) return this.setState('idle');
+        if (this.side && Math.abs(b.x - this.x) > 4) this.dir = b.x >= this.x ? 1 : -1;
+        const k = kindOf(b, '');
+        if (k === 'simsul') {                                        // 심술: turns its back on it
+            if (b.side) b.dir = this.x >= b.x ? -1 : 1;
+            fx(b, '💢', 'tavvy-fx-small');
+            this.after = 'idle';
+            return this.startLook('?', b.x);
+        }
+        fx(b, SHARE_MINE[k] || '♥', 'tavvy-fx-small');
+        this.fk = 'nibble';
+        this.setState('fidget');
     }
 
     /** 글 쓰면 빤히: over to the input box to watch you write. */
@@ -2214,6 +2377,7 @@ class Actor {
         if (this.wallOn && s !== 'stroll' && s !== 'fly') this.endWall();
         this.state = s; this.t = 0;
         this.aside = false; this.cheering = false;
+        if (this.zoneT > 0 || this.zoneEl) this.unzone();            // 0.10.12 멍: only while it lasts
         if (s !== 'walk') { this.gait = null; this.go = null; }      // 0.9.0: how / why it's walking
         if (s !== 'read') this.rd = null;
         if (s !== 'toy') this.toy = null;                            // 0.10.0 선물
@@ -2246,7 +2410,9 @@ class Actor {
             if (this.rec.personality?.base === 'musim') fx(this, '…');
         }
         if (s === 'wait') { this.fxT = rand(0.4, 1.2); this.scanT = 0.6; this.wvT = rand(2, 3.5); this.wsw = 0; }
-        if (s === 'fidget') { this.fxT = 0; this.tiltT = 0; this.fq = Math.random() < 0.35; this.until = { scan: rand(1.6, 2.4), sway: 2.6, sit: rand(3, 6), tummy: 1.8 }[this.fk] || 1.6; }
+        if (s === 'fidget') { this.fxT = 0; this.tiltT = 0; this.fq = Math.random() < 0.35; this.until = { scan: rand(1.6, 2.4), sway: 2.6, sit: rand(3, 6), tummy: 1.8, nibble: 1.6 }[this.fk] || 1.6; }
+        if (s === 'fidget' && this.fk === 'zone') { this.until = rand(...(ZONE_LEN[kindOf(this, '')] || [2, 3])); this.zoneT = this.until; }   // 0.10.12 멍
+        if (s === 'doze' && actors.length > 1) setTimeout(() => nightCheck(this), 900);                                                     // 0.10.12 잘 자 · 같이 졸기
         if (s === 'skid') { this.until = 0.45; }
         if (s === 'where') { this.fxT = 0; this.until = 3.4; }
         if (s === 'stare') { this.fxT = 0; }
@@ -2322,6 +2488,7 @@ class Actor {
         if (!this.plat && !this.isFull() && Math.random() < chance(this, 'roll', NEW_ACTS.roll)) return this.setState('roll');   // 데굴데굴 (0.9.1: was in 제자리 놀기)
         if (Math.random() < chance(this, 'hum', NEW_ACTS.hum)) { this.fk = 'sway'; return this.setState('fidget'); }      // 흥얼거리기 ♪
         if (Math.random() < chance(this, 'scan', NEW_ACTS.scan)) { this.fk = 'scan'; return this.setState('fidget'); }    // 두리번
+        if (Math.random() < chance(this, 'zone', (ZONE_P[kindOf(this, '')] || 0.02) * (gen.active ? ZONE_GEN : 1))) { this.fk = 'zone'; return this.setState('fidget'); }   // 0.10.12 멍
         if (this.rec.look.roles?.sit?.length && Math.random() < chance(this, 'sit', NEW_ACTS.sit)) { this.fk = 'sit'; return this.setState('fidget'); }
         if (!this.plat && !gen.active && Math.random() < chance(this, 'peek', NEW_ACTS.peek) && this.startPeek()) return;  // 빼꼼
         if (!gen.active && this.giftList().length) {                  // 0.10.0 선물: takes one out now and then
@@ -2335,6 +2502,8 @@ class Actor {
             if (v) { this.wantTalk = v === 'near'; return; }          // 'near' = on its way to the other one's floor / ledge first
             if (actors.length > 1) this.wantTalk = true;              // nobody to go to now (asleep…) → it tries first thing next time
         }
+        if (!gen.active && actors.length > 1 && this.startShare()) return;                                               // 0.10.12 나눠 먹기
+        if (!gen.active && actors.length > 1 && !this.plat && Math.random() < chance(this, 'tag', TAG_P[kindOf(this, '')] ?? 0.01) && this.startTag()) return;   // 0.10.12 쫓아가기 장난
         if (this.plat && Math.random() < chance(this, 'read', READ_ON) && this.startRead()) return;                        // 글 읽는 척
         if (!this.plat && ledgesOn() && Math.random() < chance(this, 'read', READ_CLIMB)) {
             const t = this.pickClimb();
@@ -2530,6 +2699,19 @@ class Actor {
         if (!this.free() || this.waiting || this.state === 'doze') return;
         if (this.plat === el) return this.setState('watch');
         const p = platOf(el);
+        const rc = race && race.el === el && race.who.has(this) && performance.now() < race.till ? race : null;
+        if (rc && p && !this.plat && !this.wallOn && !rc.ran.has(this)) {     // 0.10.12 먼저 달려가기: under the middle of it first
+            rc.ran.add(this);
+            const [L, R] = this.range();
+            const tx = clamp((p.left + p.right) / 2 + rand(-this.w, this.w), L, Math.max(L, R));
+            if (Math.abs(tx - this.x) > 30) {
+                this.walkTo(tx);
+                if (kindOf(this, '') !== 'neugut') this.gait = 'run';   // 느긋: walks
+                this.go = { k: 'race', el };
+                return;
+            }
+            raceLand(this, el);                                     // already right under it
+        }
         if (p && this.climbTo(p, 'watch')) return;
         const r = liveRect(el);
         this.startLook('up', r ? (r.left + r.right) / 2 : this.x);
@@ -2568,6 +2750,7 @@ class Actor {
         this.gone = true;
         this.el.remove();
         this.propEl?.remove();
+        this.unzone();
         for (const el of [...(this.boxEls || []), ...(this.xgEls || [])]) el.remove();
         this.boxEls = this.xgEls = null;
         if (this.sayEl) { const el = this.sayEl; this.sayEl = null; clearTimeout(this.sayTimer); setTimeout(() => el.remove(), 1400); }   // "잘 자…" stays a moment
@@ -2586,6 +2769,7 @@ class Actor {
 
         if (this.state !== 'tuck' && this.scale < 1) this.scale = Math.min(1, this.scale + dt * 4);
         if (this.eatT > 0) this.eatT -= dt;
+        if (this.zoneT > 0) { this.zoneT -= dt; this.drawZone(); } else if (this.zoneEl) this.unzone();   // 0.10.12 멍
 
         if (this.wallOn && (this.held || this.air)) this.endWall();   // picked up / tapped off the wall or screen
         if (this.held) {
@@ -3154,6 +3338,11 @@ class Actor {
                     } else if (k === 'sit') {                            // sits down for a bit (has a 앉기 picture)
                         pose = this.role('sit', 'idle');
                         breath = 0.8;
+                    } else if (k === 'zone') {                           // 0.10.12 멍: stands still, the wheel turns
+                        this.tiltT = 0;
+                    } else if (k === 'nibble') {                         // 0.10.12 나눠 먹기: a bite or two (a show — nothing is counted)
+                        pose = this.role('eat', 'idle');
+                        if (this.fxT < 3 && this.t > 0.3 + this.fxT * 0.45) { this.fxT++; this.frame++; this.sq = Math.min(this.sq, 0.93); }
                     }
                     if (this.t > this.until) { this.sqT = 1; this.tiltT = 0; this.setState('idle'); this.until = rand(0.4, 1.2); }
                     break;
@@ -3196,7 +3385,13 @@ class Actor {
                     const onIt = !!this.plat && this.plat === gen.target;
                     this.tiltT = onIt ? (this.side ? this.dir : 1) * 6 : -3;                  // look down at it / up toward it
                     this.fxT -= dt;
-                    if (this.fxT <= 0) { this.fxT = rand(2.4, 3.6); fx(this, '?', 'tavvy-fx-small'); }
+                    if (this.fxT <= 0) {
+                        this.fxT = rand(2.4, 3.6);
+                        const zk = kindOf(this, '');
+                        if (this.zoneT > 0) { /* still loading */ }
+                        else if (Math.random() < chance(this, 'zone', (ZONE_P[zk] || 0.02) * ZONE_GEN * 2)) this.zoneT = rand(...(ZONE_LEN[zk] || [2, 3]));   // 0.10.12 같이 로딩 중
+                        else fx(this, '?', 'tavvy-fx-small');
+                    }
                     this.scanT -= dt;
                     if (this.scanT <= 0 && !onIt) {
                         this.scanT = 0.5;
@@ -3714,6 +3909,46 @@ function meetCheck() {
             if (startDuet(a, b)) return;
         }
     }
+}
+
+/* ---------- 0.10.12 여러 마리 더 ---------- */
+const pairAt = new Map();                // 'what:idA+idB' → when (ms)
+const pairOk = (what, a, b, sec) => performance.now() - (pairAt.get(what + ':' + duetKey(a.rec.id, b.rec.id)) ?? -1e9) >= sec * 1000;
+const pairMark = (what, a, b) => pairAt.set(what + ':' + duetKey(a.rec.id, b.rec.id), performance.now());
+
+/** a just nodded off: pets close by say good night (잘 자), and may come and doze next to it (같이 졸기). */
+function nightCheck(a) {
+    if (!duetAlive(a) || a.state !== 'doze') return;
+    for (const b of actors) {
+        if (b === a || !duetAlive(b) || b.air || b.wallOn || b.plat !== a.plat || !NIGHT_FROM.includes(b.state) || b.waiting) continue;
+        const dx = Math.abs(b.x - a.x);
+        if (dx > NAP_NEAR) continue;
+        const near = dx <= (a.w + b.w) * 2;
+        let said = false;
+        if (near && pairOk('night', a, b, NIGHT_REST) && Math.random() < chance(b, 'night', NIGHT_P)) {
+            pairMark('night', a, b);
+            said = true;
+            if (b.side && b.state !== 'walk' && dx > 8) b.dir = a.x >= b.x ? 1 : -1;
+            const lines = talkFreqOf(b) !== 'off' ? linesOf(b, 'night') : [];
+            if (lines.length) { b.lastTalk = performance.now(); b.speak(fillPet(lines[Math.floor(Math.random() * lines.length)], a)); }
+            else fx(b, NIGHT_FX[kindOf(b, '')] || '…', 'tavvy-fx-small');
+        }
+        if (Math.random() < chance(b, 'napwith', NAP_P[kindOf(b, '')] ?? 0.1)) setTimeout(() => b.startNapWith(a), said ? 1800 : 400);
+    }
+}
+
+/** 먼저 달려가기: who got to the new reply first (under it — most replies are too tall to climb). */
+let race = null;                         // { el, who: Set, ran: Set, first, till }
+const RACE_TIME = 25;                    // s — a race nobody finishes is forgotten after this
+
+function raceLand(a, el) {
+    const rc = race;
+    if (!rc || rc.el !== el || !rc.who.has(a)) return;
+    if (performance.now() > rc.till) { race = null; return; }
+    rc.who.delete(a);
+    if (!rc.first) { rc.first = a; fx(a, '!'); a.sq = 0.85; }
+    else fx(a, RACE_LATE[kindOf(a, '')] || '…', 'tavvy-fx-small');
+    if (!rc.who.size) race = null;
 }
 
 /* =====================================================================
@@ -4568,9 +4803,13 @@ function onReplyReceived(id, type) {
         const el = msgEl(id);
         if (!el) return;
         measurePlats();
-        for (const a of actors) {
-            if (a.state === 'watch' && a.plat === el) continue;           // already up there
-            if (Math.random() >= byCloseness(a, 0.3, 0.85)) continue;
+        let go = actors.filter(a => !(a.state === 'watch' && a.plat === el) && Math.random() < byCloseness(a, 0.3, 0.85));
+        const runners = actors.filter(a => fr(a, 'race') > 0 && !a.plat && !a.wallOn && (a.free() || eaters.includes(a)) && canChat(a) && a.state !== 'doze' && !a.waiting);   // 0.10.12 먼저 달려가기
+        if (runners.length > 1 && Math.random() < RACE_P * Math.min(...runners.map(a => fr(a, 'race')))) {   // a race: everyone who can, goes
+            race = { el, who: new Set(runners), ran: new Set(), first: null, till: performance.now() + RACE_TIME * 1000 };
+            go = [...new Set([...go, ...runners])];
+        }
+        for (const a of go) {
             if (eaters.includes(a)) a.afterMeal = el;                      // eat it first, then go and look
             else a.watchReply(el);
         }
@@ -8214,7 +8453,7 @@ function talkHtml(p) {
   <label class="tw-label">말하는 빈도
     <select data-t="freq">${Object.entries(TALK_FREQ).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
   </label>
-  <div class="tw-sub">순간마다 한 줄에 하나씩 적어요. 여러 줄이면 그때그때 하나를 골라 펫 머리 위 말풍선으로 말해요. <b>{{user}}</b>는 내 이름으로, <b>{{pet}}</b>은 말 거는 상대 펫 이름으로 바뀌어요. 바로 뒤 조사(은/는·이/가 등)는 이름에 맞게 저절로 바뀌어요. 한 줄은 ${LINE_MAX}자까지예요.</div>
+  <div class="tw-sub">순간마다 한 줄에 하나씩 적어요. 여러 줄이면 그때그때 하나를 골라 펫 머리 위 말풍선으로 말해요. <b>{{user}}</b>는 내 이름으로, <b>{{pet}}</b>은 상대 펫 이름으로 바뀌어요. 바로 뒤 조사(은/는·이/가 등)는 이름에 맞게 저절로 바뀌어요. 한 줄은 ${LINE_MAX}자까지예요.</div>
   ${TALK_MOMENTS.map(m => `<label class="tw-label">${esc(m.name)}<textarea data-line="${m.key}" rows="2" placeholder="예) ${esc(m.ex)}"></textarea></label>`).join('')}
   <div class="tw-btn tw-wide" data-act="aifill"><i class="fa-solid fa-wand-magic-sparkles"></i> AI로 빈 칸 채우기</div>
   <div class="tw-sub">누를 때만 한 번 만들어요. AI에게는 펫 이름과 성격만 보내요. 마음에 안 드는 줄은 저장하기 전에 고치거나 지우면 돼요.</div>
@@ -8476,7 +8715,7 @@ async function aiFill() {
             '- 한 줄은 25자 안쪽, 반말, 성격이 잘 드러나게',
             '- 이모지는 가끔만',
             '- 화면 앞의 사람을 부를 때는 {{user}}라고 쓰기',
-            ...(empty.some(m => m.key === 'greet' || m.key === 'answer') ? ['- 다른 펫을 부를 때는 {{pet}}이라고 쓰기'] : []),
+            ...(empty.some(m => m.key === 'greet' || m.key === 'answer' || m.key === 'night') ? ['- 다른 펫을 부를 때는 {{pet}}이라고 쓰기'] : []),
             '순간:',
             ...empty.map(m => `${m.key}: ${TALK_PROMPT_MOMENTS[m.key]}`),
             `JSON으로만 답하기. 예: {"${empty[0].key}": ["…", "…", "…"]}`,
