@@ -152,6 +152,8 @@ const PRESENT_ACTS = [
     { key: 'pr_give', name: '나에게 내밀기' },
     { key: 'pr_hug',  name: '끼고 자기' },
 ];
+const GIFT_FAV_P = 0.5;         // 0.10.13 가장 좋아하는 선물: 꺼낼 때 이만큼은 그 선물 (나머지는 다 같이 고르게)
+const LEDGE_ROLL_ROOM = 150;    // 0.10.13 px — 말풍선 위 굴리기: 펫·선물 말고 이만큼 더 넓어야 굴려요
 const PRESENT_P = { pr_look: 0.04, pr_roll: 0.025, pr_toss: 0.025, pr_show: 0.025, pr_give: 0.025, pr_hug: 0.35 };   // × 빈도 (처음엔 드물게)
 const GIFT_MAX = 6;
 const GIFT_MEMO = 100;                               // 0.10.2 선물 메모
@@ -1787,17 +1789,39 @@ class Actor {
 
     giftList() { return (this.rec.gifts || []).filter(g => g && typeof g.src === 'string' && !g.fresh); }
 
+    /** 0.10.13: one present to take out — the favourite (♥) about half the time. */
+    pickGift() {
+        const l = this.giftList(), fav = l.find(g => g.fav);
+        if (fav && Math.random() < GIFT_FAV_P) return fav;
+        return l[Math.floor(Math.random() * l.length)];
+    }
+
+    /** 0.10.13: room to roll it along this message (ends kept clear). */
+    ledgeRollOk(g) {
+        if (!this.plat || !this.pr || !g) return false;
+        const w = Math.min(this.pr.right, stage.right) - Math.max(this.pr.left, stage.left);
+        return w >= this.w + this.h * giftK(g) + LEDGE_ROLL_ROOM;
+    }
+
+    /** Where the present may be: the screen, or this message with its ends kept clear (0.10.13). */
+    toyRange(g) {
+        const hp = this.h * giftK(g);
+        let lo = stage.left + hp / 2, hi = stage.right - hp / 2;
+        if (this.plat && this.pr) { lo = Math.max(lo, this.pr.left + hp / 2 + 8); hi = Math.min(hi, this.pr.right - hp / 2 - 8); }
+        return [lo, Math.max(lo, hi)];
+    }
+
     /** Take a present out: look (구경) / show (자랑) / roll (굴리기) / toss (던졌다 받기) / recv (just given — it drops in). */
     startToy(kind, g) {
-        if (!g) { const l = this.giftList(); g = l[Math.floor(Math.random() * l.length)]; }
+        if (!g) g = this.pickGift();
         if (!g) return false;
-        if ((kind === 'roll' || kind === 'toss') && this.plat) kind = 'look';
-        const hp = this.h * giftK(g), lo = stage.left + hp / 2, hi = stage.right - hp / 2;
+        if ((kind === 'toss' || (kind === 'roll' && !this.ledgeRollOk(g))) && this.plat) kind = 'look';   // 0.10.13: 넓은 말풍선 위에선 굴려요
+        const hp = this.h * giftK(g), [lo, hi] = this.toyRange(g);
         let s = this.side ? this.dir : (Math.random() < 0.5 ? -1 : 1);
         if ((s > 0 ? hi - this.x : this.x - lo) < this.w * 0.5 + hp + (kind === 'roll' ? 80 : 0)) s = -s;   // the side with room
         this.setState('toy');
         this.toy = { k: kind, g, s, px: clamp(this.x + s * (this.w * 0.42 + hp * 0.32), lo, hi), lift: 0, vx: 0, vy: 0, rot: 0, sc: 0, st: 1,
-            ph: 0, n: 0, max: kind === 'roll' ? (Math.random() < 0.5 ? 2 : 3) : 2, f: 0, wait: 0, dur: rand(3, 5) };
+            ph: 0, n: 0, max: kind === 'roll' ? (this.plat ? 2 : Math.random() < 0.5 ? 2 : 3) : 2, f: 0, wait: 0, dur: rand(3, 5) };
         if (kind === 'recv') {
             const T = this.toy;
             T.sc = 0;                                            // 0.10.1: inside a ribbon box until it's opened
@@ -2385,7 +2409,7 @@ class Actor {
         if (s !== 'toy') this.toy = null;                            // 0.10.0 선물
         this.hug = null;
         if (s === 'doze' && !this.plat && Math.random() < chance(this, 'pr_hug', PRESENT_P.pr_hug)) {   // 끼고 자기
-            const l = this.giftList(), g = l[Math.floor(Math.random() * l.length)];
+            const l = this.giftList(), g = l.find(x => x.fav) || l[Math.floor(Math.random() * l.length)];   // 0.10.13: 좋아하는 선물 먼저
             if (g) {
                 const hp = this.h * giftK(g), sd = this.side ? this.dir : (Math.random() < 0.5 ? -1 : 1);
                 this.hug = { g, px: clamp(this.x + sd * (this.w * 0.42 + hp * 0.32), stage.left + hp / 2, stage.right - hp / 2), lift: 0, rot: 0, sc: 0 };
@@ -2495,8 +2519,12 @@ class Actor {
         if (!this.plat && !gen.active && Math.random() < chance(this, 'peek', NEW_ACTS.peek) && this.startPeek()) return;  // 빼꼼
         if (!gen.active && this.giftList().length) {                  // 0.10.0 선물: takes one out now and then
             for (const [k, key] of [['look', 'pr_look'], ['show', 'pr_show'], ['give', 'pr_give'], ['roll', 'pr_roll'], ['toss', 'pr_toss']]) {
-                if ((k === 'roll' || k === 'toss') && this.plat) continue;
-                if (Math.random() < chance(this, key, PRESENT_P[key])) return void this.startToy(k);
+                if (k === 'toss' && this.plat) continue;
+                if (Math.random() < chance(this, key, PRESENT_P[key])) {
+                    const g = this.pickGift();
+                    if (k === 'roll' && this.plat && !this.ledgeRollOk(g)) continue;   // 0.10.13: 좁은 말풍선 위에선 안 굴려요
+                    return void this.startToy(k, g);
+                }
             }
         }
         if (!gen.active && !this.wantTalk && Math.random() < chance(this, 'visit', VISIT_P)) {                             // 0.10.9 말 걸러 가기
@@ -2987,7 +3015,7 @@ class Actor {
                     if (this.food > 0 || this.mealPending) { this.toy = null; this.decide(); break; }
                     breath = 1;
                     const H = this.h, hold = H * 0.92, u = Math.min(1, dt * 8);
-                    const hp = H * giftK(T.g), lo = stage.left + hp / 2, hi = stage.right - hp / 2;
+                    const hp = H * giftK(T.g), [lo, hi] = this.toyRange(T.g);
                     const walking = () => { pose = this.role('walk'); bob = Math.pow(Math.sin((this.walkPh % 1) * Math.PI), 0.7) * 4 * this.k; this.tiltT = 0; };
                     if (T.out) {                                             // back into its pocket
                         const v = Math.min(1, dt * 10);
@@ -3019,12 +3047,12 @@ class Actor {
                         if (this.t > 2.7) T.out = true;
                     } else if (T.k === 'roll') {                             // 굴리며 놀기: a push, it rolls, after it
                         T.px += T.vx * dt;
-                        if (T.px < lo || T.px > hi) { T.px = clamp(T.px, lo, hi); T.vx = -T.vx * 0.5; }
+                        if (T.px < lo || T.px > hi) { T.px = clamp(T.px, lo, hi); T.vx = this.plat ? 0 : -T.vx * 0.5; }   // 말풍선 위: 끝 전에 멈춤
                         T.rot += (T.vx * dt) / Math.max(8, hp / 2) * 57.3;
                         T.vx *= Math.pow(0.3, dt);
                         if (T.moving && Math.abs(T.vx) < 12) {               // stopped: next push goes where there's room
                             T.moving = false; T.vx = 0;
-                            if ((T.s > 0 ? hi - T.px : T.px - lo) < 100) T.s = -T.s;
+                            if ((T.s > 0 ? hi - T.px : T.px - lo) < (this.plat ? 50 : 100)) T.s = -T.s;
                         }
                         const tx = clamp(T.px - T.s * (this.w * 0.42 + hp * 0.32), ...this.range());
                         if (!this.stepToward(tx, dt)) walking();
@@ -3035,7 +3063,7 @@ class Actor {
                             if (!T.moving) {
                                 T.wait += dt;
                                 if (T.n >= T.max) { if (!T.f) { T.f = 1; fx(this, '♪', 'tavvy-fx-small'); } if (T.wait > 0.9) T.out = true; }
-                                else if (T.wait > (T.n ? 0.35 : 0.5)) { T.n++; T.wait = 0; T.moving = true; T.vx = T.s * rand(150, 230); this.sq = 0.88; }
+                                else if (T.wait > (T.n ? 0.35 : 0.5)) { T.n++; T.wait = 0; T.moving = true; T.vx = T.s * (this.plat ? rand(80, 120) : rand(150, 230)); this.sq = 0.88; }
                             }
                         }
                         if (this.t > 14) T.out = true;
@@ -6889,7 +6917,7 @@ async function exportPetFile(id) {
         for (const g of p.gifts || []) {
             if (typeof g?.src !== 'string') continue;
             files.push(await fileToDataUrl(g.src));
-            pet.gifts.push({ name: g.name || '', ...(g.memo ? { memo: g.memo } : {}), size: g.size || 'm', at: g.at || 0, file: files.length - 1 });
+            pet.gifts.push({ name: g.name || '', ...(g.memo ? { memo: g.memo } : {}), ...(g.fav ? { fav: true } : {}), size: g.size || 'm', at: g.at || 0, file: files.length - 1 });
         }
         const data = { [PET_FILE]: 1, formatVersion: FORMAT_VERSION, pet, files };
         download(`tavvy_${safeName(p.name)}.json`, new Blob([JSON.stringify(data)], { type: 'application/json' }));
@@ -7133,7 +7161,7 @@ async function unpackGifts(list, files, uploaded) {
         const path = await uploadFile(`tavvy_gift_${id}.${ext === 'jpeg' ? 'jpg' : ext}`, files[g.file].split(',')[1]);
         uploaded.push(path);
         const memo = String(g.memo || '').slice(0, GIFT_MEMO);
-        out.push({ id, src: path, name: String(g.name || '').slice(0, 20), ...(memo ? { memo } : {}), size: GIFT_SIZES.some(x => x[0] === g.size) ? g.size : 'm', at: num(g.at) });
+        out.push({ id, src: path, name: String(g.name || '').slice(0, 20), ...(memo ? { memo } : {}), ...(g.fav === true && !out.some(x => x.fav) ? { fav: true } : {}), size: GIFT_SIZES.some(x => x[0] === g.size) ? g.size : 'm', at: num(g.at) });
     }
     return out;
 }
@@ -7270,6 +7298,8 @@ function onWinClick(e) {
         if (!pend?.file) return;
         return openCutter(pend.file, { box: pend.cut, done: (cuts) => { if (win.giftPend !== pend) return; pend.cut = cuts?.[0] || null; redoGiftPreview(); } });
     }
+    const gf = t.closest('[data-gfav]');
+    if (gf) return favGift(gf.dataset.gfav);
     const gs = t.closest('[data-gsize]');
     if (gs) return setGiftSize(gs.dataset.gsize, gs.dataset.gv);
     const gw = t.closest('[data-gshow]');
@@ -7386,7 +7416,7 @@ function giftsHtml(p) {
     const list = p.gifts || [];
     const pend = win.giftPend?.pet === p ? win.giftPend : null;
     const cards = list.map(g => `<div class="tw-gift">
-  <div class="tw-giftpicbox"><img class="tw-giftpic tw-checker" src="${esc(imgUrl(g.src))}" alt=""></div>
+  <div class="tw-giftpicbox"><img class="tw-giftpic tw-checker" src="${esc(imgUrl(g.src))}" alt=""><span class="tw-giftfav${g.fav ? ' tw-fon' : ''}" data-gfav="${esc(g.id)}" title="${g.fav ? '가장 좋아하는 선물 (다시 누르면 풀어요)' : '가장 좋아하는 선물로'}"><i class="fa-${g.fav ? 'solid' : 'regular'} fa-heart"></i></span></div>
   <input class="tw-giftname" data-gname="${esc(g.id)}" maxlength="20" value="${esc(g.name || '')}" placeholder="이름 없음">
   <textarea class="tw-giftmemo" data-gmemo="${esc(g.id)}" maxlength="${GIFT_MEMO}" rows="2" placeholder="메모">${esc(g.memo || '')}</textarea>
   <span class="tw-fseg tw-giftsize">${GIFT_SIZES.map(([k, n]) => `<span class="tw-fbtn${(g.size || 'm') === k ? ' tw-fon' : ''}" data-gsize="${esc(g.id)}" data-gv="${k}">${n}</span>`).join('')}</span>
@@ -7410,7 +7440,7 @@ function giftsHtml(p) {
   ${pend.editId ? '' : '<div class="tw-sub">바로 주기: 창을 닫고 안 받은 선물을 한꺼번에 건네요 · 모아 두기: 넣어만 두고 다음 그림을 골라요</div>'}
 </div>`;
     return `<div class="tw-cap">받은 선물 ${list.length} / ${GIFT_MAX}</div>
-<div class="tw-sub">선물을 주면 가끔 꺼내서 구경하고, 갖고 놀고, 자랑해요. 얼마나 자주 할지는 행동 탭 "선물"에서 골라요.</div>
+<div class="tw-sub">선물을 주면 가끔 꺼내서 구경하고, 갖고 놀고, 자랑해요. 얼마나 자주 할지는 행동 탭 "선물"에서 골라요. ♡를 누르면 가장 좋아하는 선물이 돼요(하나만).</div>
 <input type="file" accept="${PIC_ACCEPT}" data-f="giftfile">
 ${pendHtml}
 <div class="tw-gifts">${cards}${add}</div>`;
@@ -7532,6 +7562,17 @@ async function replaceGift(p, pend) {
     }
 }
 
+/** 0.10.13 가장 좋아하는 선물: one per pet; tap again to undo. */
+function favGift(id) {
+    const p = curPet(), g = giftOf(p, id);
+    if (!g || readOnly) return;
+    const on = !g.fav;
+    for (const x of p.gifts || []) if (x) delete x.fav;
+    if (on) g.fav = true;
+    saveSoon();
+    drawGifts();
+}
+
 function setGiftSize(id, v) {
     const g = giftOf(curPet(), id);
     if (!g || readOnly || !GIFT_SIZES.some(x => x[0] === v)) return;
@@ -7595,7 +7636,7 @@ function showGiftNow(id) {
         if (win?.open) { if (n < 40) setTimeout(() => go(n + 1), 250); return; }   // "저장 안 한 내용" may be asking first
         if (a.gone || !a.free() || a.held || a.air || a.wallOn) return;
         if (g.fresh) return void a.startToy('recv', g);
-        const kinds = a.plat ? ['look', 'show', 'give'] : ['look', 'show', 'give', 'roll', 'toss'];
+        const kinds = a.plat ? ['look', 'show', 'give', ...(a.ledgeRollOk(g) ? ['roll'] : [])] : ['look', 'show', 'give', 'roll', 'toss'];
         a.startToy(kinds[Math.floor(Math.random() * kinds.length)], g);
     };
     setTimeout(() => go(0), 350);

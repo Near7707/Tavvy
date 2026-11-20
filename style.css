@@ -1101,7 +1101,9 @@
     border-radius: 12px;
     min-width: 0;
 }
-.tavvy-win .tw-giftpicbox { height: 72px; display: flex; align-items: center; justify-content: center; }
+.tavvy-win .tw-giftpicbox { height: 72px; display: flex; align-items: center; justify-content: center; position: relative; }
+.tavvy-win .tw-giftfav { position: absolute; top: 0; right: 0; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0.55; }
+.tavvy-win .tw-giftfav.tw-fon { opacity: 1; color: #e25a7a; }
 /* 0.10.3: the check pattern sits only behind the picture itself, not the whole row */
 .tavvy-win .tw-giftpic { display: block; width: auto; height: auto; max-width: 100%; max-height: 72px; min-height: 40px; border-radius: 6px; }
 .tavvy-win .tw-giftname { width: 100%; box-sizing: border-box; margin: 0; font-size: 13px; }
