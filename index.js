@@ -45,6 +45,24 @@ const BASE = new URL('.', import.meta.url).href;
 const log = (...a) => console.log('[Tavvy]', ...a);
 const ctx = () => SillyTavern.getContext();
 
+/* 0.11.0 언어 (Language): 'ko' / 'en'. ⚙ 설정의 자동/한국어/English — 바꾸면 새로고침 뒤에 적용.
+ * 자동 = 실리태번 화면 언어나 브라우저 언어가 한국어면 한국어, 아니면 English. */
+const LANG = (() => {
+    try {
+        const pick = SillyTavern.getContext().extensionSettings?.[MODULE]?.settings?.lang;
+        if (pick === 'ko' || pick === 'en') return pick;
+        const st = String(localStorage.getItem('language') || ''), nav = String(navigator.language || '');
+        return /^ko/i.test(st) || /^ko/i.test(nav) ? 'ko' : 'en';
+    } catch { return 'ko'; }
+})();
+const LX = (ko, en) => (LANG === 'ko' ? ko : en);
+const EN_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** 날짜 글자: 5월 3일 / May 3 (올해가 아니면 연도도). */
+function dateText(y, m, d) {
+    const other = y !== new Date().getFullYear();
+    return LX(`${other ? `${y}년 ` : ''}${m}월 ${d}일`, `${EN_MON[m - 1] || m} ${d}${other ? `, ${y}` : ''}`);
+}
+
 /* =====================================================================
  * Constants
  * ===================================================================== */
@@ -60,18 +78,18 @@ const ctx = () => SillyTavern.getContext();
 // fussy: dislikes rapid taps (💢, closeness is never lost)
 // wall:  chance to go up a wall and stroll on the screen (벽 오르기 · 화면 산책) when it decides by itself
 const PERSONALITIES = {
-    aegyo:   { name: '애교', speed: 72, idle: [0.8, 2],   doze: 0.06, dozeLen: [6, 12], tap: '♥',  climb: [0.16, 0.24], perch: [2, 5],   land: '♥',  send: '♥',  bump: '♥',     me: [0.60, 0.95], eat: 0.7, wall: 0.4 },
-    saechim: { name: '새침', speed: 55, idle: [1.2, 3],   doze: 0.10, dozeLen: [6, 12], tap: '?',  climb: [0.07, 0.12], perch: [2, 5],   land: 'flick', send: 'glance', bump: 'flick', me: [0.15, 0.60], eat: 1, fussy: true, wall: 0.4 },
-    neugut:  { name: '느긋', speed: 30, idle: [2, 4],     doze: 0.35, dozeLen: [12, 24], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: '하암', send: '♪',  bump: '?',     me: [0.15, 0.50], eat: 1.3, wall: 0.4 },
-    simsul:  { name: '심술', speed: 58, idle: [1.2, 3],   doze: 0.08, dozeLen: [6, 11], tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: '흥',  bump: '💢',    me: [0.20, 0.60], eat: 1, fussy: true, wall: 0.4 },
-    musim:   { name: '무심', speed: 42, idle: [2, 4.5],   doze: 0.12, dozeLen: [8, 16], tap: '…',  climb: [0.08, 0.14], perch: [8, 16],  land: '…',  send: '…',  bump: 'aside', me: [0.05, 0.25], eat: 1, wall: 0.4 },
+    aegyo:   { name: LX('애교', 'Sweet'), speed: 72, idle: [0.8, 2],   doze: 0.06, dozeLen: [6, 12], tap: '♥',  climb: [0.16, 0.24], perch: [2, 5],   land: '♥',  send: '♥',  bump: '♥',     me: [0.60, 0.95], eat: 0.7, wall: 0.4 },
+    saechim: { name: LX('새침', 'Prim'), speed: 55, idle: [1.2, 3],   doze: 0.10, dozeLen: [6, 12], tap: '?',  climb: [0.07, 0.12], perch: [2, 5],   land: 'flick', send: 'glance', bump: 'flick', me: [0.15, 0.60], eat: 1, fussy: true, wall: 0.4 },
+    neugut:  { name: LX('느긋', 'Easygoing'), speed: 30, idle: [2, 4],     doze: 0.35, dozeLen: [12, 24], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: LX('하암', 'yawn'), send: '♪',  bump: '?',     me: [0.15, 0.50], eat: 1.3, wall: 0.4 },
+    simsul:  { name: LX('심술', 'Grumpy'), speed: 58, idle: [1.2, 3],   doze: 0.08, dozeLen: [6, 11], tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: LX('흥', 'hmph'),  bump: '💢',    me: [0.20, 0.60], eat: 1, fussy: true, wall: 0.4 },
+    musim:   { name: LX('무심', 'Aloof'), speed: 42, idle: [2, 4.5],   doze: 0.12, dozeLen: [8, 16], tap: '…',  climb: [0.08, 0.14], perch: [8, 16],  land: '…',  send: '…',  bump: 'aside', me: [0.05, 0.25], eat: 1, wall: 0.4 },
 };
 
 // Built-in pets (original characters made for this project).
 // baseline = transparent rows under the feet in the source image (source px).
 const BUILTIN = {
     kongtteok: {
-        name: '콩떡', facing: 'front', baseline: 2,
+        name: LX('콩떡', 'Mochi'), facing: 'front', baseline: 2,
         roles: {
             idle: ['idle.png'], sleep: ['sleep.png'], happy: ['happy.png'],
             walk: ['walk1.png', 'walk2.png'], cry: ['cry.png'], surprise: ['surprise.png'],
@@ -79,7 +97,7 @@ const BUILTIN = {
         },
     },
     bori: {
-        name: '보리', facing: 'right', baseline: 4,
+        name: LX('보리', 'Barley'), facing: 'right', baseline: 4,
         roles: {
             idle: ['idle.png'], sleep: ['sleep.png'], happy: ['happy.png'],
             walk: ['walk1.png', 'walk2.png'], cry: ['cry.png'], surprise: ['surprise.png'],
@@ -87,7 +105,7 @@ const BUILTIN = {
         },
     },
     danchu: {
-        name: '단추', facing: 'front', baseline: 2,
+        name: LX('단추', 'Button'), facing: 'front', baseline: 2,
         roles: {
             idle: ['idle.png'], sleep: ['sleep.png'], happy: ['happy.png'],
             walk: ['walk1.png', 'walk2.png'], cry: ['cry.png'], surprise: ['surprise.png'],
@@ -132,11 +150,11 @@ const BACKUP_KEEP = 7;          // daily backups kept on the server
 // closeness (stage 5): points = messages eaten (mine + theirs) + pat points.
 // The thresholds sit at closeness 0 / 25 / 50 / 75 / 100, straight lines in between. Never saved — always worked out.
 const LEVELS = [
-    { name: '아는 사이', min: 0,   hearts: '♡' },
-    { name: '친구', min: 30,  hearts: '♥' },
-    { name: '친한 친구', min: 100, hearts: '♥♥' },
-    { name: '단짝', min: 220, hearts: '♥♥♥' },
-    { name: '내편', min: 400, hearts: '♥♥♥♥' },
+    { name: LX('아는 사이', 'Acquaintance'), min: 0,   hearts: '♡' },
+    { name: LX('친구', 'Friend'), min: 30,  hearts: '♥' },
+    { name: LX('친한 친구', 'Close friend'), min: 100, hearts: '♥♥' },
+    { name: LX('단짝', 'Best friend'), min: 220, hearts: '♥♥♥' },
+    { name: LX('내편', 'Always yours'), min: 400, hearts: '♥♥♥♥' },
 ];
 const CLOSE = 50;               // closeness from which "친하면" reactions show (friends)
 const ME_SCALE = 0.3;           // "react to you" chance × this when it decides by itself
@@ -145,19 +163,19 @@ const ME_REST = 15;             // s — not twice in a row within this
 const NEW_ACTS = { hum: 0.07, scan: 0.08, sit: 0.07, peek: 0.04, roll: 0.04 };
 // 0.10.0 선물 주기: pictures you give a pet — now and then it takes one out
 const PRESENT_ACTS = [
-    { key: 'pr_look', name: '구경하기' },
-    { key: 'pr_roll', name: '굴리며 놀기' },
-    { key: 'pr_toss', name: '던졌다 받기' },
-    { key: 'pr_show', name: '자랑하기' },
-    { key: 'pr_give', name: '나에게 내밀기' },
-    { key: 'pr_hug',  name: '끼고 자기' },
+    { key: 'pr_look', name: LX('구경하기', 'Looking at it') },
+    { key: 'pr_roll', name: LX('굴리며 놀기', 'Rolling it around') },
+    { key: 'pr_toss', name: LX('던졌다 받기', 'Toss and catch') },
+    { key: 'pr_show', name: LX('자랑하기', 'Showing it off') },
+    { key: 'pr_give', name: LX('나에게 내밀기', 'Holding it out to you') },
+    { key: 'pr_hug',  name: LX('끼고 자기', 'Sleeping with it') },
 ];
 const GIFT_FAV_P = 0.5;         // 0.10.13 가장 좋아하는 선물: 꺼낼 때 이만큼은 그 선물 (나머지는 다 같이 고르게)
 const LEDGE_ROLL_ROOM = 150;    // 0.10.13 px — 말풍선 위 굴리기: 펫·선물 말고 이만큼 더 넓어야 굴려요
 const PRESENT_P = { pr_look: 0.04, pr_roll: 0.025, pr_toss: 0.025, pr_show: 0.025, pr_give: 0.025, pr_hug: 0.35 };   // × 빈도 (처음엔 드물게)
 const GIFT_MAX = 6;
 const GIFT_MEMO = 100;                               // 0.10.2 선물 메모
-const GIFT_SIZES = [['s', '작게', 0.32], ['m', '보통', 0.45], ['l', '크게', 0.6]];   // × the pet's height
+const GIFT_SIZES = [['s', LX('작게', 'Small'), 0.32], ['m', LX('보통', 'Normal'), 0.45], ['l', LX('크게', 'Large'), 0.6]];   // × the pet's height
 const TOY_G = 1600;                         // a present's gravity (px/s²)
 const isPres = (key) => PRESENT_ACTS.some(a => a.key === key);
 const giftK = (g) => (GIFT_SIZES.find(x => x[0] === g?.size) || GIFT_SIZES[1])[2];
@@ -168,9 +186,9 @@ const TILT_K = 0.5;                         // 0.9.1: every lean / tilt at half 
 const EAT_MIN = 1.5;                        // 0.9.1: eats at least this long (s), even a short message
 // 0.9.0: attitudes toward you (처음엔 끔 — switched on per pet)
 const ATTITUDES = [
-    { key: 'cling',  name: '졸졸 따라다니기' },   // 0.9.3: tap somewhere → walks over that way
-    { key: 'where',  name: '…어디 갔었어?' },    // you were away a while → comes and stares, "…어디 갔었어?"
-    { key: 'stare',  name: '글 쓰면 빤히' },      // you start writing → comes over and looks up at it
+    { key: 'cling',  name: LX('졸졸 따라다니기', 'Tagging along') },   // 0.9.3: tap somewhere → walks over that way
+    { key: 'where',  name: LX('…어디 갔었어?', '…where did you go?') },    // you were away a while → comes and stares, "…어디 갔었어?"
+    { key: 'stare',  name: LX('글 쓰면 빤히', 'Staring while you type') },      // you start writing → comes over and looks up at it
 ];
 const CLING_TAP = 0.6;          // 0.9.3: a tap → walks toward it (드물게 30% / 보통 60% / 자주 ~90%)
 const TAP_MS = 350, TAP_MOVE = 10;   // a short touch that didn't move = a tap (not a scroll / a long press)
@@ -184,24 +202,24 @@ const REVISIT_DAYS = 3;         // away this long → a little bubble by the bed
 const TEARY_DAYS = 7, TEARY_CLOSE = 60;     // away this long and this close → teary when it sees you
 const RECENT_H = 12;            // woken again within this many hours = "just saw you"
 const REVISIT_LINES = {
-    aegyo:   (n) => `${n}일이나 기다렸어…! 보고 싶었어 ♥`,
-    saechim: (n) => `…${n}일 만이네. 딱히 기다린 건 아니야.`,
-    neugut:  (n) => `하암… 벌써 ${n}일 지났어?`,
-    simsul:  (n) => `${n}일이나 어디 갔었어 💢`,
-    musim:   (n) => `…${n}일.`,
+    aegyo:   (n) => LX(`${n}일이나 기다렸어…! 보고 싶었어 ♥`, `I waited ${n} whole days…! I missed you ♥`),
+    saechim: (n) => LX(`…${n}일 만이네. 딱히 기다린 건 아니야.`, `…${n} days, huh. Not that I was waiting.`),
+    neugut:  (n) => LX(`하암… 벌써 ${n}일 지났어?`, `Yawn… ${n} days already?`),
+    simsul:  (n) => LX(`${n}일이나 어디 갔었어 💢`, `${n} days! Where were you 💢`),
+    musim:   (n) => LX(`…${n}일.`, `…${n} days.`),
 };
 
 // unlocked behaviours (stage 6-1). lv = closeness level needed (1 친구 · 2 친한 친구 · 3 단짝 · 4 내편).
 // only / not = personality. Never saved — worked out from the level every time.
 const UNLOCKS = [
-    { key: 'peekInput', lv: 1, name: '입력창 기웃' },
-    { key: 'follow',    lv: 1, name: '손 따라 보기' },
-    { key: 'bedWiggle', lv: 2, name: '침대 들썩' },
-    { key: 'myBubble',  lv: 2, name: '내 말풍선 좋아하기' },
-    { key: 'resist',    lv: 3, name: '배웅 투정' },
-    { key: 'dozeWait',  lv: 3, name: '기다리다 졸기' },
-    { key: 'soft',      lv: 4, name: '마음이 풀린 반응', not: 'aegyo' },
-    { key: 'gift',      lv: 4, name: '행운 빌기', only: 'aegyo' },
+    { key: 'peekInput', lv: 1, name: LX('입력창 기웃', 'Peeking at the input box') },
+    { key: 'follow',    lv: 1, name: LX('손 따라 보기', 'Watching your hand') },
+    { key: 'bedWiggle', lv: 2, name: LX('침대 들썩', 'Wiggling bed') },
+    { key: 'myBubble',  lv: 2, name: LX('내 말풍선 좋아하기', 'Liking your messages') },
+    { key: 'resist',    lv: 3, name: LX('배웅 투정', 'Fussing at bedtime') },
+    { key: 'dozeWait',  lv: 3, name: LX('기다리다 졸기', 'Dozing off while waiting') },
+    { key: 'soft',      lv: 4, name: LX('마음이 풀린 반응', 'Softer reactions'), not: 'aegyo' },
+    { key: 'gift',      lv: 4, name: LX('행운 빌기', 'Wishing you luck'), only: 'aegyo' },
 ];
 const PEEKIN_CHANCE = 0.6;      // starting to write → peeks at the input box
 const PEEKIN_AGAIN = 0.3;       // still writing → now and then again
@@ -225,51 +243,51 @@ const GIFTS = ['🍀'];          // 0.10.0: 행운 빌기 — a clover, wishing 
 // pictures per action (6-2). key = role name in look.roles; fb = the picture used when this one is empty.
 // Every role here is actually used by some behaviour.
 const ROLE_GROUPS = [
-    { key: 'main', name: '자주 쓰는 동작', roles: [
-        { key: 'idle', name: '기본', note: '숨쉬기 · 꼭 필요해요' },
-        { key: 'walk', name: '걷기', fb: 'idle' },
-        { key: 'held', name: '들림', fb: 'surprise' },
-        { key: 'dance', name: '춤추기', fb: 'happy' },
-        { key: 'sleep', name: '졸기', fb: 'idle' },
-        { key: 'cry', name: '울기', fb: 'surprise' },
+    { key: 'main', name: LX('자주 쓰는 동작', 'Common actions'), roles: [
+        { key: 'idle', name: LX('기본', 'Basic'), note: LX('숨쉬기 · 꼭 필요해요', 'Breathing · required') },
+        { key: 'walk', name: LX('걷기', 'Walk'), fb: 'idle' },
+        { key: 'held', name: LX('들림', 'Held'), fb: 'surprise' },
+        { key: 'dance', name: LX('춤추기', 'Dance'), fb: 'happy' },
+        { key: 'sleep', name: LX('졸기', 'Doze'), fb: 'idle' },
+        { key: 'cry', name: LX('울기', 'Cry'), fb: 'surprise' },
     ] },
-    { key: 'move', name: '움직이기 더 보기', roles: [
-        { key: 'jump', name: '점프·착지', fb: 'idle' },
-        { key: 'fall', name: '떨어짐', fb: 'surprise' },
-        { key: 'climb', name: '말풍선 오르기', fb: 'jump' },
-        { key: 'roll', name: '구르기', fb: 'idle' },
-        { key: 'wall', name: '화면 오르기', fb: 'walk' },
-        { key: 'fly', name: '날기', fb: 'jump' },
-        { key: 'dash', name: '휙휙', fb: 'fly' },
+    { key: 'move', name: LX('움직이기 더 보기', 'More movement'), roles: [
+        { key: 'jump', name: LX('점프·착지', 'Jump · land'), fb: 'idle' },
+        { key: 'fall', name: LX('떨어짐', 'Fall'), fb: 'surprise' },
+        { key: 'climb', name: LX('말풍선 오르기', 'Climb messages'), fb: 'jump' },
+        { key: 'roll', name: LX('구르기', 'Roll'), fb: 'idle' },
+        { key: 'wall', name: LX('화면 오르기', 'Climb the screen'), fb: 'walk' },
+        { key: 'fly', name: LX('날기', 'Fly'), fb: 'jump' },
+        { key: 'dash', name: LX('휙휙', 'Dash'), fb: 'fly' },
     ] },
-    { key: 'react', name: '반응', roles: [
-        { key: 'happy', name: '기쁨', fb: 'idle' },
-        { key: 'angry', name: '화남', fb: 'idle' },
-        { key: 'surprise', name: '놀람', fb: 'idle' },
-        { key: 'curious', name: '궁금', fb: 'look' },
-        { key: 'look', name: '바라보기', fb: 'idle' },
-        { key: 'flick', name: '고개 홱', fb: 'look' },
-        { key: 'aside', name: '등 돌리기', fb: 'walk' },
-        { key: 'fluster', name: '당황', fb: 'idle' },
-        { key: 'wave', name: '손 흔들기', fb: 'happy' },
-        { key: 'pat', name: '톡톡', fb: 'jump', note: '클릭·탭하면 폴짝 뛰는 동안 나와요' },
+    { key: 'react', name: LX('반응', 'Reactions'), roles: [
+        { key: 'happy', name: LX('기쁨', 'Happy'), fb: 'idle' },
+        { key: 'angry', name: LX('화남', 'Angry'), fb: 'idle' },
+        { key: 'surprise', name: LX('놀람', 'Surprised'), fb: 'idle' },
+        { key: 'curious', name: LX('궁금', 'Curious'), fb: 'look' },
+        { key: 'look', name: LX('바라보기', 'Looking'), fb: 'idle' },
+        { key: 'flick', name: LX('고개 홱', 'Head turn'), fb: 'look' },
+        { key: 'aside', name: LX('등 돌리기', 'Turn away'), fb: 'walk' },
+        { key: 'fluster', name: LX('당황', 'Flustered'), fb: 'idle' },
+        { key: 'wave', name: LX('손 흔들기', 'Wave'), fb: 'happy' },
+        { key: 'pat', name: LX('톡톡', 'Tap tap'), fb: 'jump', note: LX('클릭·탭하면 폴짝 뛰는 동안 나와요', 'Shown while it hops after a click or tap') },
     ] },
-    { key: 'rest', name: '쉬기·먹기', roles: [
-        { key: 'sit', name: '앉기', fb: 'idle' },
-        { key: 'eat', name: '먹기', fb: 'idle' },
-        { key: 'nod', name: '식후 꾸벅', fb: 'sleep' },
-        { key: 'full', name: '배부름', fb: 'idle' },
+    { key: 'rest', name: LX('쉬기·먹기', 'Rest · eat'), roles: [
+        { key: 'sit', name: LX('앉기', 'Sit'), fb: 'idle' },
+        { key: 'eat', name: LX('먹기', 'Eat'), fb: 'idle' },
+        { key: 'nod', name: LX('식후 꾸벅', 'After-meal nod'), fb: 'sleep' },
+        { key: 'full', name: LX('배부름', 'Full'), fb: 'idle' },
     ] },
-    { key: 'special', name: '특별 순간', roles: [
-        { key: 'appear', name: '등장', fb: 'jump' },
-        { key: 'gift', name: '행운 빌기', fb: 'happy' },
-        { key: 'cheer', name: '축하', fb: 'dance' },
+    { key: 'special', name: LX('특별 순간', 'Special moments'), roles: [
+        { key: 'appear', name: LX('등장', 'Entrance'), fb: 'jump' },
+        { key: 'gift', name: LX('행운 빌기', 'Wishing you luck'), fb: 'happy' },
+        { key: 'cheer', name: LX('축하', 'Celebrate'), fb: 'dance' },
     ] },
 ];
 const ROLE_DEFS = Object.fromEntries(ROLE_GROUPS.flatMap(g => g.roles).map(r => [r.key, r]));
-const STEP_ROLES = { walk: '걸음에 맞춰 넘어가요', eat: '한 입 먹을 때마다 넘어가요' };   // frames follow steps / bites, not a clock
+const STEP_ROLES = { walk: LX('걸음에 맞춰 넘어가요', 'changes with each step'), eat: LX('한 입 먹을 때마다 넘어가요', 'changes with each bite') };   // frames follow steps / bites, not a clock
 const FRAME_FPS = { slow: 2.5, normal: 5, fast: 9 };
-const SPEED_NAMES = { slow: '느리게', normal: '보통', fast: '빠르게' };
+const SPEED_NAMES = { slow: LX('느리게', 'Slow'), normal: LX('보통', 'Normal'), fast: LX('빠르게', 'Fast') };
 const FRAMES_MAX = 8;            // pictures in one action at most
 // 키 맞추기 (0.8.1): a picture fitted to the 기본 picture carries three almost-invisible pixels in its top-left
 // corner (alpha 7, 11, then m). Such a picture is drawn at the 기본 picture's scale ÷ m instead of being
@@ -280,22 +298,22 @@ const FIT_MAX_PX = 1600;
 
 // speech lines (6-2)
 const TALK_MOMENTS = [
-    { key: 'wake', name: '깨울 때', ex: '좋은 아침!' },
-    { key: 'sleep', name: '재울 때', ex: '잘 자…' },
-    { key: 'pat', name: '쓰다듬을 때', ex: '헤헤, 간지러워' },
-    { key: 'meal', name: '밥 다 먹고', ex: '잘 먹었다!' },
-    { key: 'play', name: '혼자 놀 때', ex: '흥얼흥얼~' },
-    { key: 'wait', name: '답 기다릴 때', ex: '언제 와?' },
-    { key: 'late', name: '답이 늦어질 때', ex: '왜 이렇게 오래 걸려…' },
-    { key: 'level', name: '단계 오를 때', ex: '우리 더 친해졌다!' },
-    { key: 'reunion', name: '오랜만에 만났을 때', ex: '{{user}}, 보고 싶었어!' },
-    { key: 'reply', name: '답이 왔을 때', ex: '오, 왔다!' },
-    { key: 'sent', name: '내가 보냈을 때', ex: '잘 보냈어?' },
-    { key: 'greet', name: '다른 펫에게 말 걸 때', ex: '{{pet}}야, 뭐 해?' },     // 0.10.8 펫끼리 말하기
-    { key: 'answer', name: '다른 펫이 말 걸어 오면', ex: '응? 왜 불러~' },
-    { key: 'night', name: '다른 펫이 졸 때', ex: '잘 자, {{pet}}' },              // 0.10.12
+    { key: 'wake', name: LX('깨울 때', 'When woken'), ex: LX('좋은 아침!', 'Good morning!') },
+    { key: 'sleep', name: LX('재울 때', 'When put to bed'), ex: LX('잘 자…', 'Good night…') },
+    { key: 'pat', name: LX('쓰다듬을 때', 'When patted'), ex: LX('헤헤, 간지러워', 'Hehe, that tickles') },
+    { key: 'meal', name: LX('밥 다 먹고', 'After a meal'), ex: LX('잘 먹었다!', 'That was yummy!') },
+    { key: 'play', name: LX('혼자 놀 때', 'Playing alone'), ex: LX('흥얼흥얼~', 'La la la~') },
+    { key: 'wait', name: LX('답 기다릴 때', 'Waiting for a reply'), ex: LX('언제 와?', 'When is it coming?') },
+    { key: 'late', name: LX('답이 늦어질 때', 'When a reply is late'), ex: LX('왜 이렇게 오래 걸려…', 'Why is it taking so long…') },
+    { key: 'level', name: LX('단계 오를 때', 'Growing closer'), ex: LX('우리 더 친해졌다!', 'We got closer!') },
+    { key: 'reunion', name: LX('오랜만에 만났을 때', 'Reunion after a while'), ex: LX('{{user}}, 보고 싶었어!', '{{user}}, I missed you!') },
+    { key: 'reply', name: LX('답이 왔을 때', 'When a reply arrives'), ex: LX('오, 왔다!', 'Oh, it’s here!') },
+    { key: 'sent', name: LX('내가 보냈을 때', 'When you send'), ex: LX('잘 보냈어?', 'Sent it okay?') },
+    { key: 'greet', name: LX('다른 펫에게 말 걸 때', 'Talking to another pet'), ex: LX('{{pet}}야, 뭐 해?', '{{pet}}, what are you doing?') },     // 0.10.8 펫끼리 말하기
+    { key: 'answer', name: LX('다른 펫이 말 걸어 오면', 'When another pet talks to it'), ex: LX('응? 왜 불러~', 'Hm? You called?') },
+    { key: 'night', name: LX('다른 펫이 졸 때', 'When another pet dozes'), ex: LX('잘 자, {{pet}}', 'Sleep well, {{pet}}') },              // 0.10.12
 ];
-const TALK_FREQ = { off: '끔', some: '가끔', often: '자주' };
+const TALK_FREQ = { off: LX('끔', 'Off'), some: LX('가끔', 'Sometimes'), often: LX('자주', 'Often') };
 const TALK_CHANCE = { some: 0.35, often: 0.7 };          // a moment comes → says something
 const TALK_PLAY = { some: 0.05, often: 0.12 };           // each "what next?" while playing alone
 const TALK_ALWAYS = ['level', 'reunion', 'late'];        // these always speak (unless 끔) — 'late' comes rarely
@@ -307,7 +325,7 @@ const CLIMB_PULL = 0.55;         // s — one pull up the screen (moving, then a
 const CLIMB_SLIP = 0.05;         // chance per pull to slip down a little
 
 // 0.7.13: ways to get about on the screen (펫마다 고름; several → one of them each time)
-const MOVES = { wall: '오르기', fly: '날기', dash: '휙휙' };
+const MOVES = { wall: LX('오르기', 'Climb'), fly: LX('날기', 'Fly'), dash: LX('휙휙', 'Dash') };
 const FLY_TILT = 12;             // ° — leaning into where it floats
 const DASH_SPEED = 650;          // px/s — 휙휙
 const DASH_HOLD = [0.4, 1.1];    // s — a stop between darts
@@ -319,7 +337,7 @@ function movesOf(rec) {
     return Object.keys(MOVES).filter(k => rec.moves.includes(k));
 }
 const SCREEN_SCALE = 0.3;        // 0.8.4: getting about on the screen less often than before (p.wall × this; 0.8.2 had 0.8, 0.8.3 0.5)
-const RESTS = [[1, '1분'], [3, '3분'], [5, '5분'], [10, '10분']];   // 0.8.5: 쉬는 시간 after getting about on the screen
+const RESTS = [[1, LX('1분', '1 min')], [3, LX('3분', '3 min')], [5, LX('5분', '5 min')], [10, LX('10분', '10 min')]];   // 0.8.5: 쉬는 시간 after getting about on the screen
 const REST_DEF = 3;
 const restOf = (rec) => (RESTS.some(x => x[0] === rec?.screenRest) ? rec.screenRest : REST_DEF);
 const screenAt = new Map();      // pet id → when it last came down from the screen (Date.now; not saved)
@@ -345,33 +363,33 @@ const ZONE_GEN = 3;              // × while a reply is being written (같이 �
 const NIGHT_FROM = ['idle', 'walk', 'perch', 'fidget', 'look', 'read', 'watch'];   // awake and not busy
 const NIGHT_P = 0.6;             // 잘 자: × 빈도 — a pet close by starts dozing
 const NIGHT_REST = 120;          // s — the same two, not again sooner
-const NIGHT_FX = { aegyo: '♥', saechim: '흥', neugut: '하암', simsul: '💢', musim: '…' };   // no line written → this
+const NIGHT_FX = { aegyo: '♥', saechim: LX('흥', 'hmph'), neugut: LX('하암', 'yawn'), simsul: '💢', musim: '…' };   // no line written → this
 const NAP_P = { neugut: 0.5, aegyo: 0.4, saechim: 0.15, simsul: 0.15, musim: 0.08 };   // 같이 졸기: × 빈도
 const NAP_NEAR = 320;            // px — how far away it still walks over to doze next to it
 const TAG_P = { simsul: 0.04, aegyo: 0.025, saechim: 0.015, neugut: 0.01, musim: 0.006 };   // 쫓아가기 장난: × 빈도, each "what next?"
 const TAG_CHASE = { aegyo: 0.9, simsul: 0.9, saechim: 0.7, neugut: 0.5, musim: 0.2 };   // the one tapped runs after it
-const TAG_END = { aegyo: '♥', saechim: '흥', neugut: '♪', simsul: '💢', musim: '…' };    // caught up
+const TAG_END = { aegyo: '♥', saechim: LX('흥', 'hmph'), neugut: '♪', simsul: '💢', musim: '…' };    // caught up
 const TAG_NEAR = 260;            // px
 const TAG_REST = 90;             // s
 const RACE_P = 0.35;             // 먼저 달려가기: × 빈도 (the lower one) — two or more go to look at a new reply
-const RACE_LATE = { aegyo: '♥', saechim: '흥', neugut: '?', simsul: '💢', musim: '…' };  // got there second
+const RACE_LATE = { aegyo: '♥', saechim: LX('흥', 'hmph'), neugut: '?', simsul: '💢', musim: '…' };  // got there second
 const SHARE_P = 0.5;             // 나눠 먹기: × 빈도 — done eating, another one still eating close by
 const SHARE_NEAR = 300;          // px
 const SHARE_REST = 120;          // s
-const SHARE_MINE = { aegyo: '♥', neugut: '♪', saechim: '흥', musim: '…', simsul: '💢' };   // the eater (심술: turns its back)            // s the other one stays put while it comes over
+const SHARE_MINE = { aegyo: '♥', neugut: '♪', saechim: LX('흥', 'hmph'), musim: '…', simsul: '💢' };   // the eater (심술: turns its back)            // s the other one stays put while it comes over
 const PERS_DESC = {
-    aegyo: '애교 많고 다정해요', saechim: '새침하고 쑥스러움을 잘 타요', neugut: '느긋하고 늘 졸려요',
-    simsul: '툴툴대지만 속은 다정해요', musim: '말수가 적고 무심해요',
+    aegyo: LX('애교 많고 다정해요', 'Affectionate and sweet'), saechim: LX('새침하고 쑥스러움을 잘 타요', 'Prim and easily shy'), neugut: LX('느긋하고 늘 졸려요', 'Laid-back and always sleepy'),
+    simsul: LX('툴툴대지만 속은 다정해요', 'Grumbles, but kind inside'), musim: LX('말수가 적고 무심해요', 'Quiet and aloof'),
 };
 
 // special days (6-2). Every year on the month/day. kind: me = 내 생일, char = 캐릭터 생일, anniv = 기념일, met = 만난 날
-const DATE_KINDS = { me: '내 생일', char: '캐릭터 생일', anniv: '기념일' };
+const DATE_KINDS = { me: LX('내 생일', 'My birthday'), char: LX('캐릭터 생일', 'Character’s birthday'), anniv: LX('기념일', 'Anniversary') };
 const LATE_DAYS = 7;             // missed the day → a "늦었지만…" version within this many days (the day itself counts)
 const SPECIAL_LINES = {
-    me: { aegyo: '생일 축하해 ♥', saechim: '…생일이라며. 축하해 줄게', neugut: '하암… 생일이구나. 축하해~', simsul: '생일이라고? …축하해 💢', musim: '…생일 축하해.' },
-    char: { aegyo: '오늘 내 생일이야! 축하해 줘 ♥', saechim: '…오늘 내 생일인 거 알지?', neugut: '오늘 내 생일이래… 하암', simsul: '내 생일인데 선물은? 💢', musim: '…생일.' },
-    anniv: { aegyo: '오늘 우리 기념일이야 ♥', saechim: '…기념일인 거 기억했어?', neugut: '기념일이네~ 느긋하게 보내자', simsul: '기념일 잊은 거 아니지? 💢', musim: '…기념일. 고마워.' },
-    met: { aegyo: '만난 지 {n}년! 고마워 ♥', saechim: '…만난 지 {n}년이네. 나쁘지 않았어.', neugut: '벌써 {n}년이야? 하암…', simsul: '{n}년이나 같이 있었네 💢 …앞으로도.', musim: '…{n}년.' },
+    me: { aegyo: LX('생일 축하해 ♥', 'Happy birthday ♥'), saechim: LX('…생일이라며. 축하해 줄게', '…Your birthday, huh. Happy birthday, I guess'), neugut: LX('하암… 생일이구나. 축하해~', 'Yawn… it’s your birthday. Happy birthday~'), simsul: LX('생일이라고? …축하해 💢', 'Your birthday? …Happy birthday 💢'), musim: LX('…생일 축하해.', '…Happy birthday.') },
+    char: { aegyo: LX('오늘 내 생일이야! 축하해 줘 ♥', 'It’s my birthday today! Celebrate me ♥'), saechim: LX('…오늘 내 생일인 거 알지?', '…You know it’s my birthday, right?'), neugut: LX('오늘 내 생일이래… 하암', 'Apparently it’s my birthday… yawn'), simsul: LX('내 생일인데 선물은? 💢', 'It’s my birthday. Where’s my present? 💢'), musim: LX('…생일.', '…Birthday.') },
+    anniv: { aegyo: LX('오늘 우리 기념일이야 ♥', 'It’s our anniversary today ♥'), saechim: LX('…기념일인 거 기억했어?', '…Did you remember our anniversary?'), neugut: LX('기념일이네~ 느긋하게 보내자', 'Anniversary~ let’s take it easy'), simsul: LX('기념일 잊은 거 아니지? 💢', 'You didn’t forget our anniversary, right? 💢'), musim: LX('…기념일. 고마워.', '…Anniversary. Thanks.') },
+    met: { aegyo: LX('만난 지 {n}년! 고마워 ♥', '{n} years together! Thank you ♥'), saechim: LX('…만난 지 {n}년이네. 나쁘지 않았어.', '…{n} years, huh. Not bad.'), neugut: LX('벌써 {n}년이야? 하암…', '{n} years already? Yawn…'), simsul: LX('{n}년이나 같이 있었네 💢 …앞으로도.', '{n} whole years 💢 …and more to come.'), musim: LX('…{n}년.', '…{n} years.') },
 };
 
 /* =====================================================================
@@ -400,6 +418,7 @@ function defaultSettings() {
         replyOff: [],                          // 0.10.11 답 도착 소리 중 끈 것 (기본 소리 key / 내 파일 id)
         replyFiles: [],                        // 0.10.11 답 도착 내 소리 파일: [{ id, path, name }]
         soundVol: 60,                          // 0..100
+        lang: 'auto',                          // 0.11.0 'auto' / 'ko' / 'en' (applies after a reload)
         backup: { lastDay: null, files: [] },  // daily backups: [{ day, path, pets }]
     };
 }
@@ -500,7 +519,7 @@ function migrate(r) {
         if (r.looks.some(l => l?.roles?.idle?.[0] === first)) continue;
         r.looks.push({
             id: 'l' + Math.random().toString(36).slice(2, 10),
-            name: String(p.name || '내 그림'),
+            name: String(p.name || LX('내 그림', 'My picture')),
             kind: p.look.kind || 'single',
             facing: p.look.facing || 'front',
             squish: p.look.squish ?? 0.5,
@@ -527,14 +546,14 @@ function loadRoot() {
     const valid = cur && typeof cur === 'object' && Array.isArray(cur.pets) && typeof cur.formatVersion === 'number';
     if (!valid) {
         readOnly = true;
-        readOnlyReason = '저장된 Tavvy 기록의 모양이 이상해서, 덮어쓰지 않도록 저장을 멈췄어요.';
+        readOnlyReason = LX('저장된 Tavvy 기록의 모양이 이상해서, 덮어쓰지 않도록 저장을 멈췄어요.', 'The saved Tavvy data looks wrong, so saving is paused to avoid overwriting it.');
         root = newRoot();
         attached = false;
         return;
     }
     if (cur.formatVersion > FORMAT_VERSION) {
         readOnly = true;
-        readOnlyReason = '더 새로운 버전의 Tavvy가 저장한 기록이에요. 기록을 지키려고 저장을 멈췄어요. 확장을 업데이트해 주세요.';
+        readOnlyReason = LX('더 새로운 버전의 Tavvy가 저장한 기록이에요. 기록을 지키려고 저장을 멈췄어요. 확장을 업데이트해 주세요.', 'This data was saved by a newer version of Tavvy. Saving is paused to protect it. Please update the extension.');
         root = structuredClone(cur);       // work on a copy so nothing leaks into saved settings
         attached = false;
         migrate(root);
@@ -555,7 +574,7 @@ function attach() {
     if (es[MODULE] !== undefined) {
         // Something appeared meanwhile — never overwrite it.
         readOnly = true;
-        readOnlyReason = 'Tavvy 기록을 다시 확인해야 해요. 페이지를 새로고침해 주세요.';
+        readOnlyReason = LX('Tavvy 기록을 다시 확인해야 해요. 페이지를 새로고침해 주세요.', 'Tavvy needs to check its data again. Please reload the page.');
         return;
     }
     es[MODULE] = root;
@@ -890,7 +909,7 @@ function roleKeyOf(look, list) {
 
 /** {{user}} → your name. */
 function fillUser(text) {
-    return fillName(text, 'user', ctx().name1 || '나').trim();
+    return fillName(text, 'user', ctx().name1 || LX('나', 'you')).trim();
 }
 
 /* 0.10.10 이름 뒤 조사 맞추기: 적힌 조사가 받침과 안 맞으면 바꿈. [받침 있을 때, 없을 때] */
@@ -1032,41 +1051,41 @@ function unlocksFor(rec) {
 
 /** Everyday behaviours with an 끔 / 드물게 / 보통 / 자주 choice in the 행동 tab (walking and eating always stay). */
 const BASIC_ACTS = [
-    { key: 'wall',   name: '화면 오르기' },     // 0.8.2: was one row '화면 돌아다니기' ('screen') + chips in 꾸미기
-    { key: 'fly',    name: '날기' },
-    { key: 'dash',   name: '휙휙' },
-    { key: 'climb',  name: '말풍선 오르기' },
-    { key: 'doze',   name: '졸기' },
-    { key: 'hum',    name: '흥얼거리기' },       // 0.9.0
-    { key: 'scan',   name: '두리번거리기' },
-    { key: 'sit',    name: '앉기', needs: 'sit' },   // only with a 앉기 picture
-    { key: 'read',   name: '글 읽는 척' },
-    { key: 'run',    name: '갑자기 달리기' },
-    { key: 'peek',   name: '빼꼼 숨기' },
-    { key: 'roll',   name: '구르기' },
-    { key: 'me',     name: '나 보며 반응' },
-    { key: 'zone',   name: '멍 (로딩 중)' },           // 0.10.12: a little wheel spins over its head
-    { key: 'visit',  name: '말 걸러 가기', many: true },   // 0.10.9: walks over to another pet to talk
-    { key: 'bump',   name: '부딪히기', many: true },       // 0.10.9: was always rare
-    { key: 'night',  name: '잘 자', many: true },          // 0.10.12: another one nods off close by
-    { key: 'napwith', name: '같이 졸기', many: true },     // 0.10.12
-    { key: 'tag',    name: '쫓아가기 장난', many: true },  // 0.10.12
-    { key: 'race',   name: '먼저 달려가기', many: true },  // 0.10.12: up to a new reply first
-    { key: 'share',  name: '나눠 먹기', many: true },      // 0.10.12: a bite of the other one's meal (a show only)
+    { key: 'wall',   name: LX('화면 오르기', 'Climb the screen') },     // 0.8.2: was one row '화면 돌아다니기' ('screen') + chips in 꾸미기
+    { key: 'fly',    name: LX('날기', 'Fly') },
+    { key: 'dash',   name: LX('휙휙', 'Dash') },
+    { key: 'climb',  name: LX('말풍선 오르기', 'Climb messages') },
+    { key: 'doze',   name: LX('졸기', 'Doze') },
+    { key: 'hum',    name: LX('흥얼거리기', 'Humming') },       // 0.9.0
+    { key: 'scan',   name: LX('두리번거리기', 'Looking around') },
+    { key: 'sit',    name: LX('앉기', 'Sit'), needs: 'sit' },   // only with a 앉기 picture
+    { key: 'read',   name: LX('글 읽는 척', 'Pretending to read') },
+    { key: 'run',    name: LX('갑자기 달리기', 'Sudden runs') },
+    { key: 'peek',   name: LX('빼꼼 숨기', 'Peekaboo') },
+    { key: 'roll',   name: LX('구르기', 'Roll') },
+    { key: 'me',     name: LX('나 보며 반응', 'Reacting to you') },
+    { key: 'zone',   name: LX('멍 (로딩 중)', 'Spacing out (loading)') },           // 0.10.12: a little wheel spins over its head
+    { key: 'visit',  name: LX('말 걸러 가기', 'Going over to talk'), many: true },   // 0.10.9: walks over to another pet to talk
+    { key: 'bump',   name: LX('부딪히기', 'Bumping'), many: true },       // 0.10.9: was always rare
+    { key: 'night',  name: LX('잘 자', 'Good night'), many: true },          // 0.10.12: another one nods off close by
+    { key: 'napwith', name: LX('같이 졸기', 'Napping together'), many: true },     // 0.10.12
+    { key: 'tag',    name: LX('쫓아가기 장난', 'Chase game'), many: true },  // 0.10.12
+    { key: 'race',   name: LX('먼저 달려가기', 'Racing there first'), many: true },  // 0.10.12: up to a new reply first
+    { key: 'share',  name: LX('나눠 먹기', 'Sharing food'), many: true },      // 0.10.12: a bite of the other one's meal (a show only)
 ];
 // 0.8.0: the personality is a preset — how often each thing happens and which reaction shows can be set freely.
-const FREQS = [['off', '끔'], ['rare', '드물게'], ['norm', '보통'], ['often', '자주']];
+const FREQS = [['off', LX('끔', 'Off')], ['rare', LX('드물게', 'Rarely')], ['norm', LX('보통', 'Normal')], ['often', LX('자주', 'Often')]];
 const FREQ_X = { rare: 0.5, norm: 1, often: 2 };
 const NO_FREQ = ['soft'];       // on / off only (it changes how a reaction looks, not how often)
-const PACES = [['slow', '느리게', 0.7], ['norm', '보통', 1], ['fast', '빠르게', 1.35]];
+const PACES = [['slow', LX('느리게', 'Slow'), 0.7], ['norm', LX('보통', 'Normal'), 1], ['fast', LX('빠르게', 'Fast'), 1.35]];
 const REACT_MOMENTS = [         // moments whose reaction may come from another personality
-    { key: 'wake', name: '깨울 때' },
-    { key: 'pat',  name: '쓰다듬을 때' },
-    { key: 'me',   name: '나 보며 반응' },
-    { key: 'eat',  name: '밥 먹을 때' },
-    { key: 'land', name: '착지·부딪힐 때' },
-    { key: 'send', name: '내가 보낼 때' },
-    { key: 'bed',  name: '재울 때' },
+    { key: 'wake', name: LX('깨울 때', 'When woken') },
+    { key: 'pat',  name: LX('쓰다듬을 때', 'When patted') },
+    { key: 'me',   name: LX('나 보며 반응', 'Reacting to you') },
+    { key: 'eat',  name: LX('밥 먹을 때', 'When eating') },
+    { key: 'land', name: LX('착지·부딪힐 때', 'Landing · bumping') },
+    { key: 'send', name: LX('내가 보낼 때', 'When you send') },
+    { key: 'bed',  name: LX('재울 때', 'When put to bed') },
 ];
 
 /** Which personality's reaction this pet uses at moment m (who = actor or record). */
@@ -1235,21 +1254,21 @@ const SOUNDS = {
 
 // 0.10.11 답 도착 소리: 체크한 것만 답이 올 때마다 돌아가며. [key, 이름, 길이(초), play(k)]
 const REPLY_SOUNDS = [
-    ['dingdong', '딩동', 0.7, (k) => SOUNDS.reply[1](k)],
-    ['bell', '방울', 0.72, (k) => { sndTone(1318, 0.7, { v: 0.3, k }); sndTone(2637, 0.4, { v: 0.08, k }); }],
-    ['tok', '톡톡', 0.21, (k) => { sndTone(1200, 0.07, { v: 0.35, k }); sndTone(1200, 0.07, { v: 0.3, k, at: 0.12 }); }],
-    ['boing', '뽀롱', 0.32, (k) => { sndTone(500, 0.15, { to: 900, v: 0.35, k }); sndTone(900, 0.18, { to: 1400, v: 0.3, k, at: 0.12 }); }],
-    ['marimba', '마림바', 0.46, (k) => { sndTone(659, 0.22, { v: 0.4, k }); sndTone(523, 0.3, { v: 0.4, k, at: 0.14 }); }],
-    ['arrive', '도착', 0.37, (k) => { sndTone(1047, 0.1, { type: 'square', v: 0.08, k, lp: 1800 }); sndTone(1319, 0.25, { type: 'square', v: 0.08, k, lp: 1800, at: 0.1 }); }],
-    ['orgel', '오르골', 1.14, (k) => { sndTone(1568, 0.6, { v: 0.18, k }); sndTone(2093, 0.6, { v: 0.15, k, at: 0.16 }); sndTone(1760, 0.8, { v: 0.15, k, at: 0.32 }); }],
-    ['whistle', '휘파람', 0.56, (k) => { sndTone(900, 0.25, { to: 1300, v: 0.22, k, atk: 0.06 }); sndTone(1300, 0.3, { to: 1000, v: 0.22, k, atk: 0.03, at: 0.24 }); }],
-    ['bubble', '뾱', 0.11, (k) => sndTone(300, 0.09, { to: 1200, v: 0.4, k })],
-    ['letter', '편지 종', 1.02, (k) => {
+    ['dingdong', LX('딩동', 'Ding-dong'), 0.7, (k) => SOUNDS.reply[1](k)],
+    ['bell', LX('방울', 'Bell'), 0.72, (k) => { sndTone(1318, 0.7, { v: 0.3, k }); sndTone(2637, 0.4, { v: 0.08, k }); }],
+    ['tok', LX('톡톡', 'Tap tap'), 0.21, (k) => { sndTone(1200, 0.07, { v: 0.35, k }); sndTone(1200, 0.07, { v: 0.3, k, at: 0.12 }); }],
+    ['boing', LX('뽀롱', 'Pop'), 0.32, (k) => { sndTone(500, 0.15, { to: 900, v: 0.35, k }); sndTone(900, 0.18, { to: 1400, v: 0.3, k, at: 0.12 }); }],
+    ['marimba', LX('마림바', 'Marimba'), 0.46, (k) => { sndTone(659, 0.22, { v: 0.4, k }); sndTone(523, 0.3, { v: 0.4, k, at: 0.14 }); }],
+    ['arrive', LX('도착', 'Arrival'), 0.37, (k) => { sndTone(1047, 0.1, { type: 'square', v: 0.08, k, lp: 1800 }); sndTone(1319, 0.25, { type: 'square', v: 0.08, k, lp: 1800, at: 0.1 }); }],
+    ['orgel', LX('오르골', 'Music box'), 1.14, (k) => { sndTone(1568, 0.6, { v: 0.18, k }); sndTone(2093, 0.6, { v: 0.15, k, at: 0.16 }); sndTone(1760, 0.8, { v: 0.15, k, at: 0.32 }); }],
+    ['whistle', LX('휘파람', 'Whistle'), 0.56, (k) => { sndTone(900, 0.25, { to: 1300, v: 0.22, k, atk: 0.06 }); sndTone(1300, 0.3, { to: 1000, v: 0.22, k, atk: 0.03, at: 0.24 }); }],
+    ['bubble', LX('뾱', 'Boop'), 0.11, (k) => sndTone(300, 0.09, { to: 1200, v: 0.4, k })],
+    ['letter', LX('편지 종', 'Letter bell'), 1.02, (k) => {
         sndTone(880, 0.6, { v: 0.25, k }); sndTone(1760, 0.3, { v: 0.06, k });
         sndTone(660, 0.7, { v: 0.25, k, at: 0.3 }); sndTone(1320, 0.3, { v: 0.05, k, at: 0.3 });
     }],
-    ['trill', '피리릭', 0.25, (k) => { [1568, 1760, 2093].forEach((f, i) => sndTone(f, 0.09, { type: 'square', v: 0.06, k, lp: 2400, at: i * 0.07 })); }],
-    ['sparkle', '반짝', 0.34, (k) => { [2093, 2637, 3136].forEach((f, i) => sndTone(f, 0.18, { v: 0.1, k, at: i * 0.07 })); }],
+    ['trill', LX('피리릭', 'Flute'), 0.25, (k) => { [1568, 1760, 2093].forEach((f, i) => sndTone(f, 0.09, { type: 'square', v: 0.06, k, lp: 2400, at: i * 0.07 })); }],
+    ['sparkle', LX('반짝', 'Twinkle'), 0.34, (k) => { [2093, 2637, 3136].forEach((f, i) => sndTone(f, 0.18, { v: 0.1, k, at: i * 0.07 })); }],
 ];
 const REPLY_FILES_MAX = 10;
 let replyLast = '';
@@ -1343,7 +1362,7 @@ function playSound(key, k = 1, test = false, rec = null, pick = null) {
 
 /* ---------- 0.10.6 내 소리: a short file per pet and per sound (empty = the usual sound) ---------- */
 
-const SOUND_SLOTS = [['heart', '♥ 하트'], ['wake', '깨우기'], ['sleep', '재우기'], ['cheer', '축하'], ['bump', '부딪힐 때'], ['chat', '펫끼리 말할 때'], ['reply', '답 도착']];
+const SOUND_SLOTS = [['heart', LX('♥ 하트', '♥ Heart')], ['wake', LX('깨우기', 'Wake')], ['sleep', LX('재우기', 'Sleep')], ['cheer', LX('축하', 'Celebrate')], ['bump', LX('부딪힐 때', 'Bumping')], ['chat', LX('펫끼리 말할 때', 'Pets chatting')], ['reply', LX('답 도착', 'Reply arrives')]];
 const SND_MAX_SEC = 3;
 const SND_MAX_BYTES = 2 * 1024 * 1024;
 const SND_ACCEPT = 'audio/mpeg,audio/wav,audio/x-wav,audio/ogg,audio/mp4,audio/x-m4a,audio/aac,.mp3,.wav,.ogg,.m4a';
@@ -3168,7 +3187,7 @@ class Actor {
                                 if (lt > 2.4) T.out = true;
                             } else if (k === 'simsul') {                     // "흥" and it's whisked away
                                 pose = this.role('angry', 'idle');
-                                if (!T.f && lt > 0.25) { T.f = 1; fx(this, '흥', 'tavvy-fx-small'); }
+                                if (!T.f && lt > 0.25) { T.f = 1; fx(this, LX('흥', 'hmph'), 'tavvy-fx-small'); }
                                 if (lt > 0.9) { T.out = true; T.fast = true; }
                             } else {                                         // 무심: "…" then a small ♥
                                 pose = this.role('look', 'idle');
@@ -3215,7 +3234,7 @@ class Actor {
                     this.tiltT = 0;
                     this.sqT = this.t > 0.4 ? 1.03 : 1;
                     if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '…', 'tavvy-fx-small'); }
-                    if (this.fxT === 1 && this.t > 0.9) { this.fxT = 2; this.speak('…어디 갔었어?', 2600); }
+                    if (this.fxT === 1 && this.t > 0.9) { this.fxT = 2; this.speak(LX('…어디 갔었어?', '…where did you go?'), 2600); }
                     if (this.t > this.until) { this.sqT = 1; this.setState('idle'); }
                     break;
                 }
@@ -3397,7 +3416,7 @@ class Actor {
                     else if (k === 'up') { this.tiltT = d * 4; }
                     else if (k === 'peek' || k === '?') { this.tiltT = d * 4; pose = this.rp('curious'); }
                     else if (k === '♥') { this.tiltT = 0; pose = this.role('happy', 'idle'); }
-                    else if (k === '💢' || k === '흥') { this.tiltT = d * 4; pose = this.rp('angry'); }
+                    else if (k === '💢' || k === LX('흥', 'hmph')) { this.tiltT = d * 4; pose = this.rp('angry'); }
                     else this.tiltT = d * 4;
                     if (this.t > this.until) {
                         this.look = null;
@@ -3580,7 +3599,7 @@ class Actor {
                             if (first) fx(this, '♥');
                             break;
                         case 'flick': this.tiltT = this.t < 0.15 ? d * 4 : -d * 9; if (this.t >= 0.15) pose = this.rp('flick'); break;   // 밥 못 본 척 고개 홱
-                        case 'yawn': this.tiltT = -d * 3; pose = this.role('idle'); if (first) fx(this, '하암'); break;
+                        case 'yawn': this.tiltT = -d * 3; pose = this.role('idle'); if (first) fx(this, LX('하암', 'yawn')); break;
                         case 'grumpy': this.tiltT = -d * 4; pose = this.rp('angry'); if (first) fx(this, '💢'); break;   // 왜 이제 와
                         default: break;
                     }
@@ -4267,18 +4286,18 @@ async function maybeBackup() {
 async function restoreBackup(day) {
     if (readOnly) return say(readOnlyReason);
     const f = root?.settings.backup.files.find(x => x.day === day);
-    if (!f) return say('백업을 골라 주세요.');
-    if (!(await confirmBox(`${day} 백업으로 되돌릴까요? 지금 펫 기록이 그날 기록으로 바뀌어요.`))) return;
+    if (!f) return say(LX('백업을 골라 주세요.', 'Choose a backup.'));
+    if (!(await confirmBox(LX(`${day} 백업으로 되돌릴까요? 지금 펫 기록이 그날 기록으로 바뀌어요.`, `Restore the ${day} backup? Your current pet data will be replaced with that day’s.`)))) return;
     let data;
     try {
         const res = await fetch(imgUrl(f.path), { cache: 'no-store' });
         if (!res.ok) throw new Error(String(res.status));
         data = await res.json();
     } catch (e) {
-        return say('백업 파일을 읽지 못했어요: ' + (e.message || e));
+        return say(LX('백업 파일을 읽지 못했어요: ', 'Couldn’t read the backup file: ') + (e.message || e));
     }
     if (!data || data.tavvyBackup !== 1 || !Array.isArray(data.pets) || typeof data.formatVersion !== 'number' || data.formatVersion > FORMAT_VERSION) {
-        return say('백업 파일 모양이 이상해서 되돌리지 않았어요.');
+        return say(LX('백업 파일 모양이 이상해서 되돌리지 않았어요.', 'The backup file looks wrong, so nothing was restored.'));
     }
     sleepInstant();
     root.pets = data.pets;
@@ -4287,7 +4306,7 @@ async function restoreBackup(day) {
     const ok = await saveNow();
     refreshBed();
     renderPanel();
-    say(ok ? `${day} 백업으로 되돌렸어요.` : '되돌렸지만 저장하지 못했어요. 페이지를 새로고침하기 전에 다시 시도해 주세요.');
+    say(ok ? LX(`${day} 백업으로 되돌렸어요.`, `Restored the ${day} backup.`) : LX('되돌렸지만 저장하지 못했어요. 페이지를 새로고침하기 전에 다시 시도해 주세요.', 'Restored, but couldn’t save. Try again before reloading the page.'));
 }
 
 /* =====================================================================
@@ -4302,7 +4321,7 @@ function ensureBed() {
     if (bed) return bed;
     bed = document.createElement('div');
     bed.id = 'tavvy-bed';
-    bed.title = 'Tavvy — 톡: 깨우기/재우기 · 끌기: 옮기기';
+    bed.title = LX('Tavvy — 톡: 깨우기/재우기 · 끌기: 옮기기', 'Tavvy — tap: wake / sleep · drag: move');
     bed.innerHTML = '<span class="tavvy-bed-icon">🛏️</span><span class="tavvy-bed-z">z</span><span class="tavvy-bed-badge" hidden></span><span class="tavvy-bed-gift" hidden>🎁</span>';
     ensureLayer().appendChild(bed);
 
@@ -4426,7 +4445,7 @@ function revisitBubble() {
     if (actors.length) return;
     const talky = residents().filter(p => pendingDays(p).length);
     if (talky.length) {
-        showBubble(residents().length > 1 ? `${talky.map(p => p.name).join(', ')}: 할 말이 있어!` : '할 말이 있어!', 12000);
+        showBubble(residents().length > 1 ? `${talky.map(p => p.name).join(', ')}${LX(': 할 말이 있어!', ': has something to say!')}` : LX('할 말이 있어!', 'Something to say!'), 12000);
         bubble?.classList.add('tavvy-bubble-special');
         return;
     }
@@ -4479,7 +4498,7 @@ function pendingDays(rec) {
         const n = it.kind === 'met' ? Number(occ.slice(0, 4)) - Number(it.since.slice(0, 4)) : 0;
         const lines = SPECIAL_LINES[it.kind];
         let text = String(it.msg || '').trim() || (lines[kindOf(rec, 'wake')] || lines.aegyo).replace('{n}', n);
-        if (late > 0) text = '늦었지만… ' + text;
+        if (late > 0) text = LX('늦었지만… ', 'A bit late, but… ') + text;
         out.push({ id: it.id, occ, late, text });
     }
     return out;
@@ -4501,8 +4520,8 @@ function showCheer(a, from, to) {
     el.className = 'tavvy-cheer';
     const mode = root?.settings?.heartMode || 'both';
     const fresh = unlocksFor(a.rec).filter(u => u.lv > from && u.lv <= to);
-    el.innerHTML = '<b>친밀도 상승!</b>' + (mode === 'hide' ? '' : `<span>${esc(levelLabel(a.rec, from))} → ${esc(levelLabel(a.rec, to))}</span>`)
-        + (fresh.length ? `<span class="tavvy-cheer-new">새로운 행동을 할 수 있게 되었어요!</span><small>${fresh.map(u => esc(u.name)).join(' · ')}</small>` : '');
+    el.innerHTML = LX('<b>친밀도 상승!</b>', '<b>Closer now!</b>') + (mode === 'hide' ? '' : `<span>${esc(levelLabel(a.rec, from))} → ${esc(levelLabel(a.rec, to))}</span>`)
+        + (fresh.length ? `<span class="tavvy-cheer-new">${LX('새로운 행동을 할 수 있게 되었어요!', 'It learned something new!')}</span><small>${fresh.map(u => esc(u.name)).join(' · ')}</small>` : '');
     ensureLayer().appendChild(el);
     const w = el.offsetWidth, h = el.offsetHeight;
     const x = clamp(a.x - w / 2, 4, Math.max(4, stage.vw - w - 4));
@@ -4926,7 +4945,7 @@ function recheckRoom() {
 const $id = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const THEMES = { theme: '테마 따르기', cream: '크림·분홍', white: '하얀 깔끔', night: '밤하늘' };
+const THEMES = { theme: LX('테마 따르기', 'Follow theme'), cream: LX('크림·분홍', 'Cream · pink'), white: LX('하얀 깔끔', 'Clean white'), night: LX('밤하늘', 'Night sky') };
 
 /** The extension settings drawer is only a door to the window now. */
 function panelHtml() {
@@ -4934,14 +4953,14 @@ function panelHtml() {
 <div class="tavvy-settings">
   <div class="inline-drawer">
     <div class="inline-drawer-toggle inline-drawer-header">
-      <b>Tavvy (태비)</b>
+      <b>${LX('Tavvy (태비)', 'Tavvy')}</b>
       <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
     <div class="inline-drawer-content">
       <div id="tavvy-warn" class="tavvy-warn" hidden></div>
       <div id="tavvy-room" class="tavvy-note"></div>
-      <div id="tavvy-open" class="menu_button"><i class="fa-solid fa-paw"></i> Tavvy 열기</div>
-      <div class="tavvy-note">펫 목록, 기록장, 새 펫 만들기, 설정이 모두 이 창 안에 있어요. 입력창 왼쪽 ✨ 마법봉 메뉴의 "펫 정보"로도 열 수 있어요.</div>
+      <div id="tavvy-open" class="menu_button"><i class="fa-solid fa-paw"></i> ${LX('Tavvy 열기', 'Open Tavvy')}</div>
+      <div class="tavvy-note">${LX('펫 목록, 기록장, 새 펫 만들기, 설정이 모두 이 창 안에 있어요. 입력창 왼쪽 ✨ 마법봉 메뉴의', 'The pet list, journal, new pets, and settings are all in this window. You can also open it from')} "${LX('펫 정보', 'Pet info')}"${LX('로도 열 수 있어요.', ' in the ✨ wand menu left of the input box.')}</div>
     </div>
   </div>
 </div>`;
@@ -4959,21 +4978,21 @@ function findBed() {
     measure();
     refreshBed();
     const lines = [];
-    lines.push(`준비: ${ready ? '됨' : '안 됨'} · 이 방 펫: ${residents().length}`);
-    lines.push(`화면 ${Math.round(stage.vw)}×${Math.round(stage.vh)} · 바닥 ${Math.round(stage.floorY)} · ${device()}`);
-    lines.push(`채팅 윗선 ${Math.round(stage.chatTop)} · 보이는 발판 ${plats.length} · ${isBubbleChat() ? '말풍선' : '줄 모양'} · 무대 ${stageIsChat() ? '채팅창 전체' : '바닥만'}`);
+    lines.push(`${LX('준비:', 'Ready:')} ${ready ? LX('됨', 'yes') : LX('안 됨', 'no')} ${LX('· 이 방 펫:', '· pets in this room:')} ${residents().length}`);
+    lines.push(`${LX('화면', 'Screen')} ${Math.round(stage.vw)}×${Math.round(stage.vh)} ${LX('· 바닥', '· floor')} ${Math.round(stage.floorY)} · ${device()}`);
+    lines.push(`${LX('채팅 윗선', 'Chat top')} ${Math.round(stage.chatTop)} ${LX('· 보이는 발판', '· visible ledges')} ${plats.length} · ${isBubbleChat() ? LX('말풍선', 'bubbles') : LX('줄 모양', 'lines')} ${LX('· 무대', '· stage')} ${stageIsChat() ? LX('채팅창 전체', 'whole chat') : LX('바닥만', 'floor only')}`);
     // room / home keys, shortened so character names are not shown
     const key = (chatId, integ) => {
         const id = String(chatId || '');
         const tail = id.includes(' - ') ? id.slice(id.lastIndexOf(' - ') + 3) : id.slice(-20);
-        return `…${tail || '(없음)'} / ${integ ? String(integ).slice(0, 6) : '(번호 없음)'}`;
+        return `…${tail || LX('(없음)', '(none)')} / ${integ ? String(integ).slice(0, 6) : LX('(번호 없음)', '(no number)')}`;
     };
     const live = readRoom();
-    lines.push(`지금 방: ${live ? key(live.chatId, live.integrity) + (live.branch ? ' · 분기' : '') : '없음'}`);
-    lines.push(`기억한 방: ${room ? key(room.chatId, room.integrity) : '없음'}`);
-    for (const p of root?.pets || []) lines.push(`${p.name}의 집: ${p.home ? key(p.home.chatId, p.home.integrity) : '집 없음'}`);
+    lines.push(`${LX('지금 방:', 'Current room:')} ${live ? key(live.chatId, live.integrity) + (live.branch ? LX(' · 분기', ' · branch') : '') : LX('없음', 'none')}`);
+    lines.push(`${LX('기억한 방:', 'Remembered room:')} ${room ? key(room.chatId, room.integrity) : LX('없음', 'none')}`);
+    for (const p of root?.pets || []) lines.push(`${p.name}${LX('의 집:', '’s home:')} ${p.home ? key(p.home.chatId, p.home.integrity) : LX('집 없음', 'no home')}`);
     if (!bed) {
-        lines.push('침대 버튼: 만들어지지 않음');
+        lines.push(LX('침대 버튼: 만들어지지 않음', 'Bed button: not created'));
     } else {
         const x = Math.round(stage.vw / 2 - BED_SIZE / 2), y = Math.round(stage.vh / 2 - BED_SIZE / 2);
         bed.style.transform = `translate3d(${x - stage.ox}px, ${y - stage.oy}px, 0)`;   // temporary, not saved
@@ -4981,13 +5000,13 @@ function findBed() {
         const r = bed.getBoundingClientRect();
         const cs = getComputedStyle(bed);
         const ls = getComputedStyle(layer);   // layer is a 0×0 anchor on purpose
-        lines.push(`침대 버튼: ${bed.hidden ? '숨김' : '보임'} · ${cs.display} · 투명도 ${cs.opacity} · 위치 ${Math.round(r.left)},${Math.round(r.top)} 크기 ${Math.round(r.width)}×${Math.round(r.height)}`);
+        lines.push(`${LX('침대 버튼:', 'Bed button:')} ${bed.hidden ? LX('숨김', 'hidden') : LX('보임', 'shown')} · ${cs.display} ${LX('· 투명도', '· opacity')} ${cs.opacity} ${LX('· 위치', '· position')} ${Math.round(r.left)},${Math.round(r.top)} ${LX('크기', 'Size')} ${Math.round(r.width)}×${Math.round(r.height)}`);
         const lr = layer.getBoundingClientRect();
-        lines.push(`무대: ${ls.display} · z ${ls.zIndex} · ${Math.round(lr.left)},${Math.round(lr.top)} ${Math.round(lr.width)}×${Math.round(lr.height)} · 부모 ${layer.parentElement?.tagName}`);
+        lines.push(`${LX('무대:', 'Stage:')} ${ls.display} · z ${ls.zIndex} · ${Math.round(lr.left)},${Math.round(lr.top)} ${Math.round(lr.width)}×${Math.round(lr.height)} ${LX('· 부모', '· parent')} ${layer.parentElement?.tagName}`);
         const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-        const desc = top ? (top.id ? '#' + top.id : top.tagName.toLowerCase() + (top.className && typeof top.className === 'string' ? '.' + top.className.split(' ')[0] : '')) : '없음';
-        lines.push(`그 자리 맨 위: ${desc}`);
-        lines.push('창을 닫고 화면 가운데에 🛏️ 가 보이는지 확인해 주세요.');
+        const desc = top ? (top.id ? '#' + top.id : top.tagName.toLowerCase() + (top.className && typeof top.className === 'string' ? '.' + top.className.split(' ')[0] : '')) : LX('없음', 'none');
+        lines.push(`${LX('그 자리 맨 위:', 'Topmost there:')} ${desc}`);
+        lines.push(LX('창을 닫고 화면 가운데에 🛏️ 가 보이는지 확인해 주세요.', 'Close this window and check that 🛏️ shows in the middle of the screen.'));
     }
     const d = $id('tavvy-diag');
     if (d) d.textContent = lines.join('\n');
@@ -5000,9 +5019,9 @@ function say(text) {
 }
 
 function homeLabel(p) {
-    if (!p.home) return '집 없음';
-    if (room && checkHome(p, room).here) return '이 방';
-    return '다른 방';
+    if (!p.home) return LX('집 없음', 'no home');
+    if (room && checkHome(p, room).here) return LX('이 방', 'This room');
+    return LX('다른 방', 'Another room');
 }
 
 /* ---------- per-pet size (phone / PC kept apart) ---------- */
@@ -5017,7 +5036,7 @@ function isSharp(p, size) {
 }
 
 function sizeLabel(p, size) {
-    return `px${isSharp(p, size) ? ' ✦선명' : ''}${size === DEFAULT_SIZE[device()] ? ' (기본)' : ''} · ${SIZE_MIN}~${SIZE_MAX}`;
+    return `px${isSharp(p, size) ? LX(' ✦선명', ' ✦sharp') : ''}${size === DEFAULT_SIZE[device()] ? LX(' (기본)', ' (default)') : ''} · ${SIZE_MIN}~${SIZE_MAX}`;
 }
 
 function onSizeInput(input, done) {
@@ -5084,21 +5103,21 @@ function lookById(key) {
 /** Tiles: built-in pets, then my saved looks, then "새로 올리기". */
 function lookGridHtml(selected, current = null) {
     const tile = (key, src, name, del = '') =>
-        `<div class="tw-look${selected === key ? ' tw-on' : ''}" data-look="${esc(key)}"><div class="tw-look-img">${src ? `<img src="${esc(src)}" alt="">` : ''}${current === key ? '<em>지금</em>' : ''}${del}</div><span>${esc(name)}</span></div>`;
+        `<div class="tw-look${selected === key ? ' tw-on' : ''}" data-look="${esc(key)}"><div class="tw-look-img">${src ? `<img src="${esc(src)}" alt="">` : ''}${current === key ? LX('<em>지금</em>', '<em>Now</em>') : ''}${del}</div><span>${esc(name)}</span></div>`;
     const builtins = Object.entries(BUILTIN).map(([k, v]) => tile('builtin:' + k, `${BASE}assets/pets/${k}/idle.png`, v.name)).join('');
     // 0.10.3: a saved look no pet wears can be thrown away right here (same as in ⚙)
     const mine = (root?.looks || []).map(l => tile('lib:' + l.id, imgUrl(l.roles?.idle?.[0]), l.name,
-        lookUsers(l).length ? '' : `<i class="tw-lookdel" data-dellook="${esc(l.id)}" title="지우기">✕</i>`)).join('');
-    return `<div class="tw-cap">기본 펫</div><div class="tw-looks">${builtins}</div>
-<div class="tw-cap">내가 올린 외형</div><div class="tw-looks">${mine}<div class="tw-look tw-look-add${selected === 'upload' ? ' tw-on' : ''}" data-look="upload"><div class="tw-look-img"><i class="fa-solid fa-plus"></i></div><span>새로 올리기</span></div></div>`;
+        lookUsers(l).length ? '' : `<i class="tw-lookdel" data-dellook="${esc(l.id)}" title="${LX('지우기', 'Delete')}">✕</i>`)).join('');
+    return `<div class="tw-cap">${LX('기본 펫', 'Starter pets')}</div><div class="tw-looks">${builtins}</div>
+<div class="tw-cap">${LX('내가 올린 외형', 'My uploaded looks')}</div><div class="tw-looks">${mine}<div class="tw-look tw-look-add${selected === 'upload' ? ' tw-on' : ''}" data-look="upload"><div class="tw-look-img"><i class="fa-solid fa-plus"></i></div><span>${LX('새로 올리기', 'Upload new')}</span></div></div>`;
 }
 
 const PIC_ACCEPT = 'image/png,image/jpeg,image/webp';
 
 /** "배경 지우기" switch + strength bar (prefix '' = upload box, 'role' = 그림 tab). */
 function bgHtml(prefix = '') {
-    return `<label class="tw-check"><input type="checkbox" data-f="${prefix}bg" checked> 배경 지우기 <span class="tw-sub">(하얀색 같은 단색 배경)</span></label>
-<div class="tw-bgrow" data-bgrow="${prefix}"><span class="tw-sub">조금</span><input type="range" min="6" max="80" step="2" value="${BG_TOL}" data-f="${prefix}bgtol"><span class="tw-sub">많이</span></div>`;
+    return `<label class="tw-check"><input type="checkbox" data-f="${prefix}bg" checked> ${LX('배경 지우기', 'Remove background')} <span class="tw-sub">${LX('(하얀색 같은 단색 배경)', '(a plain one-color background, like white)')}</span></label>
+<div class="tw-bgrow" data-bgrow="${prefix}"><span class="tw-sub">${LX('조금', 'Less')}</span><input type="range" min="6" max="80" step="2" value="${BG_TOL}" data-f="${prefix}bgtol"><span class="tw-sub">${LX('많이', 'More')}</span></div>`;
 }
 
 /** Background strength chosen in the window (0 = off). */
@@ -5112,27 +5131,27 @@ function bgTolOf(prefix = '') {
 function uploadHtml() {
     return `<div class="tw-upload" hidden>
   <input type="file" accept="${PIC_ACCEPT}" data-f="file">
-  <div class="tw-row"><div class="tw-btn" data-act="pickfile"><i class="fa-solid fa-image"></i> 그림 고르기</div><span class="tw-sub tw-filename">아직 안 골랐어요</span></div>
+  <div class="tw-row"><div class="tw-btn" data-act="pickfile"><i class="fa-solid fa-image"></i> ${LX('그림 고르기', 'Choose picture')}</div><span class="tw-sub tw-filename">${LX('아직 안 골랐어요', 'Nothing chosen yet')}</span></div>
   <div class="tw-row tw-prevrow" hidden><img class="tw-prev tw-checker" alt=""><div>
-    <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="cutopen"><i class="fa-solid fa-crop-simple"></i> 직접 자르기</div><span class="tw-sub tw-cutnote"></span></div>
-    <label class="tw-check"><input type="checkbox" data-f="crop" checked> 투명 여백 자르기</label>
+    <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="cutopen"><i class="fa-solid fa-crop-simple"></i> ${LX('직접 자르기', 'Crop by hand')}</div><span class="tw-sub tw-cutnote"></span></div>
+    <label class="tw-check"><input type="checkbox" data-f="crop" checked> ${LX('투명 여백 자르기', 'Trim transparent edges')}</label>
     ${bgHtml('')}
   </div></div>
-  <div class="tw-sub">그림 한 장이면 돼요. 배경이 하얀색처럼 한 가지 색이면 알아서 지워요(미리보기에서 확인). 한 번 올리면 "내가 올린 외형"에 남아서 다음에 고르기만 하면 돼요.</div>
-  <div class="tw-row tw-uploadno"><div class="tw-btn tw-btn-small" data-act="uploadno">취소</div></div>
+  <div class="tw-sub">${LX('그림 한 장이면 돼요. 배경이 하얀색처럼 한 가지 색이면 알아서 지워요(미리보기에서 확인). 한 번 올리면', 'One picture is enough. A plain background like white is removed automatically (check the preview). Once uploaded, it stays in')} "${LX('내가 올린 외형', 'My uploaded looks')}"${LX('에 남아서 다음에 고르기만 하면 돼요.', ' so next time you can just pick it.')}</div>
+  <div class="tw-row tw-uploadno"><div class="tw-btn tw-btn-small" data-act="uploadno">${LX('취소', 'Cancel')}</div></div>
 </div>`;
 }
 
 function facingHtml() {
-    return `<label class="tw-label">그림이 보는 쪽
+    return `<label class="tw-label">${LX('그림이 보는 쪽', 'Which way the picture faces')}
   <select data-f="facing">
-    <option value="front">정면</option>
-    <option value="right">오른쪽을 봄</option>
-    <option value="left">왼쪽을 봄</option>
+    <option value="front">${LX('정면', 'Front')}</option>
+    <option value="right">${LX('오른쪽을 봄', 'Faces right')}</option>
+    <option value="left">${LX('왼쪽을 봄', 'Faces left')}</option>
   </select>
 </label>
-<div class="tw-sub">그림 한 장이 어느 쪽을 보는지예요. 반대쪽은 자동으로 뒤집어서 써요.</div>
-<label class="tw-label"><span>말랑 정도 <span class="tw-squish-val"></span></span>
+<div class="tw-sub">${LX('그림 한 장이 어느 쪽을 보는지예요. 반대쪽은 자동으로 뒤집어서 써요.', 'Which way a single picture faces. It’s flipped automatically for the other side.')}</div>
+<label class="tw-label"><span>${LX('말랑 정도', 'Squishiness')} <span class="tw-squish-val"></span></span>
   <input type="range" data-f="squish" min="0" max="1" step="0.1">
 </label>`;
 }
@@ -5151,7 +5170,7 @@ function addDays(key, n) {
     return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
 }
 
-const MOMENT_NAMES = { firstFeast: '첫 잔칫상', firstFull: '첫 배부름', moved: '이사한 날', firstGift: '첫 선물 받은 날' };
+const MOMENT_NAMES = { firstFeast: LX('첫 잔칫상', 'First feast'), firstFull: LX('첫 배부름', 'First full tummy'), moved: LX('이사한 날', 'Moving day'), firstGift: LX('첫 선물 받은 날', 'First present') };
 
 function togetherDays(p) {
     return daysBetween(dayKey(p.createdAt || Date.now()), dayKey()) + 1;
@@ -5160,17 +5179,17 @@ function togetherDays(p) {
 function journalMoments(p) {
     const today = dayKey();
     const met = dayKey(p.createdAt || Date.now());
-    const moments = [{ day: met, name: '처음 만난 날' }];
+    const moments = [{ day: met, name: LX('처음 만난 날', 'The day we met') }];
     for (const m of p.journal?.moments || []) {
         const r = /^level(\d)$/.exec(m?.kind || '');
-        if (r) moments.push({ day: m.day, name: `${josa(LEVELS[Number(r[1])]?.name || '?', '이', '가')} 된 날` });
+        if (r) moments.push({ day: m.day, name: LX(`${josa(LEVELS[Number(r[1])]?.name || '?', '이', '가')} 된 날`, `Became ${LEVELS[Number(r[1])]?.name || '?'}`) });
         else if (MOMENT_NAMES[m?.kind]) moments.push({ day: m.day, name: MOMENT_NAMES[m.kind] });
     }
-    if (togetherDays(p) >= 100) moments.push({ day: addDays(met, 99), name: '만난 지 100일' });
+    if (togetherDays(p) >= 100) moments.push({ day: addDays(met, 99), name: LX('만난 지 100일', '100 days together') });
     for (let y = 1; y < 100; y++) {                                   // every year on the day we met
         const ann = met.replace(/^\d+/, (v) => String(Number(v) + y));
         if (ann > today) break;
-        moments.push({ day: ann, name: `만난 지 ${y}년` });
+        moments.push({ day: ann, name: LX(`만난 지 ${y}년`, `${y} year${y > 1 ? 's' : ''} together`) });
     }
     moments.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
     return moments;
@@ -5179,11 +5198,11 @@ function journalMoments(p) {
 /** Words only, no numbers ("숫자 레벨 대신 보는 재미"). */
 function nextStep(p) {
     const k = levelOf(p);
-    if (k >= LEVELS.length - 1) return { pct: 100, text: '가장 친한 사이예요' };
+    if (k >= LEVELS.length - 1) return { pct: 100, text: LX('가장 친한 사이예요', 'As close as can be') };
     const a = LEVELS[k].min, b = LEVELS[k + 1].min;
     const r = clamp((petPoints(p) - a) / (b - a), 0, 1);
     const nm = LEVELS[k + 1].name;
-    const text = r < 0.34 ? `${nm}까지 천천히 가는 중` : r < 0.67 ? `${nm}까지 조금 더` : `${nm}까지 거의 다 왔어요`;
+    const text = r < 0.34 ? LX(`${nm}까지 천천히 가는 중`, `Slowly on the way to ${nm}`) : r < 0.67 ? LX(`${nm}까지 조금 더`, `A little more to ${nm}`) : LX(`${nm}까지 거의 다 왔어요`, `Almost at ${nm}`);
     return { pct: Math.max(4, Math.round(r * 100)), text };
 }
 
@@ -5205,14 +5224,14 @@ function heroHtml(p) {
 </div>`;
 }
 
-const tokWords = (tok) => (tok >= 10000 ? `약 ${(Math.round(tok / 1000) / 10).toLocaleString()}만` : `약 ${tok.toLocaleString()}`);
+const tokWords = (tok) => (tok >= 10000 ? LX(`약 ${(Math.round(tok / 1000) / 10).toLocaleString()}만`, `about ${Math.round(tok / 1000).toLocaleString()}k`) : `${LX('약', 'about')} ${tok.toLocaleString()}`);
 
 /** 0.10.5 가장 많이 먹은 날 (counted from 0.10.5 on). */
 function bestTile(b) {
-    if (!b?.day) return `<div class="tw-tile tw-tile-wide"><span>가장 많이 먹은 날</span><b>아직 없어요</b><small>이번 업데이트부터 세기 시작해요</small></div>`;
+    if (!b?.day) return `<div class="tw-tile tw-tile-wide"><span>${LX('가장 많이 먹은 날', 'Biggest meal day')}</span><b>${LX('아직 없어요', 'Not yet')}</b><small>${LX('이번 업데이트부터 세기 시작해요', 'Counting starts from this update')}</small></div>`;
     const [y, m, d] = b.day.split('-').map(Number);
-    const date = `${y !== new Date().getFullYear() ? `${y}년 ` : ''}${m}월 ${d}일`;
-    return `<div class="tw-tile tw-tile-wide"><span>가장 많이 먹은 날</span><b>${esc(date)}</b><small>그날 ${esc(tokWords(b.tokens))} 토큰 · 메시지 ${Number(b.n) || 0}개</small></div>`;
+    const date = dateText(y, m, d);
+    return `<div class="tw-tile tw-tile-wide"><span>${LX('가장 많이 먹은 날', 'Biggest meal day')}</span><b>${esc(date)}</b><small>${LX('그날', 'That day')} ${esc(tokWords(b.tokens))} ${LX('토큰 · 메시지', 'tokens ·')} ${Number(b.n) || 0}${LX('개', ' messages')}</small></div>`;
 }
 
 function journalHtml(p) {
@@ -5220,13 +5239,13 @@ function journalHtml(p) {
     const tile = (label, value, sub = '') => `<div class="tw-tile"><span>${label}</span><b>${esc(value)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</div>`;
     const tokText = tokWords(e.tokens || 0);
     return `<div class="tw-tiles">
-  ${tile('함께한 지', `${togetherDays(p)}일째`)}
-  ${tile('대화한 날', `${j.talkDays || 0}일`)}
-  ${tile('주고받은 메시지', `${(e.me || 0) + (e.them || 0)}`, `나 ${e.me || 0} · 상대 ${e.them || 0}`)}
-  ${tile('먹은 토큰', tokText)}
+  ${tile(LX('함께한 지', 'Together'), LX(`${togetherDays(p)}일째`, `Day ${togetherDays(p)}`))}
+  ${tile(LX('대화한 날', 'Days chatted'), `${j.talkDays || 0}${LX('일', '')}`)}
+  ${tile(LX('주고받은 메시지', 'Messages exchanged'), `${(e.me || 0) + (e.them || 0)}`, `${LX('나', 'you')} ${e.me || 0} ${LX('· 상대', '· them')} ${e.them || 0}`)}
+  ${tile(LX('먹은 토큰', 'Tokens eaten'), tokText)}
   ${bestTile(j.best)}
 </div>
-<div class="tw-cap">기념 순간</div>
+<div class="tw-cap">${LX('기념 순간', 'Milestones')}</div>
 <div class="tw-moments">${journalMoments(p).map(m => `<div><span>${esc(m.day)}</span><b>${esc(m.name)}</b></div>`).join('')}</div>`;
 }
 
@@ -5240,7 +5259,7 @@ function roomCharName() {
     const c = ctx();
     if (c.groupId) {
         const g = (c.groups || []).find(x => String(x.id) === String(c.groupId));
-        return { name: String(g?.name || '그룹 채팅').slice(0, PLACE_NAME), grp: true };
+        return { name: String(g?.name || LX('그룹 채팅', 'Group chat')).slice(0, PLACE_NAME), grp: true };
     }
     return { name: String(c.name2 || '').slice(0, PLACE_NAME), grp: false };
 }
@@ -5259,7 +5278,7 @@ function notePlace(p) {
     const today = dayKey();
     for (const x of p.places) if (x.at && !x.to) x.to = today;   // it moved: the old home ends today
     const who = roomCharName();
-    pl = { id: 'pl' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name: who.name || '이름 없는 곳', grp: who.grp,
+    pl = { id: 'pl' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name: who.name || LX('이름 없는 곳', 'Unnamed place'), grp: who.grp,
         from: today, to: null, n: 0, memo: '', at: { chatId: p.home.chatId, integrity: p.home.integrity || '' } };
     p.places.push(pl);
     if (p.places.length > PLACE_MAX) p.places.splice(0, p.places.length - PLACE_MAX);
@@ -5270,7 +5289,7 @@ function notePlace(p) {
 function placeDate(d) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d || '')) return '';
     const [y, m, dd] = d.split('-').map(Number);
-    return `${y !== new Date().getFullYear() ? y + '년 ' : ''}${m}월 ${dd}일`;
+    return dateText(y, m, dd);
 }
 
 function placeDays(from) {
@@ -5281,10 +5300,10 @@ function placeDays(from) {
 function placeCard(p, pl) {
     const here = pl.at && !pl.to && sameAt(pl.at, p.home);
     if (win.placeEdit === pl.id) return placeForm(pl);
-    const when = pl.to ? `${placeDate(pl.from)} ~ ${placeDate(pl.to)}` : pl.from ? `${placeDate(pl.from)}부터 · ${placeDays(pl.from)}일째` : '';
-    const bits = [when, pl.at || pl.n ? `먹은 메시지 ${pl.n || 0}` : ''].filter(Boolean).join(' · ');
+    const when = pl.to ? `${placeDate(pl.from)} ~ ${placeDate(pl.to)}` : pl.from ? LX(`${placeDate(pl.from)}부터 · ${placeDays(pl.from)}일째`, `since ${placeDate(pl.from)} · day ${placeDays(pl.from)}`) : '';
+    const bits = [when, pl.at || pl.n ? `${LX('먹은 메시지', 'Messages eaten:')} ${pl.n || 0}` : ''].filter(Boolean).join(' · ');
     return `<div class="tw-place${here ? ' tw-place-here' : ''}">
-  <div class="tw-place-top"><b>${esc(pl.name || '이름 없는 곳')}${pl.grp ? ' <small>(그룹)</small>' : ''}</b>${here ? '<span class="tw-place-tag">지금 집</span>' : ''}<span class="tw-place-edit" data-act="placeedit" data-pl="${esc(pl.id)}"><i class="fa-solid fa-pen"></i> 고치기</span></div>
+  <div class="tw-place-top"><b>${esc(pl.name || LX('이름 없는 곳', 'Unnamed place'))}${pl.grp ? LX(' <small>(그룹)</small>', ' <small>(group)</small>') : ''}</b>${here ? LX('<span class="tw-place-tag">지금 집</span>', '<span class="tw-place-tag">Current home</span>') : ''}<span class="tw-place-edit" data-act="placeedit" data-pl="${esc(pl.id)}"><i class="fa-solid fa-pen"></i> ${LX('고치기', 'Edit')}</span></div>
   ${bits ? `<div class="tw-sub">${esc(bits)}</div>` : ''}
   ${pl.memo ? `<div class="tw-place-memo">${esc(pl.memo)}</div>` : ''}
 </div>`;
@@ -5293,17 +5312,17 @@ function placeCard(p, pl) {
 function placeForm(pl) {
     const neu = !pl.id;
     return `<div class="tw-place tw-place-form" data-plform="${esc(pl.id || 'new')}">
-  <label class="tw-label">이름 <input data-pf="name" maxlength="${PLACE_NAME}" value="${esc(pl.name || '')}" placeholder="캐릭터나 방 이름"></label>
+  <label class="tw-label">${LX('이름', 'Name')} <input data-pf="name" maxlength="${PLACE_NAME}" value="${esc(pl.name || '')}" placeholder="${LX('캐릭터나 방 이름', 'Character or room name')}"></label>
   <div class="tw-place-dates">
-    <label class="tw-label">처음 <input type="date" data-pf="from" value="${esc(pl.from || '')}"></label>
-    ${pl.at && !pl.to ? '' : `<label class="tw-label">마지막 <input type="date" data-pf="to" value="${esc(pl.to || '')}"></label>`}
+    <label class="tw-label">${LX('처음', 'From')} <input type="date" data-pf="from" value="${esc(pl.from || '')}"></label>
+    ${pl.at && !pl.to ? '' : `<label class="tw-label">${LX('마지막', 'To')} <input type="date" data-pf="to" value="${esc(pl.to || '')}"></label>`}
   </div>
-  ${pl.at && !pl.to ? '<div class="tw-sub">지금 사는 곳이라 마지막 날은 없어요(이사하면 그날로 적혀요).</div>' : ''}
-  <label class="tw-label">메모 <textarea data-pf="memo" rows="2" maxlength="${PLACE_MEMO}" placeholder="이곳에서 있었던 일">${esc(pl.memo || '')}</textarea></label>
+  ${pl.at && !pl.to ? LX('<div class="tw-sub">지금 사는 곳이라 마지막 날은 없어요(이사하면 그날로 적혀요).</div>', '<div class="tw-sub">It lives here now, so there’s no end date (moving fills it in).</div>') : ''}
+  <label class="tw-label">${LX('메모', 'Notes')} <textarea data-pf="memo" rows="2" maxlength="${PLACE_MEMO}" placeholder="${LX('이곳에서 있었던 일', 'What happened here')}">${esc(pl.memo || '')}</textarea></label>
   <div class="tw-place-btns">
-    <div class="tw-btn tw-btn-main" data-act="placesave">저장</div>
-    ${neu ? '' : '<div class="tw-btn" data-act="placedel">빼기</div>'}
-    <div class="tw-btn" data-act="placecancel">취소</div>
+    <div class="tw-btn tw-btn-main" data-act="placesave">${LX('저장', 'Save')}</div>
+    ${neu ? '' : LX('<div class="tw-btn" data-act="placedel">빼기</div>', '<div class="tw-btn" data-act="placedel">Remove</div>')}
+    <div class="tw-btn" data-act="placecancel">${LX('취소', 'Cancel')}</div>
   </div>
 </div>`;
 }
@@ -5316,10 +5335,10 @@ function drawPlaces() {
     notePlace(p);
     const list = (p.places || []).filter(x => !x.hide).slice().sort((a, b) => (!a.to) - (!b.to) || String(b.to || b.from || '').localeCompare(String(a.to || a.from || '')));
     list.sort((a, b) => ((!b.to && b.at) ? 1 : 0) - ((!a.to && a.at) ? 1 : 0));   // the home it lives in now first
-    box.innerHTML = `<div class="tw-cap">함께한 곳</div>
+    box.innerHTML = `<div class="tw-cap">${LX('함께한 곳', 'Places together')}</div>
   ${list.map(pl => placeCard(p, pl)).join('')}
-  ${win.placeEdit === 'new' ? placeForm({ name: '', from: '', to: '', memo: '' }) : '<div class="tw-btn tw-btn-small tw-wide" data-act="placeadd"><i class="fa-solid fa-plus"></i> 직접 넣기</div>'}
-  <div class="tw-sub">사는 방마다 자동으로 적혀요(0.10.9부터). 그 전 일은 직접 넣을 수 있어요. 펫 파일에는 안 담겨요.</div>`;
+  ${win.placeEdit === 'new' ? placeForm({ name: '', from: '', to: '', memo: '' }) : LX('<div class="tw-btn tw-btn-small tw-wide" data-act="placeadd"><i class="fa-solid fa-plus"></i> 직접 넣기</div>', '<div class="tw-btn tw-btn-small tw-wide" data-act="placeadd"><i class="fa-solid fa-plus"></i> Add by hand</div>')}
+  <div class="tw-sub">${LX('사는 방마다 자동으로 적혀요(0.10.9부터). 그 전 일은 직접 넣을 수 있어요. 펫 파일에는 안 담겨요.', 'Each room it lives in is noted automatically (since 0.10.9). You can add earlier ones by hand. Not included in pet files.')}</div>`;
 }
 
 function placeAct(act, t) {
@@ -5342,7 +5361,7 @@ function placeAct(act, t) {
         const okDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : '';
         let from = okDay(v('from')), to = okDay(v('to'));
         if (from && to && to < from) [from, to] = [to, from];
-        const data = { name: v('name').replace(/\s+/g, ' ').trim().slice(0, PLACE_NAME) || '이름 없는 곳', memo: v('memo').trim().slice(0, PLACE_MEMO), from };
+        const data = { name: v('name').replace(/\s+/g, ' ').trim().slice(0, PLACE_NAME) || LX('이름 없는 곳', 'Unnamed place'), memo: v('memo').trim().slice(0, PLACE_MEMO), from };
         if (pl) Object.assign(pl, data, pl.at && !pl.to ? {} : { to: to || null });
         else {
             p.places ??= [];
@@ -5359,12 +5378,12 @@ function freqRow(p, u) {
     const off = MOVES[u.key] ? !movesOf(p).includes(u.key) : isAtt(u.key) ? !FREQ_X[p.freq?.[u.key]] : isOff(p, u.key);
     const cur = off ? 'off' : (FREQ_X[p.freq?.[u.key]] ? p.freq[u.key] : isPres(u.key) ? 'rare' : 'norm');
     if (u.many && !roommates(p).length) {                          // 0.10.9: needs another pet in the same room
-        return `<div class="tw-frow tw-frow-off"><span class="tw-fname">${esc(u.name)}</span><span class="tw-sub">같은 방에 펫이 둘 이상이면 해요</span></div>`;
+        return `<div class="tw-frow tw-frow-off"><span class="tw-fname">${esc(u.name)}</span><span class="tw-sub">${LX('같은 방에 펫이 둘 이상이면 해요', 'Needs two or more pets in the same room')}</span></div>`;
     }
     if (u.needs && !p.look?.roles?.[u.needs]?.length) {         // 앉기 without a 앉기 picture
-        return `<div class="tw-frow tw-frow-off"><span class="tw-fname">${esc(u.name)}</span><span class="tw-sub">${esc(ROLE_DEFS[u.needs]?.name || u.name)} 그림을 넣으면 해요</span></div>`;
+        return `<div class="tw-frow tw-frow-off"><span class="tw-fname">${esc(u.name)}</span><span class="tw-sub">${esc(ROLE_DEFS[u.needs]?.name || u.name)} ${LX('그림을 넣으면 해요', 'picture needed')}</span></div>`;
     }
-    const opts = NO_FREQ.includes(u.key) ? [['off', '끔'], ['norm', '켬']] : FREQS;
+    const opts = NO_FREQ.includes(u.key) ? [['off', LX('끔', 'Off')], ['norm', LX('켬', 'On')]] : FREQS;
     return `<div class="tw-frow${off ? ' tw-frow-off' : ''}"><span class="tw-fname">${esc(u.name)}</span><span class="tw-fseg">${opts.map(([k, n]) =>
         `<span class="tw-fbtn${cur === k ? ' tw-fon' : ''}" data-freq="${u.key}" data-fv="${k}">${n}</span>`).join('')}</span></div>`;
 }
@@ -5422,12 +5441,12 @@ function setReact(m, v) {
 async function resetActs() {
     const p = curPet();
     if (!p || readOnly) return;
-    if (!await confirmBox('행동 빈도·걸음·반응 모습을 모두 기본 성격대로 되돌릴까요?')) return;
+    if (!await confirmBox(LX('행동 빈도·걸음·반응 모습을 모두 기본 성격대로 되돌릴까요?', 'Reset all frequencies, walking speed and reactions to the base personality?'))) return;
     p.off = []; p.freq = {}; p.pace = 'norm'; p.moves = ['wall']; p.screenRest = REST_DEF;
     if (p.personality) p.personality.react = {};
     saveSoon();
     renderPanel();
-    say('기본 성격대로 되돌렸어요.');
+    say(LX('기본 성격대로 되돌렸어요.', 'Reset to the base personality.'));
 }
 
 function actsHtml(p) {
@@ -5438,29 +5457,29 @@ function actsHtml(p) {
         const items = list.filter(u => u.lv === k);
         if (!items.length) return '';
         const open = lv >= k;
-        const head = hide ? '' : `<div class="tw-cap">${esc(levelLabel(p, k))}${open ? '' : ' <span class="tw-sub">· 아직이에요</span>'}</div>`;
+        const head = hide ? '' : `<div class="tw-cap">${esc(levelLabel(p, k))}${open ? '' : LX(' <span class="tw-sub">· 아직이에요</span>', ' <span class="tw-sub">· not yet</span>')}</div>`;
         return head + (open
             ? `<div class="tw-freqs">${items.map(u => freqRow(p, u)).join('')}</div>`
             : `<div class="tw-acts">${items.map(() => '<span class="tw-act"><i class="fa-solid fa-lock"></i> ???</span>').join('')}</div>`);
     }).join('');
     const baseName = persName(p);
-    const head = `<div class="tw-preset"><span>기본 성격 <span class="tw-chip">${esc(baseName)}</span>${customised(p) ? ' <span class="tw-sub">· 직접 고친 곳 있음</span>' : ''}</span>`
-        + (customised(p) ? '<div class="tw-btn tw-btn-small" data-act="actreset">처음대로</div>' : '') + '</div>'
-        + '<div class="tw-sub">처음엔 기본 성격대로 움직여요. 아래에서 빈도와 반응을 마음대로 바꿀 수 있어요. 누르면 바로 저장돼요.</div>';
+    const head = `<div class="tw-preset"><span>${LX('기본 성격', 'Base personality')} <span class="tw-chip">${esc(baseName)}</span>${customised(p) ? LX(' <span class="tw-sub">· 직접 고친 곳 있음</span>', ' <span class="tw-sub">· customized</span>') : ''}</span>`
+        + (customised(p) ? LX('<div class="tw-btn tw-btn-small" data-act="actreset">처음대로</div>', '<div class="tw-btn tw-btn-small" data-act="actreset">Reset</div>') : '') + '</div>'
+        + LX('<div class="tw-sub">처음엔 기본 성격대로 움직여요. 아래에서 빈도와 반응을 마음대로 바꿀 수 있어요. 누르면 바로 저장돼요.</div>', '<div class="tw-sub">It starts out acting like its base personality. Change frequencies and reactions below as you like. Changes save right away.</div>');
     const pace = p.pace || 'norm';
     const rest = restOf(p);
-    const restRow = `<div class="tw-frow"><span class="tw-fname">화면 쉬는 시간</span><span class="tw-fseg">${RESTS.map(([k, n]) =>
+    const restRow = `<div class="tw-frow"><span class="tw-fname">${LX('화면 쉬는 시간', 'Rest between screen trips')}</span><span class="tw-fseg">${RESTS.map(([k, n]) =>
         `<span class="tw-fbtn${rest === k ? ' tw-fon' : ''}" data-rest="${k}">${n}</span>`).join('')}</span></div>`;
-    const basic = `<div class="tw-cap">평소 행동</div><div class="tw-freqs">${BASIC_ACTS.map(u => freqRow(p, u) + (u.key === 'dash' ? restRow : '')).join('')}`
-        + `<div class="tw-frow"><span class="tw-fname">걸음 빠르기</span><span class="tw-fseg">${PACES.map(([k, n]) =>
+    const basic = `<div class="tw-cap">${LX('평소 행동', 'Everyday behavior')}</div><div class="tw-freqs">${BASIC_ACTS.map(u => freqRow(p, u) + (u.key === 'dash' ? restRow : '')).join('')}`
+        + `<div class="tw-frow"><span class="tw-fname">${LX('걸음 빠르기', 'Walking speed')}</span><span class="tw-fseg">${PACES.map(([k, n]) =>
             `<span class="tw-fbtn${pace === k ? ' tw-fon' : ''}" data-pace="${k}">${n}</span>`).join('')}</span></div></div>`;
-    const atts = `<div class="tw-cap">나를 대하는 태도</div><div class="tw-sub">처음엔 꺼져 있어요. 원하는 것만 켜 보세요.</div><div class="tw-freqs">${ATTITUDES.map(u => freqRow(p, u)).join('')}</div>`;
+    const atts = `<div class="tw-cap">${LX('나를 대하는 태도', 'How it treats you')}</div><div class="tw-sub">${LX('처음엔 꺼져 있어요. 원하는 것만 켜 보세요.', 'These start off. Turn on the ones you like.')}</div><div class="tw-freqs">${ATTITUDES.map(u => freqRow(p, u)).join('')}</div>`;
     const react = p.personality?.react || {};
-    const reacts = `<div class="tw-cap">반응 모습</div><div class="tw-sub">순간마다 어느 성격처럼 반응할지 골라요. 섞어 써도 돼요.</div><div class="tw-freqs">${REACT_MOMENTS.map(m =>
-        `<div class="tw-frow"><span class="tw-fname">${esc(m.name)}</span><select class="tw-rsel" data-react="${m.key}"><option value="">기본 (${esc(baseName)})</option>${Object.entries(PERSONALITIES).map(([k, v]) =>
+    const reacts = `<div class="tw-cap">${LX('반응 모습', 'Reaction style')}</div><div class="tw-sub">${LX('순간마다 어느 성격처럼 반응할지 골라요. 섞어 써도 돼요.', 'Pick which personality it reacts like at each moment. Mix freely.')}</div><div class="tw-freqs">${REACT_MOMENTS.map(m =>
+        `<div class="tw-frow"><span class="tw-fname">${esc(m.name)}</span><select class="tw-rsel" data-react="${m.key}"><option value="">${LX('기본 (', 'Default (')}${esc(baseName)})</option>${Object.entries(PERSONALITIES).map(([k, v]) =>
             `<option value="${k}"${react[m.key] === k ? ' selected' : ''}>${esc(v.name)}</option>`).join('')}</select></div>`).join('')}</div>`;
-    const pres = `<div class="tw-cap">선물</div><div class="tw-sub">선물 탭에서 선물을 줬을 때만 해요. 처음엔 드물게예요.</div><div class="tw-freqs">${PRESENT_ACTS.map(u => freqRow(p, u)).join('')}</div>`;
-    return `${head}${basic}${atts}${pres}${groups}<div class="tw-sub" style="margin:6px 0 4px">친해질수록 새 행동이 하나씩 열려요.</div>${reacts}`;
+    const pres = `<div class="tw-cap">${LX('선물', 'Presents')}</div><div class="tw-sub">${LX('선물 탭에서 선물을 줬을 때만 해요. 처음엔 드물게예요.', 'Only after you give a present in the Presents tab. Rare at first.')}</div><div class="tw-freqs">${PRESENT_ACTS.map(u => freqRow(p, u)).join('')}</div>`;
+    return `${head}${basic}${atts}${pres}${groups}<div class="tw-sub" style="margin:6px 0 4px">${LX('친해질수록 새 행동이 하나씩 열려요.', 'New behaviors unlock one by one as you grow closer.')}</div>${reacts}`;
 }
 
 /* ---------- window ---------- */
@@ -5553,7 +5572,7 @@ const TYPER_SHUT_WAIT = 1000;   // ms
 function typerLabel(f) {
     const lab = f.closest('label');
     const t = lab ? [...lab.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' ').trim() : '';
-    return t || f.placeholder || '적기';
+    return t || f.placeholder || LX('적기', 'Type');
 }
 
 function ensureTyper() {
@@ -5561,7 +5580,7 @@ function ensureTyper() {
     const el = document.createElement('div');
     el.className = 'tavvy-typer';
     el.hidden = true;
-    el.innerHTML = `<div class="tavvy-typer-box"><div class="tavvy-typer-head"><span></span><div class="tw-btn" data-typer="done">완료</div></div><div class="tavvy-typer-slot"></div></div>`;
+    el.innerHTML = `<div class="tavvy-typer-box"><div class="tavvy-typer-head"><span></span><div class="tw-btn" data-typer="done">${LX('완료', 'Done')}</div></div><div class="tavvy-typer-slot"></div></div>`;
     document.body.appendChild(el);
     typer = { el, field: null, target: null, open: false };
     // tap "완료" without the field losing focus first (pointerdown keeps the focus) — and close on the click itself,
@@ -5706,11 +5725,11 @@ function show(view, opts = {}) {
     const back = view !== 'home';
     const p = view === 'pet' ? root?.pets.find(x => x.id === win.id) : null;
     if (view === 'pet' && !p) return show('home');
-    const title = { home: 'Tavvy', pet: p?.name || '', new: '새 펫 만들기', settings: '설정', bye: '작별' }[view];
-    win.head.innerHTML = `${back ? '<div class="tw-icon" data-act="back" title="뒤로"><i class="fa-solid fa-arrow-left"></i></div>' : '<div class="tw-icon tw-paw"><i class="fa-solid fa-paw"></i></div>'}
+    const title = { home: 'Tavvy', pet: p?.name || '', new: LX('새 펫 만들기', 'New pet'), settings: LX('설정', 'Settings'), bye: LX('작별', 'Farewell') }[view];
+    win.head.innerHTML = `${back ? LX('<div class="tw-icon" data-act="back" title="뒤로"><i class="fa-solid fa-arrow-left"></i></div>', '<div class="tw-icon" data-act="back" title="Back"><i class="fa-solid fa-arrow-left"></i></div>') : '<div class="tw-icon tw-paw"><i class="fa-solid fa-paw"></i></div>'}
 <b class="tw-title">${esc(title)}</b>
-${view === 'home' ? '<div class="tw-icon" data-act="settings" title="설정"><i class="fa-solid fa-gear"></i></div>' : ''}
-<div class="tw-icon" data-act="close" title="닫기"><i class="fa-solid fa-xmark"></i></div>`;
+${view === 'home' ? LX('<div class="tw-icon" data-act="settings" title="설정"><i class="fa-solid fa-gear"></i></div>', '<div class="tw-icon" data-act="settings" title="Settings"><i class="fa-solid fa-gear"></i></div>') : ''}
+<div class="tw-icon" data-act="close" title="${LX('닫기', 'Close')}"><i class="fa-solid fa-xmark"></i></div>`;
     if (view === 'home') win.body.innerHTML = homeHtml();
     else if (view === 'pet') win.body.innerHTML = petHtml(p);
     else if (view === 'new') win.body.innerHTML = newHtml();
@@ -5728,16 +5747,16 @@ function byeHtml(name) {
     const n = String(name || '');
     return `<div class="tw-bye">
   <div class="tw-bye-wave">👋</div>
-  <b>${esc(n)}${esc(josa(n, '과', '와').slice(n.length))} 작별했어요</b>
-  <div class="tw-sub">함께한 기록은 지워졌어요. 외형(그림)은 "내가 올린 외형"에 남아 있어서 새 펫을 만들 때 다시 고를 수 있어요.</div>
-  <div class="tw-row tw-bye-btns"><div class="tw-btn" data-act="gohome">처음 화면으로</div><div class="tw-btn tw-btn-main" data-act="close">닫기</div></div>
+  <b>${LX(`${esc(n)}${esc(josa(n, '과', '와').slice(n.length))} 작별했어요`, `Said goodbye to ${esc(n)}`)}</b>
+  <div class="tw-sub">${LX('함께한 기록은 지워졌어요. 외형(그림)은', 'Its records are gone. Its look (pictures) stays in')} "${LX('내가 올린 외형', 'My uploaded looks')}"${LX('에 남아 있어서 새 펫을 만들 때 다시 고를 수 있어요.', ' so you can pick it again for a new pet.')}</div>
+  <div class="tw-row tw-bye-btns"><div class="tw-btn" data-act="gohome">${LX('처음 화면으로', 'Back to start')}</div><div class="tw-btn tw-btn-main" data-act="close">${LX('닫기', 'Close')}</div></div>
 </div>`;
 }
 
 /** Leaving a page with unsaved edits asks once. Returns true if it's fine to go. */
 async function okToLeave() {
     if (!formDirty()) return true;
-    return await confirmBox('저장 안 한 내용이 있어요. 그래도 나갈까요?');
+    return await confirmBox(LX('저장 안 한 내용이 있어요. 그래도 나갈까요?', 'You have unsaved changes. Leave anyway?'));
 }
 
 let leaving = false;
@@ -5758,15 +5777,15 @@ function closeWin() {
 function homeHtml() {
     return `<div class="tw-sub tw-roomnote" data-live="room"></div>
 <div data-live="home"></div>
-<div class="tw-btn tw-btn-main tw-wide" data-act="new"><i class="fa-solid fa-plus"></i> 새 펫 만들기</div>
+<div class="tw-btn tw-btn-main tw-wide" data-act="new"><i class="fa-solid fa-plus"></i> ${LX('새 펫 만들기', 'New pet')}</div>
 <input type="file" accept=".json,.png,application/json,image/png" data-f="importfile" hidden>
-<div class="tw-btn tw-wide" data-act="import"><i class="fa-solid fa-file-import"></i> 불러오기 (펫 파일 · PNG 카드)</div>
+<div class="tw-btn tw-wide" data-act="import"><i class="fa-solid fa-file-import"></i> ${LX('불러오기 (펫 파일 · PNG 카드)', 'Import (pet file · PNG card)')}</div>
 <div class="tw-msg"></div>`;
 }
 
 function petCard(p, big) {
     const lv = levelLabel(p);
-    const sub = big ? `${lv ? lv + ' · ' : ''}함께한 지 ${togetherDays(p)}일째` : `${homeLabel(p)}${lv ? ' · ' + lv : ''}`;
+    const sub = big ? `${lv ? lv + ' · ' : ''}${LX(`함께한 지 ${togetherDays(p)}일째`, `day ${togetherDays(p)} together`)}` : `${homeLabel(p)}${lv ? ' · ' + lv : ''}`;
     return `<div class="tw-card${big ? '' : ' tw-card-small'}" data-pet="${esc(p.id)}">
   <div class="tw-av"><img src="${esc(imgUrl(p.look?.roles?.idle?.[0]))}" alt=""></div>
   <div class="tw-card-main"><b>${esc(p.name)} <span class="tw-chip">${esc(persName(p))}</span></b><span>${esc(sub)}</span></div>
@@ -5778,16 +5797,16 @@ function homeLiveHtml() {
     const here = residents();
     const others = (root?.pets || []).filter(p => !here.includes(p));
     let html = '';
-    if (here.length) html += `<div class="tw-cap">이 방에 사는 펫</div>${here.map(p => petCard(p, true)).join('')}`;
-    if (others.length) html += `<div class="tw-cap">다른 방의 펫</div>${others.map(p => petCard(p, false)).join('')}`;
-    if (!html) html = '<div class="tw-empty">아직 펫이 없어요.<br>채팅방을 열고 첫 펫을 만들어 보세요.</div>';
+    if (here.length) html += `<div class="tw-cap">${LX('이 방에 사는 펫', 'Pets in this room')}</div>${here.map(p => petCard(p, true)).join('')}`;
+    if (others.length) html += `<div class="tw-cap">${LX('다른 방의 펫', 'Pets in other rooms')}</div>${others.map(p => petCard(p, false)).join('')}`;
+    if (!html) html = LX('<div class="tw-empty">아직 펫이 없어요.<br>채팅방을 열고 첫 펫을 만들어 보세요.</div>', '<div class="tw-empty">No pets yet.<br>Open a chat and make your first pet.</div>');
     return html;
 }
 
 function roomNote() {
     if (readOnly) return readOnlyReason;
-    if (!room) return '열려 있는 채팅방이 없어요.';
-    return residents().length ? '' : '이 방에는 아직 펫이 없어요.';
+    if (!room) return LX('열려 있는 채팅방이 없어요.', 'No chat is open.');
+    return residents().length ? '' : LX('이 방에는 아직 펫이 없어요.', 'No pets in this room yet.');
 }
 
 /* --- pet page --- */
@@ -5796,12 +5815,12 @@ function petHtml(p) {
     return `<div data-live="hero"></div>
 <div data-live="move"></div>
 <div class="tw-tabs">
-  <div class="tw-tab" data-tab="journal">기록</div>
-  <div class="tw-tab" data-tab="acts">행동</div>
-  <div class="tw-tab" data-tab="edit">꾸미기</div>
-  <div class="tw-tab" data-tab="roles">그림</div>
-  <div class="tw-tab" data-tab="talk">대사</div>
-  <div class="tw-tab" data-tab="gifts">선물</div>
+  <div class="tw-tab" data-tab="journal">${LX('기록', 'Journal')}</div>
+  <div class="tw-tab" data-tab="acts">${LX('행동', 'Actions')}</div>
+  <div class="tw-tab" data-tab="edit">${LX('꾸미기', 'Style')}</div>
+  <div class="tw-tab" data-tab="roles">${LX('그림', 'Art')}</div>
+  <div class="tw-tab" data-tab="talk">${LX('대사', 'Lines')}</div>
+  <div class="tw-tab" data-tab="gifts">${LX('선물', 'Presents')}</div>
 </div>
 <div class="tw-pane" data-pane="journal"><div data-live="journal"></div><div class="tw-places"></div></div>
 <div class="tw-pane" data-pane="acts" data-live="acts"></div>
@@ -5809,31 +5828,31 @@ function petHtml(p) {
 <div class="tw-pane" data-pane="talk">${talkHtml(p)}</div>
 <div class="tw-pane" data-pane="gifts"></div>
 <div class="tw-pane tw-form" data-pane="edit">
-  <label class="tw-label">이름 <input data-f="name" maxlength="20"></label>
-  <label class="tw-label">기본 성격 <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
-  <div class="tw-sub">성격을 바꾸면 행동은 바로 바뀌어요. 친밀도와 기록은 그대로예요.</div>
-  <label class="tw-label">크기 (${device() === 'phone' ? '폰' : 'PC'})
+  <label class="tw-label">${LX('이름', 'Name')} <input data-f="name" maxlength="20"></label>
+  <label class="tw-label">${LX('기본 성격', 'Base personality')} <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
+  <div class="tw-sub">${LX('성격을 바꾸면 행동은 바로 바뀌어요. 친밀도와 기록은 그대로예요.', 'Changing the personality changes behavior right away. Closeness and records stay.')}</div>
+  <label class="tw-label">${LX('크기 (', 'Size (')}${device() === 'phone' ? LX('폰', 'phone') : 'PC'})
     <div class="tw-row"><input type="number" inputmode="numeric" min="${SIZE_MIN}" max="${SIZE_MAX}" step="1" value="${petSize(p)}" data-size="${esc(p.id)}" class="tw-num"><span class="tw-sub" data-sizeval="${esc(p.id)}">${sizeLabel(p, petSize(p))}</span></div>
   </label>
-  <div class="tw-sub">크기는 적으면 바로 바뀌어요. 폰과 PC는 따로 기억해요.</div>
-  <div class="tw-cap">외형</div>
+  <div class="tw-sub">${LX('크기는 적으면 바로 바뀌어요. 폰과 PC는 따로 기억해요.', 'Size changes as you type. Phone and PC are remembered separately.')}</div>
+  <div class="tw-cap">${LX('외형', 'Look')}</div>
   <div class="tw-lookgrid"></div>
   ${uploadHtml()}
   ${facingHtml()}
-  <div class="tw-btn tw-btn-main tw-wide" data-act="save">저장</div>
+  <div class="tw-btn tw-btn-main tw-wide" data-act="save">${LX('저장', 'Save')}</div>
   <div class="tw-msg"></div>
-  <div class="tw-cap">소리</div>
+  <div class="tw-cap">${LX('소리', 'Sounds')}</div>
   <div class="tw-sounds">${soundsHtml(p)}</div>
   <input type="file" accept="${SND_ACCEPT}" data-f="sndfile">
-  <div class="tw-sub">mp3 · wav · ogg · m4a, ${SND_MAX_SEC}초까지. 비워 두면 기본 소리예요. 올리거나 빼면 바로 저장돼요. 소리는 ⚙ 설정에서 켜야 나요(▶ 듣기는 꺼져 있어도 들려요).</div>
+  <div class="tw-sub">mp3 · wav · ogg · m4a, ${SND_MAX_SEC}${LX('초까지. 비워 두면 기본 소리예요. 올리거나 빼면 바로 저장돼요. 소리는 ⚙ 설정에서 켜야 나요(▶ 듣기는 꺼져 있어도 들려요).', ' s max. Empty = default sound. Uploading or removing saves right away. Turn sounds on in ⚙ Settings (▶ preview plays even when off).')}</div>
   <div class="tw-msg tw-sndmsg"></div>
-  <div class="tw-cap">내보내기</div>
-  <div class="tw-row"><div class="tw-btn" data-act="exportpet"><i class="fa-solid fa-file-arrow-down"></i> 펫 파일</div><span class="tw-sub">기록까지 모두 담긴 백업 파일이에요.</span></div>
-  <div class="tw-row"><div class="tw-btn" data-act="exportcard"><i class="fa-solid fa-image"></i> PNG 카드</div><span class="tw-sub">외형과 동작 그림만 담긴 그림이에요. 남에게 나눠 줄 때 써요.</span></div>
-  <div class="tw-sub">펫이 사는 방 정보는 넣지 않아요. 메신저·사진 앱을 거치면 카드 안 정보가 지워질 수 있어요. 그럴 땐 파일 그대로 보내 주세요.</div>
+  <div class="tw-cap">${LX('내보내기', 'Export')}</div>
+  <div class="tw-row"><div class="tw-btn" data-act="exportpet"><i class="fa-solid fa-file-arrow-down"></i> ${LX('펫 파일', 'Pet file')}</div><span class="tw-sub">${LX('기록까지 모두 담긴 백업 파일이에요.', 'A backup file with all its records.')}</span></div>
+  <div class="tw-row"><div class="tw-btn" data-act="exportcard"><i class="fa-solid fa-image"></i> ${LX('PNG 카드', 'PNG card')}</div><span class="tw-sub">${LX('외형과 동작 그림만 담긴 그림이에요. 남에게 나눠 줄 때 써요.', 'An image holding only the look and action pictures. For sharing with others.')}</span></div>
+  <div class="tw-sub">${LX('펫이 사는 방 정보는 넣지 않아요. 메신저·사진 앱을 거치면 카드 안 정보가 지워질 수 있어요. 그럴 땐 파일 그대로 보내 주세요.', 'Room info is never included. Messengers and photo apps may strip the data inside the card, so send it as a file.')}</div>
   <div class="tw-danger">
-    <div class="tw-btn tw-btn-danger" data-act="delete"><i class="fa-solid fa-hand"></i> 작별하기</div>
-    <div class="tw-sub">함께한 기록은 사라지고 되돌릴 수 없어요. 외형은 "내가 올린 외형"에 남아요.</div>
+    <div class="tw-btn tw-btn-danger" data-act="delete"><i class="fa-solid fa-hand"></i> ${LX('작별하기', 'Say goodbye')}</div>
+    <div class="tw-sub">${LX('함께한 기록은 사라지고 되돌릴 수 없어요. 외형은', 'Its records will be gone for good. The look stays in')} "${LX('내가 올린 외형', 'My uploaded looks')}"${LX('에 남아요.', '.')}</div>
   </div>
 </div>`;
 }
@@ -5841,9 +5860,9 @@ function petHtml(p) {
 function soundsHtml(p) {
     return SOUND_SLOTS.map(([k, name]) => {
         const mine = typeof p.sounds?.[k] === 'string';
-        return `<div class="tw-sndrow"><span class="tw-sndname">${name}</span>${mine ? '<span class="tw-chip">내 소리</span>' : '<span class="tw-sub">기본 소리</span>'}
-  <div class="tw-btn tw-btn-small" data-sndplay="${k}" title="듣기"><i class="fa-solid fa-play"></i></div>
-  ${mine ? `<div class="tw-btn tw-btn-small" data-snddel="${k}" title="기본으로">✕</div>` : `<div class="tw-btn tw-btn-small" data-sndup="${k}">올리기</div>`}</div>`;
+        return `<div class="tw-sndrow"><span class="tw-sndname">${name}</span>${mine ? LX('<span class="tw-chip">내 소리</span>', '<span class="tw-chip">My sound</span>') : LX('<span class="tw-sub">기본 소리</span>', '<span class="tw-sub">Default sound</span>')}
+  <div class="tw-btn tw-btn-small" data-sndplay="${k}" title="${LX('듣기', 'Play')}"><i class="fa-solid fa-play"></i></div>
+  ${mine ? `<div class="tw-btn tw-btn-small" data-snddel="${k}" title="${LX('기본으로', 'Use default')}">✕</div>` : `<div class="tw-btn tw-btn-small" data-sndup="${k}">${LX('올리기', 'Upload')}</div>`}</div>`;
     }).join('');
 }
 
@@ -5875,28 +5894,28 @@ async function saveSoundChange(p, key, old, fresh) {
 /** Check a picked sound file (kind, size, length) and upload it: { path, buf } or null (the reason is told with say). */
 async function sndLoad(file, base, say) {
     const ext = sndExt(file.name, file.type);
-    if (!ext) return say('mp3 · wav · ogg · m4a 파일만 넣을 수 있어요.'), null;
-    if (file.size > SND_MAX_BYTES) return say('파일이 너무 커요. 짧은 효과음(3초까지)을 넣어 주세요.'), null;
-    if (!sndReady()) return say('이 브라우저에서는 소리를 쓸 수 없어요.'), null;
-    say('읽는 중…');
+    if (!ext) return say(LX('mp3 · wav · ogg · m4a 파일만 넣을 수 있어요.', 'Only mp3 · wav · ogg · m4a files.')), null;
+    if (file.size > SND_MAX_BYTES) return say(LX('파일이 너무 커요. 짧은 효과음(3초까지)을 넣어 주세요.', 'The file is too big. Use a short sound (up to 3 s).')), null;
+    if (!sndReady()) return say(LX('이 브라우저에서는 소리를 쓸 수 없어요.', 'This browser can’t play sounds.')), null;
+    say(LX('읽는 중…', 'Reading…'));
     const bytes = await file.arrayBuffer();
     let buf;
-    try { buf = await sndCtx.decodeAudioData(bytes.slice(0)); } catch { return say('소리를 읽지 못했어요. 다른 파일로 해 주세요.'), null; }
-    if (buf.duration > SND_MAX_SEC + 0.05) return say(`${Math.round(buf.duration * 10) / 10}초짜리예요. ${SND_MAX_SEC}초까지만 넣을 수 있어요.`), null;
+    try { buf = await sndCtx.decodeAudioData(bytes.slice(0)); } catch { return say(LX('소리를 읽지 못했어요. 다른 파일로 해 주세요.', 'Couldn’t read the sound. Try another file.')), null; }
+    if (buf.duration > SND_MAX_SEC + 0.05) return say(`${Math.round(buf.duration * 10) / 10}${LX('초짜리예요.', ' s long.')} ${SND_MAX_SEC}${LX('초까지만 넣을 수 있어요.', ' s max.')}`), null;
     try {
         const b64 = await blobToDataUrl(new Blob([bytes])).then(u => u.split(',')[1]);
         return { path: await uploadFile(`${base}.${ext}`, b64), buf };
-    } catch (e) { return say('올리지 못했어요: ' + (e.message || e)), null; }
+    } catch (e) { return say(LX('올리지 못했어요: ', 'Upload failed: ') + (e.message || e)), null; }
 }
 
 /* ---------- 0.10.11 답 도착 소리 (settings) ---------- */
 
 function repliesHtml() {
     const s = root.settings, off = s.replyOff || [];
-    const row = (id, name, mine) => `<div class="tw-sndrow"><label class="tw-check tw-grow"><input type="checkbox" data-replyck="${esc(id)}"${off.includes(id) ? '' : ' checked'}> <span class="tw-sndname">${esc(name)}</span>${mine ? ' <span class="tw-chip">내 소리</span>' : ''}</label>
-  <div class="tw-btn tw-btn-small" data-replyplay="${esc(id)}" title="듣기"><i class="fa-solid fa-play"></i></div>${mine ? `<div class="tw-btn tw-btn-small" data-replydel="${esc(id)}" title="빼기">✕</div>` : ''}</div>`;
+    const row = (id, name, mine) => `<div class="tw-sndrow"><label class="tw-check tw-grow"><input type="checkbox" data-replyck="${esc(id)}"${off.includes(id) ? '' : ' checked'}> <span class="tw-sndname">${esc(name)}</span>${mine ? LX(' <span class="tw-chip">내 소리</span>', ' <span class="tw-chip">My sound</span>') : ''}</label>
+  <div class="tw-btn tw-btn-small" data-replyplay="${esc(id)}" title="${LX('듣기', 'Play')}"><i class="fa-solid fa-play"></i></div>${mine ? `<div class="tw-btn tw-btn-small" data-replydel="${esc(id)}" title="${LX('빼기', 'Remove')}">✕</div>` : ''}</div>`;
     return REPLY_SOUNDS.map(([k, name]) => row(k, name, false)).join('')
-        + (s.replyFiles || []).filter(f => f?.id).map(f => row(f.id, f.name || '내 소리', true)).join('');
+        + (s.replyFiles || []).filter(f => f?.id).map(f => row(f.id, f.name || LX('내 소리', 'My sound'), true)).join('');
 }
 
 function drawReplies() {
@@ -5921,11 +5940,11 @@ async function replyPicked(input) {
     input.value = '';
     if (!file || !root) return;
     if (readOnly) return replySay(readOnlyReason);
-    if ((root.settings.replyFiles || []).length >= REPLY_FILES_MAX) return replySay(`내 소리는 ${REPLY_FILES_MAX}개까지 넣을 수 있어요.`);
+    if ((root.settings.replyFiles || []).length >= REPLY_FILES_MAX) return replySay(`${LX('내 소리는', 'Up to')} ${REPLY_FILES_MAX}${LX('개까지 넣을 수 있어요.', ' of your own sounds.')}`);
     const got = await sndLoad(file, `tavvy_reply_${Date.now().toString(36)}`, replySay);
     if (!got) return;
     const f = { id: 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), path: got.path,
-        name: String(file.name || '').replace(/\.[^.]+$/, '').trim().slice(0, 20) || '내 소리' };
+        name: String(file.name || '').replace(/\.[^.]+$/, '').trim().slice(0, 20) || LX('내 소리', 'My sound') };
     root.settings.replyFiles.push(f);
     sndBufs.set(f.path, Promise.resolve(got.buf));
     drawReplies();
@@ -6012,13 +6031,13 @@ function showTab(tab) {
 function newHtml() {
     return `<div class="tw-form">
   <div class="tw-sub" data-live="newroom"></div>
-  <label class="tw-label">이름 <input data-f="name" maxlength="20" placeholder="이름"></label>
-  <div class="tw-cap">외형</div>
+  <label class="tw-label">${LX('이름', 'Name')} <input data-f="name" maxlength="20" placeholder="${LX('이름', 'Name')}"></label>
+  <div class="tw-cap">${LX('외형', 'Look')}</div>
   <div class="tw-lookgrid"></div>
   ${uploadHtml()}
   <div class="tw-uploadopts" hidden>${facingHtml()}</div>
-  <label class="tw-label">기본 성격 <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
-  <div class="tw-btn tw-btn-main tw-wide" data-act="create">만들기</div>
+  <label class="tw-label">${LX('기본 성격', 'Base personality')} <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
+  <div class="tw-btn tw-btn-main tw-wide" data-act="create">${LX('만들기', 'Create')}</div>
   <div class="tw-msg"></div>
 </div>`;
 }
@@ -6037,65 +6056,76 @@ function settingsHtml() {
     const themes = Object.entries(THEMES).map(([k, v]) =>
         `<div class="tw-theme" data-theme-pick="${k}"><div class="tw-swatch tw-swatch-${k}"><i></i><i></i></div><span>${v}</span></div>`).join('');
     return `<div class="tw-form">
-  <div class="tw-cap">창 색</div>
+  <div class="tw-cap">언어 · Language</div>
+  <label class="tw-label">${LX('언어', 'Language')}
+    <select data-s="lang">
+      <option value="auto">${LX('자동 (실리태번·브라우저 언어 따라)', 'Auto (SillyTavern / browser language)')}</option>
+      <option value="ko">한국어</option>
+      <option value="en">English</option>
+    </select>
+  </label>
+  <div class="tw-sub">${LX('바꾸면 페이지를 새로고침한 뒤에 적용돼요.', 'Takes effect after you reload the page.')}</div>
+
+  <div class="tw-cap">${LX('창 색', 'Window color')}</div>
   <div class="tw-themes">${themes}</div>
 
-  <div class="tw-cap">펫</div>
-  <label class="tw-check"><input type="checkbox" data-s="autoWake"> 방에 들어올 때 자동으로 깨우기</label>
-  <label class="tw-label">무대
+  <div class="tw-cap">${LX('펫', 'Pets')}</div>
+  <label class="tw-check"><input type="checkbox" data-s="autoWake"> ${LX('방에 들어올 때 자동으로 깨우기', 'Wake pets automatically when entering a room')}</label>
+  <label class="tw-label">${LX('무대', 'Stage')}
     <select data-s="stageMode">
-      <option value="chat">채팅창 전체 (말풍선 위에도 올라가요)</option>
-      <option value="floor">바닥만 (입력창 위에서만 지내요)</option>
+      <option value="chat">${LX('채팅창 전체 (말풍선 위에도 올라가요)', 'Whole chat (climbs onto messages too)')}</option>
+      <option value="floor">${LX('바닥만 (입력창 위에서만 지내요)', 'Floor only (stays above the input box)')}</option>
     </select>
   </label>
-  <label class="tw-check"><input type="checkbox" data-s="lineLedges"> 줄 모양 채팅에서 메시지 사이 경계선도 발판으로 쓰기</label>
-  <label class="tw-check"><input type="checkbox" data-s="stroll"> 화면 위를 돌아다니기</label>
-  <label class="tw-check"><input type="checkbox" data-s="badge"> 재워 둔 동안 침대에 쌓인 밥 수 보기</label>
-  <label class="tw-label">친밀도 표시
+  <label class="tw-check"><input type="checkbox" data-s="lineLedges"> ${LX('줄 모양 채팅에서 메시지 사이 경계선도 발판으로 쓰기', 'In line-style chats, use the borders between messages as ledges too')}</label>
+  <label class="tw-check"><input type="checkbox" data-s="stroll"> ${LX('화면 위를 돌아다니기', 'Roam around the screen')}</label>
+  <label class="tw-check"><input type="checkbox" data-s="badge"> ${LX('재워 둔 동안 침대에 쌓인 밥 수 보기', 'Show food piling up on the bed while pets sleep')}</label>
+  <label class="tw-label">${LX('친밀도 표시', 'Closeness display')}
     <select data-s="heartMode">
-      <option value="both">하트 + 이름 (♥♥ 친구)</option>
-      <option value="hearts">하트만</option>
-      <option value="name">이름만</option>
-      <option value="hide">숨기기</option>
+      <option value="both">${LX('하트 + 이름 (♥♥ 친구)', 'Hearts + name (♥♥ Friend)')}</option>
+      <option value="hearts">${LX('하트만', 'Hearts only')}</option>
+      <option value="name">${LX('이름만', 'Name only')}</option>
+      <option value="hide">${LX('숨기기', 'Hide')}</option>
     </select>
   </label>
 
-  <div class="tw-cap">소리</div>
-  <label class="tw-check"><input type="checkbox" data-s="replyOn"> 답 도착 알림</label>
-  <div class="tw-sub">체크한 소리가 답이 올 때마다 돌아가며 나요. 펫 꾸미기 탭에서 그 펫의 답 도착 소리를 올려 두었으면 그게 먼저예요.</div>
+  <div class="tw-cap">${LX('소리', 'Sounds')}</div>
+  <label class="tw-check"><input type="checkbox" data-s="replyOn"> ${LX('답 도착 알림', 'Reply arrival alert')}</label>
+  <div class="tw-sub">${LX('체크한 소리가 답이 올 때마다 돌아가며 나요. 펫 꾸미기 탭에서 그 펫의 답 도착 소리를 올려 두었으면 그게 먼저예요.', 'The checked sounds take turns each time a reply arrives. A pet’s own reply sound (set in its Style tab) comes first.')}</div>
   <div class="tw-sounds tw-replies">${repliesHtml()}</div>
-  <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="replyup">내 소리 올리기</div><span class="tw-sub">mp3 · wav · ogg · m4a, ${SND_MAX_SEC}초까지, ${REPLY_FILES_MAX}개까지</span></div>
+  <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="replyup">${LX('내 소리 올리기', 'Upload my sound')}</div><span class="tw-sub">mp3 · wav · ogg · m4a, ${SND_MAX_SEC}${LX('초까지,', ' s max,')} ${REPLY_FILES_MAX}${LX('개까지', ' files max')}</span></div>
   <input type="file" accept="${SND_ACCEPT}" data-f="replyfile">
   <div class="tw-msg tw-replymsg"></div>
-  <label class="tw-check"><input type="checkbox" data-s="soundOn"> 펫 소리 (♥ · 깨우기 · 재우기 · 축하 · 콩 · 웅얼)</label>
-  <div class="tw-row"><span class="tw-sub">음량</span><input type="range" min="0" max="100" step="5" data-s="soundVol" class="tw-grow"><span class="tw-sub tw-volpct"></span></div>
-  <div class="tw-sub">다른 탭을 보고 있을 땐 소리가 나지 않아요. 폰은 화면을 한 번 누른 뒤부터 나요.</div>
+  <label class="tw-check"><input type="checkbox" data-s="soundOn"> ${LX('펫 소리 (♥ · 깨우기 · 재우기 · 축하 · 콩 · 웅얼)', 'Pet sounds (♥ · wake · sleep · cheer · boop · mumble)')}</label>
+  <div class="tw-row"><span class="tw-sub">${LX('음량', 'Volume')}</span><input type="range" min="0" max="100" step="5" data-s="soundVol" class="tw-grow"><span class="tw-sub tw-volpct"></span></div>
+  <div class="tw-sub">${LX('다른 탭을 보고 있을 땐 소리가 나지 않아요. 폰은 화면을 한 번 누른 뒤부터 나요.', 'No sounds while you’re on another tab. On phones, sounds start after you tap the screen once.')}</div>
 
-  <div class="tw-cap">대사</div>
-  <label class="tw-label tw-profrow">AI로 대사 만들 때 쓸 연결
+  <div class="tw-cap">${LX('대사', 'Lines')}</div>
+  <label class="tw-label tw-profrow">${LX('AI로 대사 만들 때 쓸 연결', 'Connection used for AI lines')}
     <select data-s="talkProfile"></select>
   </label>
-  <div class="tw-sub tw-profrow">대사 탭의 "AI로 빈 칸 채우기"를 누를 때만 써요. 실리태번 연결 프로필(Connection Manager)에서 골라요.</div>
+  <div class="tw-sub tw-profrow">${LX('대사 탭의', 'Only used when you press')} "${LX('AI로 빈 칸 채우기', 'Fill empty slots with AI')}"${LX('를 누를 때만 써요. 실리태번 연결 프로필(Connection Manager)에서 골라요.', ' in the Lines tab. Pick from SillyTavern connection profiles (Connection Manager).')}</div>
 
-  <div class="tw-cap">깨우기 버튼</div>
+  <div class="tw-cap">${LX('깨우기 버튼', 'Wake button')}</div>
   <div class="tw-row">
-    <div class="tw-btn" data-act="bedreset">위치 처음으로</div>
-    <div class="tw-btn" data-act="bedfind">찾기 (화면 가운데로)</div>
+    <div class="tw-btn" data-act="bedreset">${LX('위치 처음으로', 'Reset position')}</div>
+    <div class="tw-btn" data-act="bedfind">${LX('찾기 (화면 가운데로)', 'Find (move to center)')}</div>
   </div>
   <div id="tavvy-diag" class="tw-sub tw-diag"></div>
 
-  <div class="tw-cap">내가 올린 외형</div>
+  <div class="tw-cap">${LX('내가 올린 외형', 'My uploaded looks')}</div>
   <div data-live="looks"></div>
 
-  <div class="tw-cap">백업 <span class="tw-sub">(하루 한 번 자동, 최근 ${BACKUP_KEEP}개)</span></div>
-  <div class="tw-row"><select data-live="backups" class="tw-grow"></select><div class="tw-btn" data-act="restore">되돌리기</div></div>
-  <div class="tw-sub">되돌리면 모든 펫의 기록(먹은 양 등)이 그날 기록으로 바뀌어요.</div>
+  <div class="tw-cap">${LX('백업', 'Backups')} <span class="tw-sub">${LX('(하루 한 번 자동, 최근', '(automatic once a day, last')} ${BACKUP_KEEP}${LX('개)', ')')}</span></div>
+  <div class="tw-row"><select data-live="backups" class="tw-grow"></select><div class="tw-btn" data-act="restore">${LX('되돌리기', 'Restore')}</div></div>
+  <div class="tw-sub">${LX('되돌리면 모든 펫의 기록(먹은 양 등)이 그날 기록으로 바뀌어요.', 'Restoring replaces every pet’s records (food eaten, etc.) with that day’s.')}</div>
   <div class="tw-msg"></div>
 </div>`;
 }
 
 function fillSettings() {
     const s = root.settings, box = win.body;
+    box.querySelector('[data-s="lang"]').value = ['ko', 'en'].includes(s.lang) ? s.lang : 'auto';
     box.querySelector('[data-s="autoWake"]').checked = !!s.autoWake;
     box.querySelector('[data-s="stageMode"]').value = stageIsChat() ? 'chat' : 'floor';
     box.querySelector('[data-s="lineLedges"]').checked = s.lineLedges !== false;
@@ -6116,7 +6146,7 @@ function fillSettings() {
     box.querySelectorAll('.tw-profrow').forEach(n => { n.hidden = !profiles; });
     if (profiles) {
         const sel = box.querySelector('[data-s="talkProfile"]');
-        sel.innerHTML = '<option value="">지금 연결 그대로</option>' + profiles.map(p => `<option value="${esc(p.id)}">${esc(p.name || p.id)}</option>`).join('');
+        sel.innerHTML = LX('<option value="">지금 연결 그대로</option>', '<option value="">Current connection</option>') + profiles.map(p => `<option value="${esc(p.id)}">${esc(p.name || p.id)}</option>`).join('');
         sel.value = profiles.some(p => p.id === s.talkProfile) ? s.talkProfile : '';
     }
 }
@@ -6133,13 +6163,13 @@ function connectionProfiles() {
 
 function looksLiveHtml() {
     const looks = root?.looks || [];
-    if (!looks.length) return '<div class="tw-sub">아직 없어요. 새 펫을 만들 때 그림을 올리면 여기 남아요.</div>';
+    if (!looks.length) return LX('<div class="tw-sub">아직 없어요. 새 펫을 만들 때 그림을 올리면 여기 남아요.</div>', '<div class="tw-sub">None yet. Pictures you upload when making a pet are kept here.</div>');
     return looks.map(l => {
         const users = lookUsers(l);
         return `<div class="tw-lookrow">
   <div class="tw-av"><img src="${esc(imgUrl(l.roles?.idle?.[0]))}" alt=""></div>
-  <div class="tw-card-main"><input class="tw-lookname" data-lname="${esc(l.id)}" maxlength="20" value="${esc(l.name)}" placeholder="이름 없음"><span>${users.length ? `${esc(users.map(p => p.name).join(', '))}${josa(users[users.length - 1].name, '이', '가').slice(users[users.length - 1].name.length)} 쓰는 중` : '쓰는 펫 없음'}</span></div>
-  <div class="tw-btn tw-btn-small${users.length ? ' tw-btn-dim' : ''}" data-dellook="${esc(l.id)}">지우기</div>
+  <div class="tw-card-main"><input class="tw-lookname" data-lname="${esc(l.id)}" maxlength="20" value="${esc(l.name)}" placeholder="${LX('이름 없음', 'No name')}"><span>${users.length ? LX(`${esc(users.map(p => p.name).join(', '))}${josa(users[users.length - 1].name, '이', '가').slice(users[users.length - 1].name.length)} 쓰는 중`, `Used by ${esc(users.map(p => p.name).join(', '))}`) : LX('쓰는 펫 없음', 'Not used by any pet')}</span></div>
+  <div class="tw-btn tw-btn-small${users.length ? ' tw-btn-dim' : ''}" data-dellook="${esc(l.id)}">${LX('지우기', 'Delete')}</div>
 </div>`;
     }).join('');
 }
@@ -6147,8 +6177,8 @@ function looksLiveHtml() {
 function backupsHtml() {
     const files = [...(root?.settings.backup?.files || [])].reverse();
     return files.length
-        ? files.map(f => `<option value="${esc(f.day)}">${esc(f.day)} · 펫 ${Number(f.pets) || 0}마리</option>`).join('')
-        : '<option value="">아직 백업이 없어요</option>';
+        ? files.map(f => `<option value="${esc(f.day)}">${esc(f.day)} ${LX('· 펫', '· pets:')} ${Number(f.pets) || 0}${LX('마리', '')}</option>`).join('')
+        : LX('<option value="">아직 백업이 없어요</option>', '<option value="">No backups yet</option>');
 }
 
 /* --- live parts (the pet may be eating while you look) --- */
@@ -6168,7 +6198,7 @@ function refreshWin() {
         else if (kind === 'acts') { if (win.tab !== 'acts') return; html = actsHtml(p); }
         else if (kind === 'looks') html = looksLiveHtml();
         else if (kind === 'backups') html = backupsHtml();
-        else if (kind === 'newroom') html = esc(readOnly ? readOnlyReason : room ? '지금 열려 있는 채팅방이 이 펫의 집이 돼요.' : '먼저 펫이 살 채팅방을 열어 주세요.');
+        else if (kind === 'newroom') html = esc(readOnly ? readOnlyReason : room ? LX('지금 열려 있는 채팅방이 이 펫의 집이 돼요.', 'The chat that’s open now becomes this pet’s home.') : LX('먼저 펫이 살 채팅방을 열어 주세요.', 'First open the chat where the pet will live.'));
         else return;
         if (node.dataset.html !== html) { node.innerHTML = html; node.dataset.html = html; }
     });
@@ -6193,7 +6223,7 @@ function drawLookGrid() {
 function showSquish() {
     const v = Number(win.body.querySelector('[data-f="squish"]')?.value);
     const out = win.body.querySelector('.tw-squish-val');
-    if (out) out.textContent = v <= 0 ? '(안 말랑)' : `(${Math.round(v * 100)}%)`;
+    if (out) out.textContent = v <= 0 ? LX('(안 말랑)', '(firm)') : `(${Math.round(v * 100)}%)`;
 }
 
 function formDirty() {
@@ -6244,23 +6274,23 @@ let cutter = null;
 async function openCutter(file, opts = {}) {
     closeCutter();
     let im;
-    try { im = await loadFileImage(file); } catch { return say('그림을 읽지 못했어요.'); }
+    try { im = await loadFileImage(file); } catch { return say(LX('그림을 읽지 못했어요.', 'Couldn’t read the picture.')); }
     if (!win?.open) return;
     const W = im.naturalWidth, H = im.naturalHeight, b = opts.box;
     const step = (k) => `<span class="tw-step"><b data-cutstep="${k}:-1">−</b><em data-cutval="${k}"></em><b data-cutstep="${k}:1">+</b></span>`;
     const el = document.createElement('div');
     el.className = 'tw-cut';
-    el.innerHTML = `<b>${opts.sheet ? '자르기 · 나누기' : '직접 자르기'}</b>
-<div class="tw-sub">네모 모서리를 끌면 크기가, 안쪽을 끌면 자리가 바뀌어요. 바깥을 끌면 새로 그려요.</div>
+    el.innerHTML = `<b>${opts.sheet ? LX('자르기 · 나누기', 'Crop · split') : LX('직접 자르기', 'Crop by hand')}</b>
+<div class="tw-sub">${LX('네모 모서리를 끌면 크기가, 안쪽을 끌면 자리가 바뀌어요. 바깥을 끌면 새로 그려요.', 'Drag a corner to resize, drag inside to move, drag outside to draw a new box.')}</div>
 <div class="tw-cut-wrap"><div class="tw-cut-stage tw-checker"><canvas></canvas><div class="tw-cut-cells"></div>
   <div class="tw-cut-box"><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i></div></div></div>
-${opts.sheet ? `<div class="tw-seg"><span data-cutmode="one">한 장으로 자르기</span><span data-cutmode="sheet">여러 장으로 나누기</span></div>
+${opts.sheet ? `<div class="tw-seg"><span data-cutmode="one">${LX('한 장으로 자르기', 'Crop as one')}</span><span data-cutmode="sheet">${LX('여러 장으로 나누기', 'Split into several')}</span></div>
 <div class="tw-cut-sheet">
-  <div class="tw-seg"><span data-cuthow="auto">자동 찾기</span><span data-cuthow="grid">칸 수</span></div>
-  <div class="tw-row tw-cut-grid">가로 ${step('cols')} × 세로 ${step('rows')}</div>
+  <div class="tw-seg"><span data-cuthow="auto">${LX('자동 찾기', 'Find automatically')}</span><span data-cuthow="grid">${LX('칸 수', 'Grid')}</span></div>
+  <div class="tw-row tw-cut-grid">${LX('가로', 'Columns')} ${step('cols')} ${LX('× 세로', '× rows')} ${step('rows')}</div>
   <div class="tw-sub tw-cut-info"></div>
 </div>` : ''}
-<div class="tw-row tw-cut-btns"><div class="tw-btn tw-btn-small" data-cut="all">전체</div><span class="tw-grow"></span><div class="tw-btn" data-cut="no">취소</div><div class="tw-btn tw-btn-main" data-cut="ok"></div></div>`;
+<div class="tw-row tw-cut-btns"><div class="tw-btn tw-btn-small" data-cut="all">${LX('전체', 'All')}</div><span class="tw-grow"></span><div class="tw-btn" data-cut="no">${LX('취소', 'Cancel')}</div><div class="tw-btn tw-btn-main" data-cut="ok"></div></div>`;
     const keepScroll = win.body.scrollTop;
     win.box.classList.add('tw-cutting');
     win.box.appendChild(el);
@@ -6339,13 +6369,13 @@ function drawCut() {
     if (grid) grid.hidden = c.how !== 'grid';
     const info = el.querySelector('.tw-cut-info');
     if (info) {
-        const what = c.how === 'grid' ? '그림이 있는 칸' : '그림';
+        const what = c.how === 'grid' ? LX('그림이 있는 칸', 'Cells with pictures') : LX('그림', 'Art');
         info.textContent = c.drag ? ''
-            : !n ? (c.how === 'grid' ? '그림이 있는 칸이 없어요.' : '나눌 그림을 못 찾았어요. 칸 수로 나눠 보세요.')
-            : n > c.space && c.space < Infinity ? `${what} ${n}개를 찾았어요. 이 동작에는 ${c.space}장만 더 넣을 수 있어서 앞의 ${c.space}장만 넣어요.`
-            : `${what} ${n}개를 찾았어요. 왼쪽 → 오른쪽, 위 → 아래 순서로 들어가요.${c.how === 'auto' ? ' 잘못 나뉘면 칸 수로 해 보세요.' : ''}`;
+            : !n ? (c.how === 'grid' ? LX('그림이 있는 칸이 없어요.', 'No cells with pictures.') : LX('나눌 그림을 못 찾았어요. 칸 수로 나눠 보세요.', 'Couldn’t find pictures to split. Try a grid.'))
+            : n > c.space && c.space < Infinity ? LX(`${what} ${n}개를 찾았어요. 이 동작에는 ${c.space}장만 더 넣을 수 있어서 앞의 ${c.space}장만 넣어요.`, `Found ${n}. This action only has room for ${c.space} more, so only the first ${c.space} go in.`)
+            : LX(`${what} ${n}개를 찾았어요. 왼쪽 → 오른쪽, 위 → 아래 순서로 들어가요.${c.how === 'auto' ? ' 잘못 나뉘면 칸 수로 해 보세요.' : ''}`, `Found ${n}. They go in left → right, top → bottom.${c.how === 'auto' ? ' If it splits wrong, try a grid.' : ''}`);
     }
-    el.querySelector('[data-cut="ok"]').textContent = sheet ? `나누기 (${use}장)` : '자르기';
+    el.querySelector('[data-cut="ok"]').textContent = sheet ? `${LX('나누기 (', 'Split (')}${use}${LX('장)', ')')}` : LX('자르기', 'Crop');
 }
 
 function cutPoint(c, e) {
@@ -6548,7 +6578,7 @@ async function onFilePicked(input) {
     if (!f) return;
     f.file = input.files?.[0] || null;
     f.cut = null;                                        // a new picture starts uncut
-    win.body.querySelector('.tw-filename').textContent = f.file ? f.file.name : '아직 안 골랐어요';
+    win.body.querySelector('.tw-filename').textContent = f.file ? f.file.name : LX('아직 안 골랐어요', 'Nothing chosen yet');
     return redoUploadPreview();
 }
 
@@ -6560,7 +6590,7 @@ function cancelUpload() {
     const box = win.body;
     const input = box.querySelector('[data-f="file"]');
     if (input) input.value = '';
-    box.querySelector('.tw-filename').textContent = '아직 안 골랐어요';
+    box.querySelector('.tw-filename').textContent = LX('아직 안 골랐어요', 'Nothing chosen yet');
     box.querySelector('.tw-prevrow').hidden = true;
     const note = box.querySelector('.tw-cutnote');
     if (note) note.textContent = '';
@@ -6583,7 +6613,7 @@ async function redoUploadPreview() {
     if (!f.file) { row.hidden = true; return; }
     const file = f.file, cut = f.cut;
     const note = box.querySelector('.tw-cutnote');
-    if (note) note.textContent = cut ? '직접 자른 부분만 써요' : '';
+    if (note) note.textContent = cut ? LX('직접 자른 부분만 써요', 'Only the part you cropped is used') : '';
     try {
         const out = await preparePng(file, box.querySelector('[data-f="crop"]').checked, bgTolOf(''), cut);
         if (win.form !== f || f.file !== file || f.cut !== cut) return;
@@ -6591,16 +6621,16 @@ async function redoUploadPreview() {
         box.querySelector('.tw-prev').src = out.dataUrl;
         row.hidden = false;
     } catch {
-        if (win.form === f && f.file === file) { say('그림을 읽지 못했어요. 다른 그림(PNG·JPG)을 골라 주세요.'); row.hidden = true; }
+        if (win.form === f && f.file === file) { say(LX('그림을 읽지 못했어요. 다른 그림(PNG·JPG)을 골라 주세요.', 'Couldn’t read the picture. Choose another one (PNG · JPG).')); row.hidden = true; }
     }
 }
 
 /** Upload the chosen picture and keep it in the look library. Returns the new look. */
 async function uploadLook(name, facing, squish) {
     const f = win.form;
-    if (!f.file) throw new Error('그림을 골라 주세요.');
-    if (f.file.size > 8 * 1024 * 1024) throw new Error('그림이 너무 커요 (8MB 이하).');
-    say('그림 올리는 중…');
+    if (!f.file) throw new Error(LX('그림을 골라 주세요.', 'Choose a picture.'));
+    if (f.file.size > 8 * 1024 * 1024) throw new Error(LX('그림이 너무 커요 (8MB 이하).', 'The picture is too big (8 MB max).'));
+    say(LX('그림 올리는 중…', 'Uploading picture…'));
     const img = f.prep || await preparePng(f.file, win.body.querySelector('[data-f="crop"]').checked, bgTolOf(''), f.cut);
     const id = 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const path = await uploadFile(`tavvy_look_${id}.png`, img.base64);
@@ -6623,14 +6653,14 @@ let busy = false;
 async function saveEdit() {
     if (busy || win.form?.kind !== 'edit') return;
     if (readOnly) return say(readOnlyReason);
-    if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 눌러 주세요.');
+    if (!ready) return say(LX('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 눌러 주세요.', 'SillyTavern is still getting ready. Try again in a moment.'));
     const p = root.pets.find(x => x.id === win.form.id);
     if (!p) return;
     const v = formValues();
-    if (!v.name) return say('이름을 적어 주세요.');
-    if (!formDirty()) return say('바뀐 게 없어요.');
+    if (!v.name) return say(LX('이름을 적어 주세요.', 'Enter a name.'));
+    if (!formDirty()) return say(LX('바뀐 게 없어요.', 'Nothing changed.'));
     const f = win.form;
-    if (f.look === 'upload' && !f.file) return say('올릴 PNG 그림을 골라 주세요.');
+    if (f.look === 'upload' && !f.file) return say(LX('올릴 PNG 그림을 골라 주세요.', 'Choose a PNG picture to upload.'));
     busy = true;
     let added = null;
     try {
@@ -6655,12 +6685,12 @@ async function saveEdit() {
         for (const a of actors) if (a.rec === p) { a.p = PERSONALITIES[v.pers]; if (look) a.reloadLook(); }
         refreshBed();
         renderPanel();
-        if (win.view === 'pet' && win.id === p.id) { fillEdit(p); win.body.querySelector('.tw-filename').textContent = '아직 안 골랐어요'; win.body.querySelector('.tw-prevrow').hidden = true; }
-        say(ok ? '저장했어요.' : '바꿨지만 저장이 늦어지고 있어요. 잠시 뒤 다시 저장돼요.');
+        if (win.view === 'pet' && win.id === p.id) { fillEdit(p); win.body.querySelector('.tw-filename').textContent = LX('아직 안 골랐어요', 'Nothing chosen yet'); win.body.querySelector('.tw-prevrow').hidden = true; }
+        say(ok ? LX('저장했어요.', 'Saved.') : LX('바꿨지만 저장이 늦어지고 있어요. 잠시 뒤 다시 저장돼요.', 'Changed, but saving is slow. It’ll save again shortly.'));
     } catch (e) {
         console.error('[Tavvy] edit failed', e);
         if (added) { root.looks = root.looks.filter(l => l !== added); lookFiles(added).forEach(deleteFile); }
-        say('저장하지 못했어요: ' + (e.message || e));
+        say(LX('저장하지 못했어요: ', 'Couldn’t save: ') + (e.message || e));
     } finally {
         busy = false;
     }
@@ -6669,13 +6699,13 @@ async function saveEdit() {
 async function createPet() {
     if (busy || win.form?.kind !== 'new') return;
     if (readOnly) return say(readOnlyReason);
-    if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 눌러 주세요.');
-    if (!room) return say('먼저 펫이 살 채팅방을 열어 주세요.');
+    if (!ready) return say(LX('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 눌러 주세요.', 'SillyTavern is still getting ready. Try again in a moment.'));
+    if (!room) return say(LX('먼저 펫이 살 채팅방을 열어 주세요.', 'First open the chat where the pet will live.'));
     const f = win.form;
-    if (!f.look) return say('외형을 골라 주세요.');
+    if (!f.look) return say(LX('외형을 골라 주세요.', 'Choose a look.'));
     const v = formValues();
-    if (!v.name) return say('이름을 적어 주세요.');
-    if (f.look === 'upload' && !f.file) return say('올릴 PNG 그림을 골라 주세요.');
+    if (!v.name) return say(LX('이름을 적어 주세요.', 'Enter a name.'));
+    if (f.look === 'upload' && !f.file) return say(LX('올릴 PNG 그림을 골라 주세요.', 'Choose a PNG picture to upload.'));
     busy = true;
     let added = null;
     try {
@@ -6685,7 +6715,7 @@ async function createPet() {
             look = { kind: 'single', facing: v.facing, roles: structuredClone(added.roles), roleOpts: {}, baseline: 0, size: { ...DEFAULT_SIZE }, squish: v.squish };
         } else {
             look = lookById(f.look)?.make();
-            if (!look) return say('외형을 다시 골라 주세요.');
+            if (!look) return say(LX('외형을 다시 골라 주세요.', 'Choose a look again.'));
         }
         const rec = newPetRecord({ id: newId(), name: v.name, personality: v.pers, look });
         rec.home = homeOf(room);
@@ -6702,11 +6732,11 @@ async function createPet() {
         renderPanel();
         win.form = null;
         show('pet', { id: rec.id });
-        say(ok ? `${josa(v.name, '이', '가')} 이 방에 왔어요! 🛏️ 버튼을 눌러 깨워 보세요.` : '만들었지만 저장이 늦어지고 있어요. 잠시 뒤 다시 저장돼요.');
+        say(ok ? LX(`${josa(v.name, '이', '가')} 이 방에 왔어요! 🛏️ 버튼을 눌러 깨워 보세요.`, `${v.name} is here! Press the 🛏️ button to wake it.`) : LX('만들었지만 저장이 늦어지고 있어요. 잠시 뒤 다시 저장돼요.', 'Created, but saving is slow. It’ll save again shortly.'));
     } catch (e) {
         console.error('[Tavvy] create failed', e);
         if (added) lookFiles(added).forEach(deleteFile);
-        say('펫을 만들지 못했어요: ' + (e.message || e));
+        say(LX('펫을 만들지 못했어요: ', 'Couldn’t create the pet: ') + (e.message || e));
     } finally {
         busy = false;
     }
@@ -6717,7 +6747,7 @@ async function deletePet(id) {
     const i = root.pets.findIndex(p => p.id === id);
     if (i < 0) return;
     const pet = root.pets[i];
-    if (!(await confirmBox(`${josa(pet.name, '과', '와')} 작별할까요? 함께한 기록도 모두 사라져요. 되돌릴 수 없어요.`))) return;
+    if (!(await confirmBox(LX(`${josa(pet.name, '과', '와')} 작별할까요? 함께한 기록도 모두 사라져요. 되돌릴 수 없어요.`, `Say goodbye to ${pet.name}? All its records will be gone. This can’t be undone.`)))) return;
     for (const a of [...actors]) if (a.rec === pet) { a.onGone = null; a.vanish(); }
     root.pets.splice(i, 1);
     for (const k of Object.keys(root.duets || {})) if (k.split('+').includes(pet.id)) delete root.duets[k];   // 0.10.8: its talks with others
@@ -6737,9 +6767,9 @@ async function deleteLook(id) {
     const users = lookUsers(l);
     if (users.length) {
         const n = users.map(p => p.name).join(', ');
-        return say(`${n}${josa(users[users.length - 1].name, '이', '가').slice(users[users.length - 1].name.length)} 입고 있어서 지울 수 없어요. 그 펫의 외형을 바꾸거나 작별하면 지울 수 있어요.`);
+        return say(LX(`${n}${josa(users[users.length - 1].name, '이', '가').slice(users[users.length - 1].name.length)} 입고 있어서 지울 수 없어요. 그 펫의 외형을 바꾸거나 작별하면 지울 수 있어요.`, `${n} is using it, so it can’t be deleted. Change that pet’s look or say goodbye first.`));
     }
-    if (!(await confirmBox(`"${l.name}" 외형을 지울까요? 그림 파일도 함께 지워져요.`))) return;
+    if (!(await confirmBox(LX(`"${l.name}" 외형을 지울까요? 그림 파일도 함께 지워져요.`, `Delete the look "${l.name}"? Its picture files will be deleted too.`)))) return;
     root.looks = root.looks.filter(x => x !== l);
     // 0.10.4: the screen changes right away; saving to SillyTavern (can take seconds on a phone) carries on behind it
     if (win?.form && win.form.look === 'lib:' + l.id) {   // it was picked in an open form
@@ -6747,7 +6777,7 @@ async function deleteLook(id) {
     }
     if (win?.form) drawLookGrid();
     refreshWin();
-    say('외형을 지웠어요.');
+    say(LX('외형을 지웠어요.', 'Look deleted.'));
     saveNow().then((ok) => {   // picture files go only once the record is safely saved
         if (ok) { for (const f of lookFiles(l)) { if (!fileInUse(f)) deleteFile(f); } }
         else saveSoon();
@@ -6770,10 +6800,10 @@ function renameLook(id, v) {
 function moveHtml(p) {
     if (!p || !room || readOnly || checkHome(p, room).here) return '';
     return `<div class="tw-movebox">
-  <div class="tw-sub">${p.home ? '다른 방에 사는 펫이에요.' : '집이 없는 펫이에요.'}</div>
-  <div class="tw-row"><div class="tw-btn tw-btn-main" data-act="movehere"><i class="fa-solid fa-house"></i> 이 방으로 데려오기</div>
-  <div class="tw-btn" data-act="clonehere"><i class="fa-solid fa-clone"></i> 이 방에 복제</div></div>
-  <label class="tw-check"><input type="checkbox" data-f="clonerec"> 복제할 때 기록·친밀도도 함께 복사</label>
+  <div class="tw-sub">${p.home ? LX('다른 방에 사는 펫이에요.', 'This pet lives in another room.') : LX('집이 없는 펫이에요.', 'This pet has no home.')}</div>
+  <div class="tw-row"><div class="tw-btn tw-btn-main" data-act="movehere"><i class="fa-solid fa-house"></i> ${LX('이 방으로 데려오기', 'Bring to this room')}</div>
+  <div class="tw-btn" data-act="clonehere"><i class="fa-solid fa-clone"></i> ${LX('이 방에 복제', 'Copy into this room')}</div></div>
+  <label class="tw-check"><input type="checkbox" data-f="clonerec"> ${LX('복제할 때 기록·친밀도도 함께 복사', 'Copy records and closeness too')}</label>
 </div>`;
 }
 
@@ -6781,9 +6811,9 @@ async function movePetHere(id) {
     if (readOnly) return say(readOnlyReason);
     if (busy) return;
     const p = root.pets.find(x => x.id === id);
-    if (!p || !room) return say('먼저 데려올 채팅방을 열어 주세요.');
+    if (!p || !room) return say(LX('먼저 데려올 채팅방을 열어 주세요.', 'First open the chat to bring it to.'));
     if (checkHome(p, room).here) return;
-    if (!(await confirmBox(`${josa(p.name, '을', '를')} 이 방으로 데려올까요? 원래 방에서는 사라져요. 기록과 친밀도는 그대로예요.`))) return;
+    if (!(await confirmBox(LX(`${josa(p.name, '을', '를')} 이 방으로 데려올까요? 원래 방에서는 사라져요. 기록과 친밀도는 그대로예요.`, `Bring ${p.name} to this room? It leaves its old room. Records and closeness stay.`)))) return;
     const before = p.home;
     p.home = homeOf(room);
     prevVisit.set(p.id, p.lastVisit);
@@ -6793,7 +6823,7 @@ async function movePetHere(id) {
     if (!ok) saveSoon();
     refreshBed();
     renderPanel();
-    say(`${josa(p.name, '이', '가')} 이 방으로 왔어요! 🛏️ 버튼을 눌러 깨워 보세요.`);
+    say(LX(`${josa(p.name, '이', '가')} 이 방으로 왔어요! 🛏️ 버튼을 눌러 깨워 보세요.`, `${p.name} moved here! Press the 🛏️ button to wake it.`));
 }
 
 /** The parts of a pet that make it "that pet" (look, personality, lines, special days). */
@@ -6820,9 +6850,9 @@ async function clonePetHere(id, withRecords) {
     if (readOnly) return say(readOnlyReason);
     if (busy) return;
     const p = root.pets.find(x => x.id === id);
-    if (!p || !room) return say('먼저 복제할 채팅방을 열어 주세요.');
-    const what = withRecords ? '기록·친밀도까지 똑같이' : '기록은 처음부터 새로';
-    if (!(await confirmBox(`${josa(p.name, '을', '를')} 이 방에 한 마리 더 만들까요? (${what}) 원래 펫은 그대로 있어요.`))) return;
+    if (!p || !room) return say(LX('먼저 복제할 채팅방을 열어 주세요.', 'First open the chat to copy it into.'));
+    const what = withRecords ? LX('기록·친밀도까지 똑같이', 'with the same records and closeness') : LX('기록은 처음부터 새로', 'with fresh records');
+    if (!(await confirmBox(LX(`${josa(p.name, '을', '를')} 이 방에 한 마리 더 만들까요? (${what}) 원래 펫은 그대로 있어요.`, `Make another ${p.name} in this room (${what})? The original stays where it is.`)))) return;
     let rec;
     if (withRecords) {
         rec = structuredClone(p);
@@ -6844,7 +6874,7 @@ async function clonePetHere(id, withRecords) {
     refreshBed();
     renderPanel();
     show('pet', { id: rec.id });
-    say(`이 방에도 ${josa(rec.name, '이', '가')} 생겼어요! 🛏️ 버튼을 눌러 깨워 보세요.`);
+    say(LX(`이 방에도 ${josa(rec.name, '이', '가')} 생겼어요! 🛏️ 버튼을 눌러 깨워 보세요.`, `Now there’s a ${rec.name} here too! Press the 🛏️ button to wake it.`));
 }
 
 /* --- files --- */
@@ -6860,7 +6890,7 @@ function blobToDataUrl(blob) {
 
 async function fileToDataUrl(path) {
     const res = await fetch(imgUrl(path), { cache: 'no-store' });
-    if (!res.ok) throw new Error('그림을 읽지 못했어요 (' + res.status + ')');
+    if (!res.ok) throw new Error(LX('그림을 읽지 못했어요 (', 'Couldn’t read the picture (') + res.status + ')');
     return blobToDataUrl(await res.blob());
 }
 
@@ -6900,7 +6930,7 @@ async function exportPetFile(id) {
     if (!p || busy) return;
     busy = true;
     try {
-        say('펫 파일 만드는 중…');
+        say(LX('펫 파일 만드는 중…', 'Making pet file…'));
         const { roles, files } = await packRoles(p.look?.roles, false);
         const pet = structuredClone(p);
         delete pet.home;                      // which room it lives in stays here (room names can hold names and dates)
@@ -6921,10 +6951,10 @@ async function exportPetFile(id) {
         }
         const data = { [PET_FILE]: 1, formatVersion: FORMAT_VERSION, pet, files };
         download(`tavvy_${safeName(p.name)}.json`, new Blob([JSON.stringify(data)], { type: 'application/json' }));
-        say('펫 파일을 내려받았어요.');
+        say(LX('펫 파일을 내려받았어요.', 'Pet file downloaded.'));
     } catch (e) {
         console.error('[Tavvy] export failed', e);
-        say('펫 파일을 만들지 못했어요: ' + (e.message || e));
+        say(LX('펫 파일을 만들지 못했어요: ', 'Couldn’t make the pet file: ') + (e.message || e));
     } finally {
         busy = false;
     }
@@ -6973,7 +7003,7 @@ function addTextChunk(png, key, text) {
     chunk.set(typed, 4);
     dv.setUint32(8 + body.length, crc32(typed));
     const iend = pngChunks(png).find(c => c.type === 'IEND');
-    if (!iend) throw new Error('PNG 모양이 이상해요');
+    if (!iend) throw new Error(LX('PNG 모양이 이상해요', 'The PNG looks wrong'));
     const out = new Uint8Array(png.length + chunk.length);
     out.set(png.subarray(0, iend.start));
     out.set(chunk, iend.start);
@@ -7003,7 +7033,7 @@ async function exportPetCard(id) {
     if (!p || busy) return;
     busy = true;
     try {
-        say('PNG 카드 만드는 중…');
+        say(LX('PNG 카드 만드는 중…', 'Making PNG card…'));
         const { roles, files } = await packRoles(p.look?.roles, true);
         const look = { ...lookShape(p.look || {}), roles };
         delete look.size;                     // size is the person's own screen choice
@@ -7016,13 +7046,13 @@ async function exportPetCard(id) {
         cv.height = Math.max(1, Math.round((img.naturalHeight || 1) * k));
         cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
         const blob = await new Promise((ok) => cv.toBlob(ok, 'image/png'));
-        if (!blob) throw new Error('그림을 만들지 못했어요');
+        if (!blob) throw new Error(LX('그림을 만들지 못했어요', 'Couldn’t make the picture'));
         const png = addTextChunk(new Uint8Array(await blob.arrayBuffer()), CARD_KEY, text);
         download(`tavvy_${safeName(p.name)}_card.png`, new Blob([png], { type: 'image/png' }));
-        say('PNG 카드를 내려받았어요.');
+        say(LX('PNG 카드를 내려받았어요.', 'PNG card downloaded.'));
     } catch (e) {
         console.error('[Tavvy] card failed', e);
-        say('PNG 카드를 만들지 못했어요: ' + (e.message || e));
+        say(LX('PNG 카드를 만들지 못했어요: ', 'Couldn’t make the PNG card: ') + (e.message || e));
     } finally {
         busy = false;
     }
@@ -7035,7 +7065,7 @@ const num = (v, d = 0) => (typeof v === 'number' && Number.isFinite(v) && v >= 0
 
 /** Upload packed pictures and rebuild the picture lists. Returns { roles, uploaded } — or throws. */
 async function unpackRoles(roles, files, tag) {
-    if (!isObj(roles) || !Array.isArray(files)) throw new Error('그림 정보가 없어요');
+    if (!isObj(roles) || !Array.isArray(files)) throw new Error(LX('그림 정보가 없어요', 'No picture data'));
     const uploaded = [], paths = new Map(), out = {};
     try {
         for (const [k, list] of Object.entries(roles)) {
@@ -7062,7 +7092,7 @@ async function unpackRoles(roles, files, tag) {
         uploaded.forEach(deleteFile);
         throw e;
     }
-    if (!out.idle?.length) { uploaded.forEach(deleteFile); throw new Error('기본 그림이 없어요'); }
+    if (!out.idle?.length) { uploaded.forEach(deleteFile); throw new Error(LX('기본 그림이 없어요', 'No basic picture')); }
     return { roles: out, uploaded };
 }
 
@@ -7083,7 +7113,7 @@ const strList = (v, max) => (Array.isArray(v) ? v.filter(x => typeof x === 'stri
 
 /** A pet from a pet file, checked field by field. */
 function cleanPet(src, look) {
-    const rec = newPetRecord({ id: newId(), name: String(src.name || '').trim().slice(0, 20) || '펫', personality: PERSONALITIES[src.personality?.base] ? src.personality.base : 'aegyo', look });
+    const rec = newPetRecord({ id: newId(), name: String(src.name || '').trim().slice(0, 20) || LX('펫', 'Pets'), personality: PERSONALITIES[src.personality?.base] ? src.personality.base : 'aegyo', look });
     if (Array.isArray(src.personality?.traits)) rec.personality.traits = src.personality.traits.filter(x => typeof x === 'string').slice(0, 10);
     if (isObj(src.lines)) for (const [k, v] of Object.entries(src.lines)) if (/^[a-zA-Z]{1,20}$/.test(k)) { const l = strList(v, 30); if (l.length) rec.lines[k] = l; }
     if (TALK_FREQ[src.talkFreq]) rec.talkFreq = src.talkFreq;
@@ -7128,23 +7158,23 @@ async function importPicked(input) {
     if (!file) return;
     if (readOnly) return say(readOnlyReason);
     if (busy) return;
-    if (file.size > IMPORT_MAX) return say('파일이 너무 커요 (40MB 이하).');
+    if (file.size > IMPORT_MAX) return say(LX('파일이 너무 커요 (40MB 이하).', 'The file is too big (40 MB max).'));
     busy = true;
     try {
         const bytes = new Uint8Array(await file.arrayBuffer());
         if (isPng(bytes)) {
             const text = readTextChunk(bytes, CARD_KEY);
-            if (!text) return say('이 그림에는 Tavvy 카드 정보가 없어요. 메신저 등을 거치며 지워졌을 수 있어요. 그냥 그림으로 쓰려면 "새 펫 만들기"에서 올려 주세요.');
+            if (!text) return say(LX('이 그림에는 Tavvy 카드 정보가 없어요. 메신저 등을 거치며 지워졌을 수 있어요. 그냥 그림으로 쓰려면 "새 펫 만들기"에서 올려 주세요.', 'This image has no Tavvy card data. A messenger may have stripped it. To use it as a plain picture, upload it from "New pet".'));
             let data;
-            try { data = JSON.parse(b64ToUtf8(text)); } catch { return say('카드 정보를 읽지 못했어요.'); }
+            try { data = JSON.parse(b64ToUtf8(text)); } catch { return say(LX('카드 정보를 읽지 못했어요.', 'Couldn’t read the card data.')); }
             return await importCard(data);
         }
         let data;
-        try { data = JSON.parse(new TextDecoder().decode(bytes)); } catch { return say('Tavvy 펫 파일이 아니에요.'); }
+        try { data = JSON.parse(new TextDecoder().decode(bytes)); } catch { return say(LX('Tavvy 펫 파일이 아니에요.', 'Not a Tavvy pet file.')); }
         return await importPetFile(data);
     } catch (e) {
         console.error('[Tavvy] import failed', e);
-        say('불러오지 못했어요: ' + (e.message || e));
+        say(LX('불러오지 못했어요: ', 'Couldn’t import: ') + (e.message || e));
     } finally {
         busy = false;
     }
@@ -7183,10 +7213,10 @@ async function unpackSounds(src, files, uploaded, petId) {
 }
 
 async function importPetFile(data) {
-    if (!isObj(data) || data[PET_FILE] !== 1 || !isObj(data.pet) || !isObj(data.pet.look)) return say('Tavvy 펫 파일이 아니에요.');
-    if (typeof data.formatVersion !== 'number' || data.formatVersion > FORMAT_VERSION) return say('더 새로운 버전의 Tavvy가 만든 파일이에요. 확장을 업데이트해 주세요.');
-    if (!room) return say('먼저 펫이 살 채팅방을 열어 주세요.');
-    say('불러오는 중…');
+    if (!isObj(data) || data[PET_FILE] !== 1 || !isObj(data.pet) || !isObj(data.pet.look)) return say(LX('Tavvy 펫 파일이 아니에요.', 'Not a Tavvy pet file.'));
+    if (typeof data.formatVersion !== 'number' || data.formatVersion > FORMAT_VERSION) return say(LX('더 새로운 버전의 Tavvy가 만든 파일이에요. 확장을 업데이트해 주세요.', 'This file was made by a newer Tavvy. Please update the extension.'));
+    if (!room) return say(LX('먼저 펫이 살 채팅방을 열어 주세요.', 'First open the chat where the pet will live.'));
+    say(LX('불러오는 중…', 'Importing…'));
     const id = newId();
     const { roles, uploaded } = await unpackRoles(data.pet.look.roles, data.files, 'pet_' + id);
     const rec = cleanPet(data.pet, cleanLook(data.pet.look, roles));
@@ -7213,18 +7243,18 @@ async function importPetFile(data) {
     refreshBed();
     renderPanel();
     show('pet', { id: rec.id });
-    say(`${josa(rec.name, '이', '가')} 이 방에 왔어요! 🛏️ 버튼을 눌러 깨워 보세요.`);
+    say(LX(`${josa(rec.name, '이', '가')} 이 방에 왔어요! 🛏️ 버튼을 눌러 깨워 보세요.`, `${rec.name} is here! Press the 🛏️ button to wake it.`));
 }
 
 /** A card only has a look: it goes into "내가 올린 외형", then a new pet can wear it. */
 async function importCard(data) {
-    if (!isObj(data) || data[CARD_KEY] !== 1 || !isObj(data.look)) return say('Tavvy 카드가 아니에요.');
-    if (typeof data.formatVersion !== 'number' || data.formatVersion > FORMAT_VERSION) return say('더 새로운 버전의 Tavvy가 만든 카드예요. 확장을 업데이트해 주세요.');
-    say('불러오는 중…');
+    if (!isObj(data) || data[CARD_KEY] !== 1 || !isObj(data.look)) return say(LX('Tavvy 카드가 아니에요.', 'Not a Tavvy card.'));
+    if (typeof data.formatVersion !== 'number' || data.formatVersion > FORMAT_VERSION) return say(LX('더 새로운 버전의 Tavvy가 만든 카드예요. 확장을 업데이트해 주세요.', 'This card was made by a newer Tavvy. Please update the extension.'));
+    say(LX('불러오는 중…', 'Importing…'));
     const id = 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const { roles, uploaded } = await unpackRoles(data.look.roles, data.files, 'look_' + id);
     const l = cleanLook(data.look, roles);
-    const look = { id, name: '받은 외형', kind: l.kind, facing: l.facing, squish: l.squish, roles: l.roles, roleOpts: l.roleOpts, baseline: l.baseline, createdAt: Date.now() };
+    const look = { id, name: LX('받은 외형', 'Imported look'), kind: l.kind, facing: l.facing, squish: l.squish, roles: l.roles, roleOpts: l.roleOpts, baseline: l.baseline, createdAt: Date.now() };
     root.looks.push(look);
     const ok = await saveNow();
     if (!ok && readOnly) { root.looks.pop(); uploaded.forEach(deleteFile); return say(readOnlyReason); }
@@ -7233,7 +7263,7 @@ async function importCard(data) {
     pickLook('lib:' + id);
     const nameEl = win.body.querySelector('[data-f="name"]');
     if (nameEl) { nameEl.value = ''; win.form.autoName = ''; }
-    say('카드 외형을 "내가 올린 외형"에 넣었어요. 이름과 성격을 정하고 만들기를 눌러 주세요.');
+    say(LX('카드 외형을 "내가 올린 외형"에 넣었어요. 이름과 성격을 정하고 만들기를 눌러 주세요.', 'Added the card’s look to "My uploaded looks". Choose a name and personality, then press Create.'));
 }
 
 function setSetting(key, value) {
@@ -7270,7 +7300,7 @@ function onWinClick(e) {
     if (act === 'bedreset') {
         root.settings.bedPos = { phone: null, pc: null };
         saveSoon(); placeBed();
-        return say('깨우기 버튼을 처음 자리로 옮겼어요.');
+        return say(LX('깨우기 버튼을 처음 자리로 옮겼어요.', 'Moved the wake button back to its starting spot.'));
     }
     if (act === 'bedfind') return findBed();
     if (act === 'restore') return restoreBackup(win.body.querySelector('[data-live="backups"]').value);
@@ -7402,6 +7432,7 @@ function onWinInput(e) {
         if (s === 'stageMode') return setSetting(s, t.value === 'floor' ? 'floor' : 'chat');
         if (s === 'heartMode') return setSetting(s, ['both', 'hearts', 'name', 'hide'].includes(t.value) ? t.value : 'both');
         if (s === 'talkProfile') return setSetting(s, String(t.value || ''));
+        if (s === 'lang') return setSetting(s, ['ko', 'en'].includes(t.value) ? t.value : 'auto');
         if (s === 'soundVol') { setSetting(s, clamp(Math.round(Number(t.value) || 0), 0, 100)); fillSettings(); return playSound(root.settings.soundOn || !root.settings.replyOn ? 'heart' : 'reply', 1, true); }
         setSetting(s, t.checked);
         if (s === 'soundOn' || s === 'replyOn') { fillSettings(); if (t.checked) { sndTouched = true; playSound(s === 'soundOn' ? 'heart' : 'reply', 1, true); } }
@@ -7416,31 +7447,31 @@ function giftsHtml(p) {
     const list = p.gifts || [];
     const pend = win.giftPend?.pet === p ? win.giftPend : null;
     const cards = list.map(g => `<div class="tw-gift">
-  <div class="tw-giftpicbox"><img class="tw-giftpic tw-checker" src="${esc(imgUrl(g.src))}" alt=""><span class="tw-giftfav${g.fav ? ' tw-fon' : ''}" data-gfav="${esc(g.id)}" title="${g.fav ? '가장 좋아하는 선물 (다시 누르면 풀어요)' : '가장 좋아하는 선물로'}"><i class="fa-${g.fav ? 'solid' : 'regular'} fa-heart"></i></span></div>
-  <input class="tw-giftname" data-gname="${esc(g.id)}" maxlength="20" value="${esc(g.name || '')}" placeholder="이름 없음">
-  <textarea class="tw-giftmemo" data-gmemo="${esc(g.id)}" maxlength="${GIFT_MEMO}" rows="2" placeholder="메모">${esc(g.memo || '')}</textarea>
+  <div class="tw-giftpicbox"><img class="tw-giftpic tw-checker" src="${esc(imgUrl(g.src))}" alt=""><span class="tw-giftfav${g.fav ? ' tw-fon' : ''}" data-gfav="${esc(g.id)}" title="${g.fav ? LX('가장 좋아하는 선물 (다시 누르면 풀어요)', 'Favorite present (press again to unset)') : LX('가장 좋아하는 선물로', 'Make favorite')}"><i class="fa-${g.fav ? 'solid' : 'regular'} fa-heart"></i></span></div>
+  <input class="tw-giftname" data-gname="${esc(g.id)}" maxlength="20" value="${esc(g.name || '')}" placeholder="${LX('이름 없음', 'No name')}">
+  <textarea class="tw-giftmemo" data-gmemo="${esc(g.id)}" maxlength="${GIFT_MEMO}" rows="2" placeholder="${LX('메모', 'Notes')}">${esc(g.memo || '')}</textarea>
   <span class="tw-fseg tw-giftsize">${GIFT_SIZES.map(([k, n]) => `<span class="tw-fbtn${(g.size || 'm') === k ? ' tw-fon' : ''}" data-gsize="${esc(g.id)}" data-gv="${k}">${n}</span>`).join('')}</span>
-  <div class="tw-giftbtns"><div class="tw-btn tw-btn-small" data-gshow="${esc(g.id)}">꺼내 보기</div><div class="tw-btn tw-btn-small" data-gdel="${esc(g.id)}">빼기</div><div class="tw-btn tw-btn-small" data-gedit="${esc(g.id)}">그림 고치기</div></div>
-  ${g.fresh ? '<span class="tw-sub">아직 안 받았어요</span>' : ''}
+  <div class="tw-giftbtns"><div class="tw-btn tw-btn-small" data-gshow="${esc(g.id)}">${LX('꺼내 보기', 'Take it out')}</div><div class="tw-btn tw-btn-small" data-gdel="${esc(g.id)}">${LX('빼기', 'Remove')}</div><div class="tw-btn tw-btn-small" data-gedit="${esc(g.id)}">${LX('그림 고치기', 'Edit picture')}</div></div>
+  ${g.fresh ? LX('<span class="tw-sub">아직 안 받았어요</span>', '<span class="tw-sub">Not received yet</span>') : ''}
 </div>`).join('');
     const add = list.length < GIFT_MAX && !pend
-        ? '<div class="tw-gift tw-giftadd" data-act="giftpick"><i class="fa-solid fa-plus"></i><span>선물 주기</span><span class="tw-sub">그림 고르기</span></div>' : '';
+        ? LX('<div class="tw-gift tw-giftadd" data-act="giftpick"><i class="fa-solid fa-plus"></i><span>선물 주기</span><span class="tw-sub">그림 고르기</span></div>', '<div class="tw-gift tw-giftadd" data-act="giftpick"><i class="fa-solid fa-plus"></i><span>Give a present</span><span class="tw-sub">Choose picture</span></div>') : '';
     const pendHtml = !pend ? '' : `<div class="tw-giftpend">
-  ${pend.editId ? `<div class="tw-cap">그림 고치기</div><div class="tw-sub">이름·크기·받은 기록은 그대로예요. 한 번 지운 배경이나 잘라 낸 부분은 되살릴 수 없어서, 그럴 땐 "다른 그림으로"로 원래 그림을 다시 넣어 주세요.</div>` : ''}
-  <div class="tw-row">${pend.prep ? `<img class="tw-prev tw-checker" src="${pend.prep.dataUrl}" alt="">` : '<span class="tw-sub">그림 준비 중…</span>'}<div>
-    <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="giftcut"><i class="fa-solid fa-crop-simple"></i> 직접 자르기</div><span class="tw-sub">${pend.cut ? '직접 자른 부분만 써요' : ''}</span></div>
-    <label class="tw-check"><input type="checkbox" data-f="giftcrop"${pend.crop ? ' checked' : ''}> 투명 여백 자르기</label>
-    <label class="tw-check"><input type="checkbox" data-f="giftbg"${pend.bg ? ' checked' : ''}> 배경 지우기 <span class="tw-sub">(하얀색 같은 단색 배경)</span></label>
-    <div class="tw-bgrow"${pend.bg ? '' : ' hidden'}><span class="tw-sub">조금</span><input type="range" min="6" max="80" step="2" value="${pend.tol}" data-f="giftbgtol"><span class="tw-sub">많이</span></div>
+  ${pend.editId ? `<div class="tw-cap">${LX('그림 고치기', 'Edit picture')}</div><div class="tw-sub">${LX('이름·크기·받은 기록은 그대로예요. 한 번 지운 배경이나 잘라 낸 부분은 되살릴 수 없어서, 그럴 땐', 'Name, size and history stay. A removed background or cropped-off part can’t be restored, so in that case use')} "${LX('다른 그림으로', 'Another picture')}"${LX('로 원래 그림을 다시 넣어 주세요.', ' to put the original picture back.')}</div>` : ''}
+  <div class="tw-row">${pend.prep ? `<img class="tw-prev tw-checker" src="${pend.prep.dataUrl}" alt="">` : LX('<span class="tw-sub">그림 준비 중…</span>', '<span class="tw-sub">Preparing picture…</span>')}<div>
+    <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="giftcut"><i class="fa-solid fa-crop-simple"></i> ${LX('직접 자르기', 'Crop by hand')}</div><span class="tw-sub">${pend.cut ? LX('직접 자른 부분만 써요', 'Only the part you cropped is used') : ''}</span></div>
+    <label class="tw-check"><input type="checkbox" data-f="giftcrop"${pend.crop ? ' checked' : ''}> ${LX('투명 여백 자르기', 'Trim transparent edges')}</label>
+    <label class="tw-check"><input type="checkbox" data-f="giftbg"${pend.bg ? ' checked' : ''}> ${LX('배경 지우기', 'Remove background')} <span class="tw-sub">${LX('(하얀색 같은 단색 배경)', '(a plain one-color background, like white)')}</span></label>
+    <div class="tw-bgrow"${pend.bg ? '' : ' hidden'}><span class="tw-sub">${LX('조금', 'Less')}</span><input type="range" min="6" max="80" step="2" value="${pend.tol}" data-f="giftbgtol"><span class="tw-sub">${LX('많이', 'More')}</span></div>
   </div></div>
-  <label class="tw-label">이름 <span class="tw-sub">(안 적어도 돼요)</span> <input data-f="giftname" maxlength="20" value="${esc(pend.name || '')}"></label>
+  <label class="tw-label">${LX('이름', 'Name')} <span class="tw-sub">${LX('(안 적어도 돼요)', '(optional)')}</span> <input data-f="giftname" maxlength="20" value="${esc(pend.name || '')}"></label>
   <div class="tw-row">${pend.editId
-      ? '<div class="tw-btn tw-btn-main" data-act="giftok">바꾸기</div><div class="tw-btn" data-act="giftswap">다른 그림으로</div>'
-      : '<div class="tw-btn tw-btn-main" data-act="giftnow">바로 주기</div><div class="tw-btn" data-act="giftok">모아 두기</div>'}<div class="tw-btn" data-act="giftno">취소</div></div>
-  ${pend.editId ? '' : '<div class="tw-sub">바로 주기: 창을 닫고 안 받은 선물을 한꺼번에 건네요 · 모아 두기: 넣어만 두고 다음 그림을 골라요</div>'}
+      ? LX('<div class="tw-btn tw-btn-main" data-act="giftok">바꾸기</div><div class="tw-btn" data-act="giftswap">다른 그림으로</div>', '<div class="tw-btn tw-btn-main" data-act="giftok">Replace</div><div class="tw-btn" data-act="giftswap">Another picture</div>')
+      : LX('<div class="tw-btn tw-btn-main" data-act="giftnow">바로 주기</div><div class="tw-btn" data-act="giftok">모아 두기</div>', '<div class="tw-btn tw-btn-main" data-act="giftnow">Give now</div><div class="tw-btn" data-act="giftok">Save for later</div>')}<div class="tw-btn" data-act="giftno">${LX('취소', 'Cancel')}</div></div>
+  ${pend.editId ? '' : LX('<div class="tw-sub">바로 주기: 창을 닫고 안 받은 선물을 한꺼번에 건네요 · 모아 두기: 넣어만 두고 다음 그림을 골라요</div>', '<div class="tw-sub">Give now: closes the window and hands over all waiting presents · Save for later: keeps it and lets you pick the next picture</div>')}
 </div>`;
-    return `<div class="tw-cap">받은 선물 ${list.length} / ${GIFT_MAX}</div>
-<div class="tw-sub">선물을 주면 가끔 꺼내서 구경하고, 갖고 놀고, 자랑해요. 얼마나 자주 할지는 행동 탭 "선물"에서 골라요. ♡를 누르면 가장 좋아하는 선물이 돼요(하나만).</div>
+    return `<div class="tw-cap">${LX('받은 선물', 'Presents received')} ${list.length} / ${GIFT_MAX}</div>
+<div class="tw-sub">${LX('선물을 주면 가끔 꺼내서 구경하고, 갖고 놀고, 자랑해요. 얼마나 자주 할지는 행동 탭', 'Pets sometimes take out their presents to look at, play with, and show off. Set how often in the Actions tab')} "${LX('선물', 'Presents')}"${LX('에서 골라요. ♡를 누르면 가장 좋아하는 선물이 돼요(하나만).', '. Press ♡ to make one its favorite (only one).')}</div>
 <input type="file" accept="${PIC_ACCEPT}" data-f="giftfile">
 ${pendHtml}
 <div class="tw-gifts">${cards}${add}</div>`;
@@ -7459,7 +7490,7 @@ function pickGift() {
     const p = curPet();
     if (!p) return;
     if (readOnly) return say(readOnlyReason);
-    if ((p.gifts || []).length >= GIFT_MAX) return say(`선물은 ${GIFT_MAX}개까지 줄 수 있어요.`);
+    if ((p.gifts || []).length >= GIFT_MAX) return say(`${LX('선물은', 'Up to')} ${GIFT_MAX}${LX('개까지 줄 수 있어요.', ' presents.')}`);
     win.body.querySelector('[data-f="giftfile"]')?.click();   // SillyTavern hides file inputs
 }
 
@@ -7467,7 +7498,7 @@ function giftPicked(input) {
     const file = input.files?.[0], p = curPet();
     input.value = '';
     if (!file || !p) return;
-    if (file.size > 8 * 1024 * 1024) return say('그림이 너무 커요 (8MB 이하).');
+    if (file.size > 8 * 1024 * 1024) return say(LX('그림이 너무 커요 (8MB 이하).', 'The picture is too big (8 MB max).'));
     const old = win.giftPend?.pet === p && win.giftPend.editId ? win.giftPend : null;   // 0.10.1: "다른 그림으로" while editing
     win.giftPend = { pet: p, file, cut: null, crop: true, bg: true, tol: BG_TOL, name: old ? old.name : '', prep: null, editId: old?.editId };
     return redoGiftPreview();
@@ -7483,7 +7514,7 @@ async function redoGiftPreview() {
         if (win.giftPend !== pend) return;
         pend.prep = out;
     } catch {
-        if (win.giftPend === pend) { win.giftPend = null; say('그림을 읽지 못했어요. 다른 그림(PNG·JPG)을 골라 주세요.'); }
+        if (win.giftPend === pend) { win.giftPend = null; say(LX('그림을 읽지 못했어요. 다른 그림(PNG·JPG)을 골라 주세요.', 'Couldn’t read the picture. Choose another one (PNG · JPG).')); }
     }
     drawGifts();
 }
@@ -7500,7 +7531,7 @@ async function editGift(id) {
         const blob = await r.blob();
         file = new File([blob], 'gift.png', { type: blob.type || 'image/png' });
     } catch {
-        return say('선물 그림을 읽지 못했어요. "빼기" 뒤에 다시 줘 보세요.');
+        return say(LX('선물 그림을 읽지 못했어요. "빼기" 뒤에 다시 줘 보세요.', 'Couldn’t read the present picture. "Remove" Try giving it again later.'));
     }
     if (curPet() !== p || !giftOf(p, id)) return;
     win.giftPend = { pet: p, file, cut: null, crop: true, bg: false, tol: BG_TOL, name: g.name || '', prep: null, editId: id };
@@ -7512,12 +7543,12 @@ async function confirmGift(now) {
     const pend = win.giftPend, p = curPet();
     if (!pend?.prep || busy || p !== pend.pet) return;
     if (readOnly) return say(readOnlyReason);
-    if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 해 주세요.');
+    if (!ready) return say(LX('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 해 주세요.', 'SillyTavern is still getting ready. Try again in a moment.'));
     if (pend.editId) return replaceGift(p, pend);
-    if ((p.gifts || []).length >= GIFT_MAX) return say(`선물은 ${GIFT_MAX}개까지 줄 수 있어요.`);
+    if ((p.gifts || []).length >= GIFT_MAX) return say(`${LX('선물은', 'Up to')} ${GIFT_MAX}${LX('개까지 줄 수 있어요.', ' presents.')}`);
     busy = true;
     try {
-        say('선물 올리는 중…');
+        say(LX('선물 올리는 중…', 'Uploading present…'));
         const id = 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
         const path = await uploadFile(`tavvy_gift_${id}.png`, pend.prep.base64);
         const g = { id, src: path, name: String(pend.name || '').trim().slice(0, 20), size: 'm', at: Date.now(), fresh: true };
@@ -7530,9 +7561,9 @@ async function confirmGift(now) {
         refreshBed();
         const awake = actors.some(a => a.rec === p);
         if (now && awake) return void giveNow(p);              // 0.10.2 바로 주기
-        say(awake ? `선물을 넣었어요! 창을 닫으면 ${josa(p.name, '이', '가')} 받아요.` : `선물을 넣었어요! 🛏️ 버튼으로 깨우면 ${josa(p.name, '이', '가')} 받아요.`);
+        say(awake ? LX(`선물을 넣었어요! 창을 닫으면 ${josa(p.name, '이', '가')} 받아요.`, `Present added! ${p.name} gets it when you close the window.`) : LX(`선물을 넣었어요! 🛏️ 버튼으로 깨우면 ${josa(p.name, '이', '가')} 받아요.`, `Present added! ${p.name} gets it when you wake it with 🛏️.`));
     } catch (e) {
-        say('선물을 올리지 못했어요: ' + (e.message || e));
+        say(LX('선물을 올리지 못했어요: ', 'Couldn’t upload the present: ') + (e.message || e));
     } finally {
         busy = false;
     }
@@ -7544,7 +7575,7 @@ async function replaceGift(p, pend) {
     if (!g) { win.giftPend = null; return drawGifts(); }
     busy = true;
     try {
-        say('그림 바꾸는 중…');
+        say(LX('그림 바꾸는 중…', 'Changing picture…'));
         const path = await uploadFile(`tavvy_gift_${g.id}_${Date.now().toString(36)}.png`, pend.prep.base64);
         const old = g.src, oldName = g.name;
         g.src = path;
@@ -7554,9 +7585,9 @@ async function replaceGift(p, pend) {
         if (ok) { if (!fileInUse(old)) deleteFile(old); } else saveSoon();
         win.giftPend = null;
         drawGifts();
-        say('선물 그림을 바꿨어요.');
+        say(LX('선물 그림을 바꿨어요.', 'Present picture changed.'));
     } catch (e) {
-        say('그림을 올리지 못했어요: ' + (e.message || e));
+        say(LX('그림을 올리지 못했어요: ', 'Couldn’t upload the picture: ') + (e.message || e));
     } finally {
         busy = false;
     }
@@ -7600,7 +7631,7 @@ function memoGift(id, v) {
 async function delGift(id) {
     const p = curPet(), g = giftOf(p, id);
     if (!g || readOnly || busy) return;
-    if (!(await confirmBox(`${g.name ? `"${g.name}"` : '이 선물'}을(를) 뺄까요? 선물 그림도 지워져요.`))) return;
+    if (!(await confirmBox(LX(`${g.name ? `"${g.name}"` : '이 선물'}을(를) 뺄까요? 선물 그림도 지워져요.`, `Remove ${g.name ? `"${g.name}"` : 'this present'}? Its picture will be deleted too.`)))) return;
     for (const a of actors) if (a.rec === p && (a.toy?.g === g || a.hug?.g === g)) { a.toy = null; a.hug = null; if (a.state === 'toy') a.setState('idle'); }
     p.gifts = p.gifts.filter(x => x !== g);
     const ok = await saveNow();
@@ -7629,8 +7660,8 @@ function showGiftNow(id) {
     const p = curPet(), g = giftOf(p, id);
     if (!g) return;
     const a = actors.find(x => x.rec === p);
-    if (!a) return say(`먼저 🛏️ 버튼으로 ${josa(p.name, '을', '를')} 깨워 주세요.`);
-    if (!a.free() || a.held || a.air || a.wallOn || ['eat', 'sniff', 'toy'].includes(a.state)) return say('지금은 바빠 보여요. 잠시 뒤 다시 눌러 보세요.');
+    if (!a) return say(LX(`먼저 🛏️ 버튼으로 ${josa(p.name, '을', '를')} 깨워 주세요.`, `First wake ${p.name} with the 🛏️ button.`));
+    if (!a.free() || a.held || a.air || a.wallOn || ['eat', 'sniff', 'toy'].includes(a.state)) return say(LX('지금은 바빠 보여요. 잠시 뒤 다시 눌러 보세요.', 'It looks busy right now. Try again in a moment.'));
     closeWin();
     const go = (n) => {
         if (win?.open) { if (n < 40) setTimeout(() => go(n + 1), 250); return; }   // "저장 안 한 내용" may be asking first
@@ -7655,17 +7686,17 @@ function standIn(p, key) {
 
 function speedText(p, key) {
     const list = p.look.roles[key] || [];
-    if (list.length < 2) return `${list.length}장`;
-    if (STEP_ROLES[key]) return `${list.length}장 · ${key === 'walk' ? '걸음마다' : '한 입마다'}`;
-    return `${list.length}장 · ${SPEED_NAMES[p.look.roleOpts?.[key]?.speed] || '보통'}`;
+    if (list.length < 2) return LX(`${list.length}장`, `${list.length} pic${list.length === 1 ? '' : 's'}`);
+    if (STEP_ROLES[key]) return `${LX(`${list.length}장`, `${list.length} pics`)} · ${key === 'walk' ? LX('걸음마다', 'per step') : LX('한 입마다', 'per bite')}`;
+    return `${LX(`${list.length}장`, `${list.length} pics`)} · ${SPEED_NAMES[p.look.roleOpts?.[key]?.speed] || LX('보통', 'Normal')}`;
 }
 
 function slotHtml(p, r) {
     const list = p.look.roles[r.key] || [];
     const pics = list.length
         ? `<div class="tw-slot-imgs">${list.slice(0, 3).map(f => `<img src="${esc(imgUrl(f))}" alt="">`).join('')}</div>`
-        : '<div class="tw-slot-imgs tw-slot-empty"><i class="fa-solid fa-plus"></i> 그림 넣기</div>';
-    const sub = list.length ? speedText(p, r.key) : `없음 → ${ROLE_DEFS[standIn(p, r.key)]?.name || '기본'}`;
+        : LX('<div class="tw-slot-imgs tw-slot-empty"><i class="fa-solid fa-plus"></i> 그림 넣기</div>', '<div class="tw-slot-imgs tw-slot-empty"><i class="fa-solid fa-plus"></i> Add pictures</div>');
+    const sub = list.length ? speedText(p, r.key) : `${LX('없음 →', 'none →')} ${ROLE_DEFS[standIn(p, r.key)]?.name || LX('기본', 'Basic')}`;
     return `<div class="tw-slot${list.length ? '' : ' tw-slot-none'}" data-role="${r.key}">${pics}<b>${esc(r.name)}</b><span class="tw-sub">${esc(sub)}</span></div>`;
 }
 
@@ -7673,10 +7704,10 @@ function lookNote(p) {
     const key = lookKeyOf(p);
     if (key.startsWith('lib:')) {
         const l = root.looks.find(x => x.id === key.slice(4));
-        return `여기 넣은 그림은 "${esc(l?.name || '')}" 외형에 같이 저장돼요. 이 외형을 쓰는 다른 펫과, 이 외형으로 새로 만드는 펫에도 들어가요.`;
+        return `${LX('여기 넣은 그림은', 'Pictures added here are saved with the look')} "${esc(l?.name || '')}"${LX(' 외형에 같이 저장돼요. 이 외형을 쓰는 다른 펫과, 이 외형으로 새로 만드는 펫에도 들어가요.', '. Other pets using this look, and new pets made with it, get them too.')}`;
     }
-    if (key.startsWith('builtin:')) return '기본 펫 외형이라, 여기 넣은 그림은 이 펫에게만 들어가요.';
-    return '여기 넣은 그림은 이 펫에게 들어가요.';
+    if (key.startsWith('builtin:')) return LX('기본 펫 외형이라, 여기 넣은 그림은 이 펫에게만 들어가요.', 'This is a starter look, so pictures added here go to this pet only.');
+    return LX('여기 넣은 그림은 이 펫에게 들어가요.', 'Pictures added here go to this pet.');
 }
 
 function rolesHtml(p) {
@@ -7684,10 +7715,10 @@ function rolesHtml(p) {
         const grid = `<div class="tw-slots">${g.roles.map(r => slotHtml(p, r)).join('')}</div>`;
         if (i === 0) return `<div class="tw-cap">${esc(g.name)}</div>${grid}`;
         const have = g.roles.filter(r => p.look.roles[r.key]?.length).length;
-        return `<details class="tw-fold" data-group="${g.key}"${win.rolesOpen.has(g.key) ? ' open' : ''}><summary>${esc(g.name)} <span class="tw-sub">${have ? `${have}칸 채움` : ''}</span></summary>${grid}</details>`;
+        return `<details class="tw-fold" data-group="${g.key}"${win.rolesOpen.has(g.key) ? ' open' : ''}><summary>${esc(g.name)} <span class="tw-sub">${have ? `${have}${LX('칸 채움', ' filled')}` : ''}</span></summary>${grid}</details>`;
     }).join('');
-    return `<div class="tw-sub">그림이 없는 칸은 기본 그림 + 움직임으로 대신해요. 칸을 누르면 그림을 넣거나 빼요.</div>
-<div class="tw-row tw-sheetbar"><div class="tw-btn tw-btn-small" data-act="sheetall"><i class="fa-solid fa-table-cells"></i> 시트로 한꺼번에 넣기</div><span class="tw-sub">한 장을 나눠서 여러 동작에</span></div>
+    return `<div class="tw-sub">${LX('그림이 없는 칸은 기본 그림 + 움직임으로 대신해요. 칸을 누르면 그림을 넣거나 빼요.', 'Empty slots use the basic picture + movement instead. Tap a slot to add or remove pictures.')}</div>
+<div class="tw-row tw-sheetbar"><div class="tw-btn tw-btn-small" data-act="sheetall"><i class="fa-solid fa-table-cells"></i> ${LX('시트로 한꺼번에 넣기', 'Add from a sheet')}</div><span class="tw-sub">${LX('한 장을 나눠서 여러 동작에', 'Split one image across several actions')}</span></div>
 <input type="file" accept="${PIC_ACCEPT}" data-f="sheetfile">
 ${groups}
 <div class="tw-sub" style="margin-top:10px">${lookNote(p)}</div>
@@ -7699,45 +7730,45 @@ function roleEditHtml(p, key) {
     const list = p.look.roles[key] || [];
     const opt = p.look.roleOpts?.[key] || {};
     const canDel = key !== 'idle' || list.length > 1;
-    const frames = list.map((f, i) => `<div class="tw-frame"><img src="${esc(imgUrl(f))}" alt=""><span>${i + 1}</span>${canDel ? `<i class="fa-solid fa-xmark" data-delframe="${i}" title="빼기"></i>` : ''}${i ? `<em class="fa-solid fa-chevron-left" data-moveframe="${i}" title="앞으로"></em>` : ''}${i < list.length - 1 ? `<em class="fa-solid fa-chevron-right tw-next" data-moveframe="${i + 1}" title="뒤로"></em>` : ''}</div>`).join('');
+    const frames = list.map((f, i) => `<div class="tw-frame"><img src="${esc(imgUrl(f))}" alt=""><span>${i + 1}</span>${canDel ? `<i class="fa-solid fa-xmark" data-delframe="${i}" title="${LX('빼기', 'Remove')}"></i>` : ''}${i ? `<em class="fa-solid fa-chevron-left" data-moveframe="${i}" title="${LX('앞으로', 'Front')}"></em>` : ''}${i < list.length - 1 ? `<em class="fa-solid fa-chevron-right tw-next" data-moveframe="${i + 1}" title="${LX('뒤로', 'Back')}"></em>` : ''}</div>`).join('');
     const add = list.length < FRAMES_MAX ? '<div class="tw-frame tw-frame-add" data-act="addframe"><i class="fa-solid fa-plus"></i></div>' : '';
-    const petFacing = { front: '정면', right: '오른쪽', left: '왼쪽' }[p.look.facing] || '정면';
+    const petFacing = { front: LX('정면', 'Front'), right: LX('오른쪽', 'Right'), left: LX('왼쪽', 'Left') }[p.look.facing] || LX('정면', 'Front');
     const speed = list.length < 2 ? ''
-        : STEP_ROLES[key] ? `<div class="tw-sub">여러 장이면 ${STEP_ROLES[key]}.</div>`
-        : `<label class="tw-label">빠르기 <select data-ro="speed">${Object.entries(SPEED_NAMES).map(([k, v]) => `<option value="${k}"${(opt.speed || 'normal') === k ? ' selected' : ''}>${v}</option>`).join('')}</select></label>`;
-    return `<div class="tw-btn tw-btn-small" data-act="rolesback"><i class="fa-solid fa-arrow-left"></i> 동작 목록</div>
+        : STEP_ROLES[key] ? `<div class="tw-sub">${LX('여러 장이면', 'With several, it')} ${STEP_ROLES[key]}.</div>`
+        : `<label class="tw-label">${LX('빠르기', 'Speed')} <select data-ro="speed">${Object.entries(SPEED_NAMES).map(([k, v]) => `<option value="${k}"${(opt.speed || 'normal') === k ? ' selected' : ''}>${v}</option>`).join('')}</select></label>`;
+    return `<div class="tw-btn tw-btn-small" data-act="rolesback"><i class="fa-solid fa-arrow-left"></i> ${LX('동작 목록', 'Action list')}</div>
 <div class="tw-roled-head">
   <div class="tw-roled-prev"><img alt=""></div>
-  <div><b>${esc(r.name)}</b><div class="tw-sub">${list.length ? (r.note ? esc(r.note) : '') : `없으면 ${esc(ROLE_DEFS[standIn(p, key)]?.name || '기본')} 그림을 써요`}</div></div>
+  <div><b>${esc(r.name)}</b><div class="tw-sub">${list.length ? (r.note ? esc(r.note) : '') : `${LX('없으면', 'If empty, uses the')} ${esc(ROLE_DEFS[standIn(p, key)]?.name || LX('기본', 'Basic'))} ${LX('그림을 써요', 'picture')}`}</div></div>
 </div>
-<div class="tw-cap">그림 ${list.length}/${FRAMES_MAX} <span class="tw-sub">· 여러 장이면 차례로 넘어가요</span></div>
+<div class="tw-cap">${LX('그림', 'Art')} ${list.length}/${FRAMES_MAX} <span class="tw-sub">${LX('· 여러 장이면 차례로 넘어가요', '· several pictures play in turn')}</span></div>
 <div class="tw-frames">${frames}${add}</div>
-${list.length && key !== 'idle' ? `<div class="tw-row"><div class="tw-btn tw-btn-small" data-act="refit"><i class="fa-solid fa-up-down"></i> 키 맞추기</div><span class="tw-sub">넣어 둔 그림 크기를 기본 그림에 맞춰요</span></div>
+${list.length && key !== 'idle' ? `<div class="tw-row"><div class="tw-btn tw-btn-small" data-act="refit"><i class="fa-solid fa-up-down"></i> ${LX('키 맞추기', 'Match height')}</div><span class="tw-sub">${LX('넣어 둔 그림 크기를 기본 그림에 맞춰요', 'Resize the added pictures to match the basic picture')}</span></div>
 <div class="tw-refit" hidden>
   <div class="tw-refitbox"></div>
-  <div class="tw-row"><div class="tw-btn" data-act="refitok"><i class="fa-solid fa-check"></i> 바꾸기</div><div class="tw-btn" data-act="refitno">취소</div></div>
+  <div class="tw-row"><div class="tw-btn" data-act="refitok"><i class="fa-solid fa-check"></i> ${LX('바꾸기', 'Replace')}</div><div class="tw-btn" data-act="refitno">${LX('취소', 'Cancel')}</div></div>
 </div>` : ''}
 <div class="tw-rolepend" hidden>
-  <div class="tw-cap">미리보기 <span class="tw-sub">· 이대로 넣을까요?</span></div>
+  <div class="tw-cap">${LX('미리보기', 'Preview')} <span class="tw-sub">${LX('· 이대로 넣을까요?', '· add it like this?')}</span></div>
   <div class="tw-frames tw-pendframes"></div>
   <div class="tw-pendfit"></div>
-  <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="pendcut"><i class="fa-solid fa-crop-simple"></i> 자르기 · 나누기</div><span class="tw-sub tw-cutnote"></span></div>
-  <div class="tw-row"><div class="tw-btn" data-act="pendok"><i class="fa-solid fa-check"></i> 넣기</div><div class="tw-btn" data-act="pendno">취소</div></div>
+  <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="pendcut"><i class="fa-solid fa-crop-simple"></i> ${LX('자르기 · 나누기', 'Crop · split')}</div><span class="tw-sub tw-cutnote"></span></div>
+  <div class="tw-row"><div class="tw-btn" data-act="pendok"><i class="fa-solid fa-check"></i> ${LX('넣기', 'Add')}</div><div class="tw-btn" data-act="pendno">${LX('취소', 'Cancel')}</div></div>
 </div>
 <input type="file" accept="${PIC_ACCEPT}" multiple data-f="rolefile">
-<label class="tw-check"><input type="checkbox" data-f="rolecrop" checked> 투명 여백 자르기</label>
+<label class="tw-check"><input type="checkbox" data-f="rolecrop" checked> ${LX('투명 여백 자르기', 'Trim transparent edges')}</label>
 ${bgHtml('role')}
-<div class="tw-sub">여러 장을 한 번에 고르면 이름 순서대로 들어가고, 같은 크기면 같은 자리로 잘라서 움직임이 흔들리지 않아요. 한 장을 고르면 미리보기에서 직접 자르거나, 여러 동작이 그려진 그림을 여러 장으로 나눌 수 있어요.</div>
+<div class="tw-sub">${LX('여러 장을 한 번에 고르면 이름 순서대로 들어가고, 같은 크기면 같은 자리로 잘라서 움직임이 흔들리지 않아요. 한 장을 고르면 미리보기에서 직접 자르거나, 여러 동작이 그려진 그림을 여러 장으로 나눌 수 있어요.', 'Pick several at once and they go in by file name; same-size pictures are cropped at the same spot so the motion doesn’t wobble. Pick one and you can crop it in the preview, or split a sheet of actions into several pictures.')}</div>
 ${speed}
-<label class="tw-label">이 그림이 보는 쪽
+<label class="tw-label">${LX('이 그림이 보는 쪽', 'Which way these pictures face')}
   <select data-ro="facing">
-    <option value=""${!opt.facing ? ' selected' : ''}>펫과 같게 (${petFacing})</option>
-    <option value="front"${opt.facing === 'front' ? ' selected' : ''}>정면</option>
-    <option value="right"${opt.facing === 'right' ? ' selected' : ''}>오른쪽을 봄</option>
-    <option value="left"${opt.facing === 'left' ? ' selected' : ''}>왼쪽을 봄</option>
+    <option value=""${!opt.facing ? ' selected' : ''}>${LX('펫과 같게 (', 'Same as pet (')}${petFacing})</option>
+    <option value="front"${opt.facing === 'front' ? ' selected' : ''}>${LX('정면', 'Front')}</option>
+    <option value="right"${opt.facing === 'right' ? ' selected' : ''}>${LX('오른쪽을 봄', 'Faces right')}</option>
+    <option value="left"${opt.facing === 'left' ? ' selected' : ''}>${LX('왼쪽을 봄', 'Faces left')}</option>
   </select>
 </label>
-<div class="tw-sub">정면 그림과 옆모습 그림을 섞어 써도 돼요. 옆모습이면 가는 쪽에 맞춰 뒤집어요.</div>
+<div class="tw-sub">${LX('정면 그림과 옆모습 그림을 섞어 써도 돼요. 옆모습이면 가는 쪽에 맞춰 뒤집어요.', 'Front and side pictures can be mixed. Side pictures flip to match the direction it moves.')}</div>
 <div class="tw-msg"></div>`;
 }
 
@@ -7817,12 +7848,12 @@ async function addRoleFrames(input) {
     input.value = '';
     if (!p || !key || !files.length) return;
     if (readOnly) return say(readOnlyReason);
-    if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 해 주세요.');
+    if (!ready) return say(LX('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 해 주세요.', 'SillyTavern is still getting ready. Try again in a moment.'));
     if (busy) return;
-    if (files.some(f => f.size > 8 * 1024 * 1024)) return say('그림이 너무 커요 (한 장에 8MB 이하).');
+    if (files.some(f => f.size > 8 * 1024 * 1024)) return say(LX('그림이 너무 커요 (한 장에 8MB 이하).', 'The picture is too big (8 MB max each).'));
     const space = FRAMES_MAX - (p.look.roles[key]?.length || 0);
     const use = files.slice(0, Math.max(0, space));
-    if (!use.length) return say(`한 동작에는 그림을 ${FRAMES_MAX}장까지 넣을 수 있어요.`);
+    if (!use.length) return say(`${LX('한 동작에는 그림을', 'One action holds up to')} ${FRAMES_MAX}${LX('장까지 넣을 수 있어요.', ' pictures.')}`);
     const skipped = files.length - use.length;
     if (bgTolOf('role') > 0 || use.length === 1 || key !== 'idle') {   // look first (one picture can be cut or split there; 키 맞추기)
         closeRefit();
@@ -7832,10 +7863,10 @@ async function addRoleFrames(input) {
     const crop = win.body.querySelector('[data-f="rolecrop"]')?.checked !== false;
     busy = true;
     try {
-        say('그림 준비 중…');
+        say(LX('그림 준비 중…', 'Preparing picture…'));
         await putRoleFrames(p, key, await prepareFrames(use, crop, 0), skipped);
     } catch (e) {
-        say('그림을 읽지 못했어요: ' + (e.message || e));
+        say(LX('그림을 읽지 못했어요: ', 'Couldn’t read the picture: ') + (e.message || e));
     } finally {
         busy = false;
     }
@@ -7847,7 +7878,7 @@ async function redoRolePreview() {
     if (!pend) return;
     const crop = win.body.querySelector('[data-f="rolecrop"]')?.checked !== false;
     const tol = bgTolOf('role');
-    say(tol > 0 ? '배경 지우는 중…' : '그림 준비 중…');
+    say(tol > 0 ? LX('배경 지우는 중…', 'Removing background…') : LX('그림 준비 중…', 'Preparing picture…'));
     try {
         const imgs = await prepareFrames(pend.files, crop, tol, pend.cuts);
         if (win.rolePend !== pend) return;
@@ -7860,7 +7891,7 @@ async function redoRolePreview() {
         }
         say('');
     } catch (e) {
-        if (win.rolePend === pend) { win.rolePend = null; say('그림을 읽지 못했어요: ' + (e.message || e)); }
+        if (win.rolePend === pend) { win.rolePend = null; say(LX('그림을 읽지 못했어요: ', 'Couldn’t read the picture: ') + (e.message || e)); }
     }
     drawRolePend();
 }
@@ -7873,7 +7904,7 @@ function drawRolePend() {
     const cutBtn = box.querySelector('[data-act="pendcut"]');
     if (cutBtn) cutBtn.hidden = pend?.files?.length !== 1;
     const note = box.querySelector('.tw-cutnote');
-    if (note) note.textContent = !pend?.cuts ? '' : pend.sheet ? `${pend.cuts.length}장으로 나눴어요` : '직접 자른 부분만 써요';
+    if (note) note.textContent = !pend?.cuts ? '' : pend.sheet ? LX(`${pend.cuts.length}장으로 나눴어요`, `Split into ${pend.cuts.length}`) : LX('직접 자른 부분만 써요', 'Only the part you cropped is used');
     box.querySelector('.tw-pendframes').innerHTML = pend?.imgs
         ? pend.imgs.map((im, i) => `<div class="tw-frame"><img class="tw-checker" src="${im.dataUrl}" alt=""><span>${i + 1}</span></div>`).join('') : '';
     const fb = box.querySelector('.tw-pendfit');
@@ -7891,7 +7922,7 @@ async function confirmRolePend() {
         try {
             imgs = await fittedImgs(pend.fit, pend.imgs);
         } catch (e) {
-            return say('키를 맞추지 못했어요: ' + (e.message || e));
+            return say(LX('키를 맞추지 못했어요: ', 'Couldn’t match the height: ') + (e.message || e));
         }
         if (pend.fit) {                                                  // 0.10.9: remember the size picked (shown again in 다시 맞추기)
             const opts = pend.pet.look.roleOpts ??= {};
@@ -7914,8 +7945,8 @@ async function sheetPicked(input) {
     const p = curPet();
     if (!p || !file) return;
     if (readOnly) return say(readOnlyReason);
-    if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 해 주세요.');
-    if (file.size > 8 * 1024 * 1024) return say('그림이 너무 커요 (8MB 이하).');
+    if (!ready) return say(LX('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 해 주세요.', 'SillyTavern is still getting ready. Try again in a moment.'));
+    if (file.size > 8 * 1024 * 1024) return say(LX('그림이 너무 커요 (8MB 이하).', 'The picture is too big (8 MB max).'));
     openCutter(file, {
         sheet: true, sheetOn: true, space: Infinity,
         done: (cuts) => {
@@ -7934,7 +7965,7 @@ async function redoSheet() {
     if (!sh) return;
     const crop = win.body.querySelector('[data-f="rolecrop"]')?.checked !== false;
     const tol = bgTolOf('role');
-    say(tol > 0 ? '배경 지우는 중…' : '그림 준비 중…');
+    say(tol > 0 ? LX('배경 지우는 중…', 'Removing background…') : LX('그림 준비 중…', 'Preparing picture…'));
     try {
         const imgs = await prepareFrames([sh.file], crop, tol, sh.cuts);
         if (win.sheet !== sh) return;
@@ -7943,7 +7974,7 @@ async function redoSheet() {
         if (win.sheet !== sh) return;
         say('');
     } catch (e) {
-        if (win.sheet === sh) say('그림을 읽지 못했어요: ' + (e.message || e));
+        if (win.sheet === sh) say(LX('그림을 읽지 못했어요: ', 'Couldn’t read the picture: ') + (e.message || e));
     }
     drawSheet();
 }
@@ -7964,14 +7995,14 @@ function sheetFit(p, sh) {
 }
 
 function sheetHtml() {
-    return `<div class="tw-btn tw-btn-small" data-act="sheetno"><i class="fa-solid fa-arrow-left"></i> 동작 목록</div>
-<div class="tw-cap">어느 동작에 넣을까요?</div>
-<div class="tw-sub">그림 아래 칸을 눌러 동작을 골라요. 줄 옆 칸으로 그 줄 전부를 한 번에 고를 수도 있어요. 고르지 않은 그림은 넣지 않고, 이미 그림이 있는 동작에는 뒤에 붙어요.</div>
+    return `<div class="tw-btn tw-btn-small" data-act="sheetno"><i class="fa-solid fa-arrow-left"></i> ${LX('동작 목록', 'Action list')}</div>
+<div class="tw-cap">${LX('어느 동작에 넣을까요?', 'Which action should each go to?')}</div>
+<div class="tw-sub">${LX('그림 아래 칸을 눌러 동작을 골라요. 줄 옆 칸으로 그 줄 전부를 한 번에 고를 수도 있어요. 고르지 않은 그림은 넣지 않고, 이미 그림이 있는 동작에는 뒤에 붙어요.', 'Tap the box under a picture to pick an action. The box beside a row sets the whole row at once. Pictures without an action are skipped, and actions that already have pictures get them added at the end.')}</div>
 <div class="tw-sheet"></div>
 <div class="tw-sheet-ref"></div>
-<label class="tw-check"><input type="checkbox" data-f="rolecrop" checked> 투명 여백 자르기</label>
+<label class="tw-check"><input type="checkbox" data-f="rolecrop" checked> ${LX('투명 여백 자르기', 'Trim transparent edges')}</label>
 ${bgHtml('role')}
-<div class="tw-row"><div class="tw-btn tw-btn-main" data-act="sheetok"></div><div class="tw-btn" data-act="sheetno">취소</div></div>
+<div class="tw-row"><div class="tw-btn tw-btn-main" data-act="sheetok"></div><div class="tw-btn" data-act="sheetno">${LX('취소', 'Cancel')}</div></div>
 <div class="tw-msg"></div>`;
 }
 
@@ -7979,17 +8010,17 @@ function drawSheet() {
     const p = curPet(), sh = win.sheet;
     const box = win.body.querySelector('.tw-sheet');
     if (!p || !sh || !box) return;
-    if (!sh.imgs) { box.innerHTML = '<div class="tw-sub">준비 중…</div>'; return; }
+    if (!sh.imgs) { box.innerHTML = LX('<div class="tw-sub">준비 중…</div>', '<div class="tw-sub">Preparing…</div>'); return; }
     const fit = sheetFit(p, sh);
     const rows = [...new Set(sh.rows)];
     box.innerHTML = rows.map((r, ri) => {
         const idx = sh.rows.map((x, i) => (x === r ? i : -1)).filter(i => i >= 0);
         const tiles = idx.map(i => `<div class="tw-sheet-frame${sh.picks[i] ? '' : ' tw-sheet-none'}${fit[i] === false ? ' tw-sheet-over' : ''}">
   <div class="tw-frame"><img class="tw-checker" src="${sh.imgs[i]?.dataUrl || ''}" alt=""><span>${i + 1}</span></div>
-  <select data-sheetpick="${i}">${roleOptions(sh.picks[i], `<option value=""${sh.picks[i] ? '' : ' selected'}>안 넣음</option>`)}</select>
+  <select data-sheetpick="${i}">${roleOptions(sh.picks[i], `<option value=""${sh.picks[i] ? '' : ' selected'}>${LX('안 넣음', 'Skip')}</option>`)}</select>
 </div>`).join('');
         const head = rows.length > 1 || idx.length > 1
-            ? `<div class="tw-row tw-sheet-head"><span class="tw-sub">${rows.length > 1 ? `${ri + 1}줄` : '전부'}</span><span class="tw-grow"></span><select data-sheetrow="${r}">${roleOptions('', '<option value="" selected>이 줄 전부 →</option><option value="-">안 넣음</option>')}</select></div>` : '';
+            ? `<div class="tw-row tw-sheet-head"><span class="tw-sub">${rows.length > 1 ? LX(`${ri + 1}줄`, `Row ${ri + 1}`) : LX('전부', 'All')}</span><span class="tw-grow"></span><select data-sheetrow="${r}">${roleOptions('', LX('<option value="" selected>이 줄 전부 →</option><option value="-">안 넣음</option>', '<option value="" selected>Whole row →</option><option value="-">Skip</option>'))}</select></div>` : '';
         return `<div class="tw-sheet-row">${head}<div class="tw-sheet-frames">${tiles}</div></div>`;
     }).join('');
     // actions that overflow
@@ -7997,13 +8028,13 @@ function drawSheet() {
     sh.picks.forEach((k, i) => { if (k && fit[i] === false) over[k] = (over[k] || 0) + 1; });
     const warn = Object.entries(over).map(([k, n]) => {
         const room = FRAMES_MAX - (k === 'idle' ? 0 : (p.look.roles[k]?.length || 0));
-        return `${esc(ROLE_DEFS[k]?.name || k)}: ${room > 0 ? `${room}장만 더 들어가요` : '이미 가득 찼어요'} (흐린 ${n}장은 빠져요)`;
+        return `${esc(ROLE_DEFS[k]?.name || k)}: ${room > 0 ? LX(`${room}장만 더 들어가요`, `only ${room} more fit`) : LX('이미 가득 찼어요', 'already full')} ${LX(`(흐린 ${n}장은 빠져요)`, `(${n} faded ones left out)`)}`;
     });
     if (warn.length) box.insertAdjacentHTML('beforeend', `<div class="tw-sheet-warn">${warn.join('<br>')}</div>`);
     drawSheetRef(p, sh);
     const n = fit.filter(Boolean).length;
     const ok = win.body.querySelector('[data-act="sheetok"]');
-    if (ok) ok.innerHTML = `<i class="fa-solid fa-check"></i> 넣기 (${n}장)`;
+    if (ok) ok.innerHTML = `<i class="fa-solid fa-check"></i> ${LX('넣기 (', 'Add (')}${n}${LX('장)', ')')}`;
 }
 
 function onSheetInput(t) {
@@ -8030,17 +8061,17 @@ async function confirmSheet() {
     const groups = new Map();                                        // action → pictures, in sheet order
     sh.picks.forEach((k, i) => { if (k && fit[i] && sh.imgs[i]) (groups.get(k) || groups.set(k, []).get(k)).push(sh.imgs[i]); });
     const total = [...groups.values()].reduce((a, l) => a + l.length, 0);
-    if (!total) return say('넣을 그림이 없어요. 그림 아래 칸에서 동작을 골라 주세요.');
+    if (!total) return say(LX('넣을 그림이 없어요. 그림 아래 칸에서 동작을 골라 주세요.', 'Nothing to add. Pick an action in the box under a picture.'));
     busy = true;
     const uploaded = [];
     try {
         const ri = sheetRefIndex(sh);
         if (!groups.has('idle') && ri >= 0 && sh.imgs[ri]) {                   // 키 맞추기: the whole sheet, to the 기본 picture
-            say('키 맞추는 중…');
+            say(LX('키 맞추는 중…', 'Matching height…'));
             const fitted = await fitSheet(p, sh.imgs[ri], [...groups.values()].flat(), sh.scale || 1);
             for (const [k, imgs] of groups) groups.set(k, imgs.map(im => fitted.get(im)));
         }
-        say(`그림 ${total}장 올리는 중…`);
+        say(LX(`그림 ${total}장 올리는 중…`, `Uploading ${total} picture${total === 1 ? '' : 's'}…`));
         const paths = new Map();
         for (const [k, imgs] of groups) {
             const res = await Promise.allSettled(imgs.map((im) => {
@@ -8053,17 +8084,17 @@ async function confirmSheet() {
             if (bad) throw bad.reason;
             paths.set(k, ok);
         }
-        if (curPet() !== p || win.sheet !== sh) throw new Error('창이 바뀌었어요');
+        if (curPet() !== p || win.sheet !== sh) throw new Error(LX('창이 바뀌었어요', 'The window changed'));
         win.sheet = null;
         const saved = await changeRoles(p, (look) => {
             for (const [k, list] of paths) look.roles[k] = [...(k === 'idle' ? [] : (look.roles[k] || [])), ...list].slice(0, FRAMES_MAX);   // 기본 is replaced
         });
         const names = [...paths.keys()].map(k => ROLE_DEFS[k]?.name || k).join(' · ');
-        say((saved ? `${total}장 넣었어요: ${names}` : '넣었지만 저장이 늦어지고 있어요.'));
+        say((saved ? LX(`${total}장 넣었어요: ${names}`, `Added ${total}: ${names}`) : LX('넣었지만 저장이 늦어지고 있어요.', 'Added, but saving is slow.')));
     } catch (e) {
         console.error('[Tavvy] sheet pictures failed', e);
         for (const f of uploaded) if (!fileInUse(f)) deleteFile(f);
-        say('그림을 넣지 못했어요: ' + (e.message || e));
+        say(LX('그림을 넣지 못했어요: ', 'Couldn’t add the pictures: ') + (e.message || e));
     } finally {
         busy = false;
     }
@@ -8114,18 +8145,18 @@ function drawSheetRef(p, sh) {
     const box = win.body.querySelector('.tw-sheet-ref');
     if (!box) return;
     if (sh.picks.includes('idle')) {
-        box.innerHTML = '<div class="tw-sub">기본으로 고른 그림이 원래 기본 그림을 바꿔요. 같은 시트 그림끼리는 크기가 딱 맞아요.</div>';
+        box.innerHTML = LX('<div class="tw-sub">기본으로 고른 그림이 원래 기본 그림을 바꿔요. 같은 시트 그림끼리는 크기가 딱 맞아요.</div>', '<div class="tw-sub">A picture chosen for Basic replaces the old basic picture. Pictures from the same sheet match in size exactly.</div>');
         return;
     }
     const ri = sheetRefIndex(sh);
-    const autoName = sh.ref === 'auto' && ri >= 0 ? ` (${ri + 1}번)` : '';
-    const opts = sh.picks.map((_, i) => `<option value="${i}"${sh.ref === i ? ' selected' : ''}>${i + 1}번 그림</option>`).join('');
+    const autoName = sh.ref === 'auto' && ri >= 0 ? LX(` (${ri + 1}번)`, ` (#${ri + 1})`) : '';
+    const opts = sh.picks.map((_, i) => `<option value="${i}"${sh.ref === i ? ' selected' : ''}${LX(`>${i + 1}번 그림`, `>Picture ${i + 1}`)}</option>`).join('');
     const pct = Math.round((sh.scale || 1) * 100);
-    box.innerHTML = `<div class="tw-row"><span class="tw-cap tw-grow">키 맞추기</span><select data-sheetref="1"><option value="auto"${sh.ref === 'auto' ? ' selected' : ''}>자동${autoName}</option><option value="-1"${sh.ref === -1 ? ' selected' : ''}>맞추지 않음</option>${opts}</select></div>
-<div class="tw-sub">기본 그림과 가장 닮은 그림(보통 서 있는 그림)을 찾아, 그 그림 속 키가 기본 그림 속 키와 같아지게 시트 전체를 맞춰 넣어요. 어긋나 보이면 다른 번호를 고르거나 막대로 맞춰요.</div>`
+    box.innerHTML = `<div class="tw-row"><span class="tw-cap tw-grow">${LX('키 맞추기', 'Match height')}</span><select data-sheetref="1"><option value="auto"${sh.ref === 'auto' ? ' selected' : ''}>${LX('자동', 'Auto ')}${autoName}</option><option value="-1"${sh.ref === -1 ? ' selected' : ''}>${LX('맞추지 않음', 'Don’t match')}</option>${opts}</select></div>
+<div class="tw-sub">${LX('기본 그림과 가장 닮은 그림(보통 서 있는 그림)을 찾아, 그 그림 속 키가 기본 그림 속 키와 같아지게 시트 전체를 맞춰 넣어요. 어긋나 보이면 다른 번호를 고르거나 막대로 맞춰요.', 'Finds the picture most like the basic one (usually standing) and scales the whole sheet so its height matches the basic picture. If it looks off, pick another number or adjust with the slider.')}</div>`
         + (ri >= 0 && sheetK(sh, ri) > 0 ? `<div class="tw-fitprev"><img class="tw-fit-base" alt=""><img class="tw-fit-ref" alt=""></div>
-<div class="tw-row"><span class="tw-sub">크기</span><input type="range" min="50" max="200" step="5" value="${pct}" data-sheetscale="1" class="tw-grow"><span class="tw-sub tw-fitpct">${pct}%</span></div>
-<div class="tw-sub">흐린 그림이 지금 기본 그림이에요.</div>` : '');
+<div class="tw-row"><span class="tw-sub">${LX('크기', 'Size')}</span><input type="range" min="50" max="200" step="5" value="${pct}" data-sheetscale="1" class="tw-grow"><span class="tw-sub tw-fitpct">${pct}%</span></div>
+<div class="tw-sub">${LX('흐린 그림이 지금 기본 그림이에요.', 'The faded picture is the current basic picture.')}</div>` : '');
     placeFitPreview(sh);
 }
 
@@ -8165,7 +8196,7 @@ async function fitSheet(p, refImg, imgs, scale = 1) {
     const bb = opaqueBox(base.g, base.w, base.h);
     const ref = await canvasOf(refImg.dataUrl);
     const rb = opaqueBox(ref.g, ref.w, ref.h);
-    if (!bb || !rb) throw new Error('기준 그림이 비어 있어요');
+    if (!bb || !rb) throw new Error(LX('기준 그림이 비어 있어요', 'The reference picture is empty'));
     return fitWithK(imgs, bb.sh / rb.sh * scale);              // sheet px → 기본 px (× the 막대)
 }
 
@@ -8226,7 +8257,7 @@ async function measureFit(F) {
         }
         F.base = bb ? { box: bb, url, w: base.w, h: base.h } : null;
     } catch (e) {
-        console.warn('[Tavvy] could not measure for 키 맞추기', e);
+        console.warn('[Tavvy] could not measure for height matching', e);
         F.base = null; F.boxes = null;
     }
 }
@@ -8259,18 +8290,18 @@ function fitKOf(F) {
 const fitIdle = (F) => !fitKOf(F) || (!fitMatches(F) && (F.scale || 1) === (F.prev || 1) && F.cur.every((k, i) => Math.abs(k - Math.min(F.base.w / F.imgs[i].w, F.base.h / F.imgs[i].h)) < 1e-6));
 
 function fitHtml(F) {
-    if (!F.base || !F.boxes) return F.boxes === undefined ? '<div class="tw-sub">크기 재는 중…</div>' : '';
+    if (!F.base || !F.boxes) return F.boxes === undefined ? LX('<div class="tw-sub">크기 재는 중…</div>', '<div class="tw-sub">Measuring…</div>') : '';
     const like = fitRef(F).d < FIT_LIKE;
     const pct = Math.round((F.scale || 1) * 100);
     const k = fitKOf(F);
-    return `<div class="tw-row"><span class="tw-cap tw-grow">키 맞추기</span><select data-fitmode="1">
-  <option value="auto"${F.mode === 'auto' ? ' selected' : ''}>자동 (${like ? '키 맞춤' : '지금 크기'})</option>
-  <option value="fit"${F.mode === 'fit' ? ' selected' : ''}>기본 그림과 키 같게</option>
-  <option value="off"${F.mode === 'off' ? ' selected' : ''}>맞추지 않음</option></select></div>
-<div class="tw-sub">${F.mode === 'off' ? '펫 칸에 맞춰 줄여 넣어요 (예전 방식).' : like || F.mode === 'fit' ? '그림 속 키가 기본 그림 속 키와 같아지게 맞춰요.' : '기본 그림과 모양이 달라서(누운 그림 등) 지금 보이는 크기에서 시작해요. 막대로 맞춰요.'}</div>`
+    return `<div class="tw-row"><span class="tw-cap tw-grow">${LX('키 맞추기', 'Match height')}</span><select data-fitmode="1">
+  <option value="auto"${F.mode === 'auto' ? ' selected' : ''}>${LX('자동 (', 'Auto (')}${like ? LX('키 맞춤', 'height match') : LX('지금 크기', 'current size')})</option>
+  <option value="fit"${F.mode === 'fit' ? ' selected' : ''}>${LX('기본 그림과 키 같게', 'Same height as basic picture')}</option>
+  <option value="off"${F.mode === 'off' ? ' selected' : ''}>${LX('맞추지 않음', 'Don’t match')}</option></select></div>
+<div class="tw-sub">${F.mode === 'off' ? LX('펫 칸에 맞춰 줄여 넣어요 (예전 방식).', 'Shrinks it to fit the pet box (the old way).') : like || F.mode === 'fit' ? LX('그림 속 키가 기본 그림 속 키와 같아지게 맞춰요.', 'Scales it so its height matches the basic picture.') : LX('기본 그림과 모양이 달라서(누운 그림 등) 지금 보이는 크기에서 시작해요. 막대로 맞춰요.', 'It’s shaped differently from the basic picture (lying down, etc.), so it starts at the current size. Adjust with the slider.')}</div>`
         + (k > 0 ? `<div class="tw-fitprev"><img class="tw-fit-base" alt=""><img class="tw-fit-ref" alt=""></div>
-<div class="tw-row"><span class="tw-sub">크기</span><input type="range" min="30" max="200" step="5" value="${pct}" data-fitscale="1" class="tw-grow"><span class="tw-sub tw-fitpct">${pct}%</span></div>
-<div class="tw-sub">흐린 그림이 지금 기본 그림이에요.${F.prev ? ' 크기를 여러 번 바꾸면 그림이 조금씩 흐려질 수 있어요.' : ''}</div>` : '');
+<div class="tw-row"><span class="tw-sub">${LX('크기', 'Size')}</span><input type="range" min="30" max="200" step="5" value="${pct}" data-fitscale="1" class="tw-grow"><span class="tw-sub tw-fitpct">${pct}%</span></div>
+<div class="tw-sub">${LX('흐린 그림이 지금 기본 그림이에요.', 'The faded picture is the current basic picture.')}${F.prev ? LX(' 크기를 여러 번 바꾸면 그림이 조금씩 흐려질 수 있어요.', ' Resizing many times can make the picture slightly blurry.') : ''}</div>` : '');
 }
 
 /** The preview: the reference picture over the 기본 picture, standing on the same ground, at screen scale. */
@@ -8323,7 +8354,7 @@ function onFitInput(t, change) {
 /** The pictures as they will go in: fitted if 키 맞추기 says so. */
 async function fittedImgs(F, imgs) {
     if (!F || fitIdle(F)) return imgs;
-    say('키 맞추는 중…');
+    say(LX('키 맞추는 중…', 'Matching height…'));
     const out = await fitWithK(imgs, fitKOf(F));
     return imgs.map(im => out.get(im));
 }
@@ -8347,7 +8378,7 @@ async function openRefit() {
         }
         await measureFit(F);
     } catch (e) {
-        if (win.refit === F) { win.refit = null; if (box) box.hidden = true; say('그림을 읽지 못했어요: ' + (e.message || e)); }
+        if (win.refit === F) { win.refit = null; if (box) box.hidden = true; say(LX('그림을 읽지 못했어요: ', 'Couldn’t read the picture: ') + (e.message || e)); }
         return;
     }
     if (win.refit !== F) return;
@@ -8372,7 +8403,7 @@ async function confirmRefit() {
     const uploaded = [];
     try {
         if (F.mode === 'off') {                                   // back to squeezed into the box: just drop the mark
-            if (!was.some(Boolean)) { closeRefit(); return say('바꿀 게 없어요.'); }
+            if (!was.some(Boolean)) { closeRefit(); return say(LX('바꿀 게 없어요.', 'Nothing to change.')); }
             imgs = [];
             for (const im of F.imgs) {
                 const c = await cleanCanvas(im.dataUrl);
@@ -8380,10 +8411,10 @@ async function confirmRefit() {
                 imgs.push({ base64: dataUrl.split(',')[1], dataUrl, w: c.w, h: c.h });
             }
         } else {
-            if (fitIdle(F)) { closeRefit(); return say('바꿀 게 없어요.'); }
+            if (fitIdle(F)) { closeRefit(); return say(LX('바꿀 게 없어요.', 'Nothing to change.')); }
             imgs = await fittedImgs(F, F.imgs);
         }
-        say('그림 올리는 중…');
+        say(LX('그림 올리는 중…', 'Uploading picture…'));
         const res = await Promise.allSettled(imgs.map((im) => {
             const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
             return uploadFile(`tavvy_role_${id}.png`, im.base64);
@@ -8391,7 +8422,7 @@ async function confirmRefit() {
         for (const r of res) if (r.status === 'fulfilled') uploaded.push(r.value);
         const bad = res.find(r => r.status === 'rejected');
         if (bad) throw bad.reason;
-        if (curPet() !== p || win.roleEdit !== F.key || win.refit !== F) throw new Error('창이 바뀌었어요');
+        if (curPet() !== p || win.roleEdit !== F.key || win.refit !== F) throw new Error(LX('창이 바뀌었어요', 'The window changed'));
         const olds = F.imgs.map(im => im.path);
         win.refit = null;
         const ok = await changeRoles(p, (look) => {
@@ -8401,11 +8432,11 @@ async function confirmRefit() {
             if (F.mode === 'off' || Math.round((F.scale || 1) * 100) === 100) delete o.fitPct; else o.fitPct = Math.round(F.scale * 100);
             look.roleOpts[F.key] = o;
         });
-        say(ok ? '크기를 맞췄어요.' : '바꿨지만 저장이 늦어지고 있어요.');
+        say(ok ? LX('크기를 맞췄어요.', 'Size adjusted.') : LX('바꿨지만 저장이 늦어지고 있어요.', 'Changed, but saving is slow.'));
     } catch (e) {
         console.error('[Tavvy] refit failed', e);
         for (const f of uploaded) if (!fileInUse(f)) deleteFile(f);
-        say('크기를 바꾸지 못했어요: ' + (e.message || e));
+        say(LX('크기를 바꾸지 못했어요: ', 'Couldn’t resize: ') + (e.message || e));
     } finally {
         busy = false;
     }
@@ -8415,7 +8446,7 @@ async function confirmRefit() {
 async function putRoleFrames(p, key, imgs, skipped) {
     const uploaded = [];
     try {
-        say(imgs.length > 1 ? `그림 ${imgs.length}장 올리는 중…` : '그림 올리는 중…');
+        say(imgs.length > 1 ? LX(`그림 ${imgs.length}장 올리는 중…`, `Uploading ${imgs.length} pictures…`) : LX('그림 올리는 중…', 'Uploading picture…'));
         const res = await Promise.allSettled(imgs.map((im) => {
             const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
             return uploadFile(`tavvy_role_${id}.png`, im.base64);
@@ -8423,13 +8454,13 @@ async function putRoleFrames(p, key, imgs, skipped) {
         for (const r of res) if (r.status === 'fulfilled') uploaded.push(r.value);
         const bad = res.find(r => r.status === 'rejected');
         if (bad) throw bad.reason;
-        if (curPet() !== p || win.roleEdit !== key) throw new Error('창이 바뀌었어요');
+        if (curPet() !== p || win.roleEdit !== key) throw new Error(LX('창이 바뀌었어요', 'The window changed'));
         const ok = await changeRoles(p, (look) => { look.roles[key] = [...(look.roles[key] || []), ...uploaded]; });
-        say((ok ? `${uploaded.length}장 넣었어요.` : '넣었지만 저장이 늦어지고 있어요.') + (skipped ? ` (${FRAMES_MAX}장이 넘어서 ${skipped}장은 뺐어요)` : ''));
+        say((ok ? LX(`${uploaded.length}장 넣었어요.`, `Added ${uploaded.length}.`) : LX('넣었지만 저장이 늦어지고 있어요.', 'Added, but saving is slow.')) + (skipped ? LX(` (${FRAMES_MAX}장이 넘어서 ${skipped}장은 뺐어요)`, ` (over ${FRAMES_MAX}, so ${skipped} left out)`) : ''));
     } catch (e) {
         console.error('[Tavvy] role pictures failed', e);
         for (const f of uploaded) if (!fileInUse(f)) deleteFile(f);
-        say('그림을 넣지 못했어요: ' + (e.message || e));
+        say(LX('그림을 넣지 못했어요: ', 'Couldn’t add the pictures: ') + (e.message || e));
     }
 }
 
@@ -8449,7 +8480,7 @@ async function delRoleFrame(i) {
     busy = true;
     try {
         await changeRoles(p, (look) => { look.roles[key] = list.filter((_, j) => j !== i); });
-        say('그림을 뺐어요.');
+        say(LX('그림을 뺐어요.', 'Picture removed.'));
     } finally { busy = false; }
 }
 
@@ -8475,7 +8506,7 @@ async function setRoleOpt(name, value) {
             if (name === 'facing') { if (['front', 'left', 'right'].includes(value)) o.facing = value; else delete o.facing; }
             look.roleOpts[key] = o;
         });
-        say('바꿨어요.');
+        say(LX('바꿨어요.', 'Changed.'));
     } finally { busy = false; }
 }
 
@@ -8485,32 +8516,32 @@ function dateRowHtml(d) {
     const [m, day] = String(d.md || '01-01').split('-').map(Number);
     return `<div class="tw-date" data-date="${esc(d.id)}">
   <select data-dk>${Object.entries(DATE_KINDS).map(([k, v]) => `<option value="${k}"${d.kind === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
-  <select data-dm>${Array.from({ length: 12 }, (_, i) => `<option value="${i + 1}"${m === i + 1 ? ' selected' : ''}>${i + 1}월</option>`).join('')}</select>
-  <select data-dd>${Array.from({ length: 31 }, (_, i) => `<option value="${i + 1}"${day === i + 1 ? ' selected' : ''}>${i + 1}일</option>`).join('')}</select>
-  <div class="tw-icon tw-icon-small" data-deldate title="지우기"><i class="fa-solid fa-xmark"></i></div>
-  <input data-dmsg maxlength="${LINE_MAX}" placeholder="축하 말 (비우면 성격에 맞는 기본 말)" value="${esc(d.msg || '')}">
+  <select data-dm>${Array.from({ length: 12 }, (_, i) => `<option value="${i + 1}"${m === i + 1 ? ' selected' : ''}>${LX(`${i + 1}월`, EN_MON[i])}</option>`).join('')}</select>
+  <select data-dd>${Array.from({ length: 31 }, (_, i) => `<option value="${i + 1}"${day === i + 1 ? ' selected' : ''}>${i + 1}${LX('일', '')}</option>`).join('')}</select>
+  <div class="tw-icon tw-icon-small" data-deldate title="${LX('지우기', 'Delete')}"><i class="fa-solid fa-xmark"></i></div>
+  <input data-dmsg maxlength="${LINE_MAX}" placeholder="${LX('축하 말 (비우면 성격에 맞는 기본 말)', 'Message (empty = default line for its personality)')}" value="${esc(d.msg || '')}">
 </div>`;
 }
 
 function talkHtml(p) {
     const met = dayKey(p.createdAt || Date.now()).slice(5).split('-').map(Number);
     return `<div class="tw-form">
-  <label class="tw-label">말하는 빈도
+  <label class="tw-label">${LX('말하는 빈도', 'How often it talks')}
     <select data-t="freq">${Object.entries(TALK_FREQ).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
   </label>
-  <div class="tw-sub">순간마다 한 줄에 하나씩 적어요. 여러 줄이면 그때그때 하나를 골라 펫 머리 위 말풍선으로 말해요. <b>{{user}}</b>는 내 이름으로, <b>{{pet}}</b>은 상대 펫 이름으로 바뀌어요. 바로 뒤 조사(은/는·이/가 등)는 이름에 맞게 저절로 바뀌어요. 한 줄은 ${LINE_MAX}자까지예요.</div>
-  ${TALK_MOMENTS.map(m => `<label class="tw-label">${esc(m.name)}<textarea data-line="${m.key}" rows="2" placeholder="예) ${esc(m.ex)}"></textarea></label>`).join('')}
-  <div class="tw-btn tw-wide" data-act="aifill"><i class="fa-solid fa-wand-magic-sparkles"></i> AI로 빈 칸 채우기</div>
-  <div class="tw-sub">누를 때만 한 번 만들어요. AI에게는 펫 이름과 성격만 보내요. 마음에 안 드는 줄은 저장하기 전에 고치거나 지우면 돼요.</div>
+  <div class="tw-sub">${LX('순간마다 한 줄에 하나씩 적어요. 여러 줄이면 그때그때 하나를 골라 펫 머리 위 말풍선으로 말해요.', 'Write one line per row for each moment. With several, one is picked each time and said in a bubble above the pet.')} <b>{{user}}</b>${LX('는 내 이름으로,', ' becomes your name,')} <b>{{pet}}</b>${LX('은 상대 펫 이름으로 바뀌어요. 바로 뒤 조사(은/는·이/가 등)는 이름에 맞게 저절로 바뀌어요. 한 줄은', ' becomes the other pet’s name. A line can be up to')} ${LINE_MAX}${LX('자까지예요.', ' characters.')}</div>
+  ${TALK_MOMENTS.map(m => `<label class="tw-label">${esc(m.name)}<textarea data-line="${m.key}" rows="2" placeholder="${LX('예)', 'e.g.')} ${esc(m.ex)}"></textarea></label>`).join('')}
+  <div class="tw-btn tw-wide" data-act="aifill"><i class="fa-solid fa-wand-magic-sparkles"></i> ${LX('AI로 빈 칸 채우기', 'Fill empty slots with AI')}</div>
+  <div class="tw-sub">${LX('누를 때만 한 번 만들어요. AI에게는 펫 이름과 성격만 보내요. 마음에 안 드는 줄은 저장하기 전에 고치거나 지우면 돼요.', 'Runs once, only when pressed. Only the pet’s name and personality are sent to the AI. Edit or delete lines you don’t like before saving.')}</div>
 ${duetHtml(p)}
 
-  <div class="tw-cap">기념일</div>
-  <label class="tw-check"><input type="checkbox" data-t="met"> 만난 날(${met[0]}월 ${met[1]}일)도 매년 축하하기</label>
+  <div class="tw-cap">${LX('기념일', 'Anniversary')}</div>
+  <label class="tw-check"><input type="checkbox" data-t="met"> ${LX(`만난 날(${met[0]}월 ${met[1]}일)도 매년 축하하기`, `Also celebrate the day we met (${EN_MON[met[0] - 1]} ${met[1]}) every year`)}</label>
   <div class="tw-dates"></div>
-  <div class="tw-btn tw-btn-small" data-act="adddate"><i class="fa-solid fa-plus"></i> 날짜 넣기</div>
-  <div class="tw-sub">매년 그날 침대 옆에 "할 말이 있어!"가 떠요. 깨우면 색깔 ✦ 속에서 춤추고 축하 말을 해요. 그날 못 만나면 7일 안에 "늦었지만…" 하고 해 줘요.</div>
+  <div class="tw-btn tw-btn-small" data-act="adddate"><i class="fa-solid fa-plus"></i> ${LX('날짜 넣기', 'Add a date')}</div>
+  <div class="tw-sub">${LX('매년 그날 침대 옆에', 'Every year on that day,')} "${LX('할 말이 있어!', 'Something to say!')}"${LX('가 떠요. 깨우면 색깔 ✦ 속에서 춤추고 축하 말을 해요. 그날 못 만나면 7일 안에', ' shows by the bed. Wake it and it dances in colorful ✦ and says its message. If you miss the day, within 7 days it says')} "${LX('늦었지만…', 'A bit late, but…')}" ${LX('하고 해 줘요.', 'first.')}</div>
 
-  <div class="tw-btn tw-btn-main tw-wide" data-act="savetalk">저장</div>
+  <div class="tw-btn tw-btn-main tw-wide" data-act="savetalk">${LX('저장', 'Save')}</div>
   <div class="tw-msg"></div>
 </div>`;
 }
@@ -8566,8 +8597,8 @@ async function saveTalk() {
     const p = curPet();
     if (!p || busy) return;
     if (readOnly) return say(readOnlyReason);
-    if (!ready) return say('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 눌러 주세요.');
-    if (!talkDirty()) return say('바뀐 게 없어요.');
+    if (!ready) return say(LX('실리태번이 아직 준비 중이에요. 잠시 뒤 다시 눌러 주세요.', 'SillyTavern is still getting ready. Try again in a moment.'));
+    if (!talkDirty()) return say(LX('바뀐 게 없어요.', 'Nothing changed.'));
     const box = win.body.querySelector('[data-pane="talk"]');
     const long = TALK_MOMENTS.some(m => splitLines(box.querySelector(`[data-line="${m.key}"]`).value).some(x => x.length > LINE_MAX))
         || [...box.querySelectorAll('[data-duet]')].some(ta => splitLines(ta.value).some(x => x.replace(/^[^:：]{1,24}[:：]\s*/, '').length > LINE_MAX));
@@ -8588,7 +8619,7 @@ async function saveTalk() {
         if (!ok) saveSoon();
         fillTalk(p);
         renderPanel();
-        say((ok ? '저장했어요.' : '바꿨지만 저장이 늦어지고 있어요. 잠시 뒤 다시 저장돼요.') + (long ? ` (${LINE_MAX}자가 넘는 줄은 잘랐어요)` : ''));
+        say((ok ? LX('저장했어요.', 'Saved.') : LX('바꿨지만 저장이 늦어지고 있어요. 잠시 뒤 다시 저장돼요.', 'Changed, but saving is slow. It’ll save again shortly.')) + (long ? LX(` (${LINE_MAX}자가 넘는 줄은 잘랐어요)`, ` (lines over ${LINE_MAX} characters were cut)`) : ''));
     } finally { busy = false; }
 }
 
@@ -8610,7 +8641,7 @@ function roommates(p) {
 
 /** The names written before each line (two pets of the same name get ① ②). */
 function duetLabels(p, o) {
-    const a = String(p.name || '펫'), b = String(o.name || '펫');
+    const a = String(p.name || LX('펫', 'Pets')), b = String(o.name || LX('펫', 'Pets'));
     return a === b ? [a + '①', b + '②'] : [a, b];
 }
 
@@ -8644,11 +8675,11 @@ function parseDuet(text, p, o) {
 function duetHtml(p) {
     const others = roommates(p);
     if (!others.length) return '';
-    return `<div class="tw-cap">다른 펫과 나누는 대화</div>
-  <div class="tw-sub">같은 방 펫과 가까이 마주치거나 부딪히면, 위의 "말 걸 때 / 말 걸어 오면" 한 마디나 여기 적은 대화 중 하나를 주고받아요. 한 줄에 <b>이름: 말</b>, 대화 사이는 빈 줄이에요. 대화 하나는 ${DUET_LINES}줄까지, ${DUET_MAX}개까지 모여요. 다 쓰면 다시 섞어서 써요. 둘 중 하나라도 말하는 빈도가 "끔"이면 이 대화는 안 해요.</div>
-  ${others.map(o => { const [la, lb] = duetLabels(p, o); return `<label class="tw-label">${esc(josa(o.name, '과', '와'))}<textarea data-duet="${esc(o.id)}" rows="6" placeholder="${esc(`${la}: 또 자?\n${lb}: …응\n${la}: 나도 옆에서 잘래`)}"></textarea></label>
-  <div class="tw-btn tw-btn-small" data-act="aiduet" data-with="${esc(o.id)}"><i class="fa-solid fa-wand-magic-sparkles"></i> AI로 ${DUET_ADD}개 더 만들기</div>`; }).join('\n  ')}
-  <div class="tw-sub">누를 때만 한 번 만들어 아래에 붙여요. AI에게는 두 펫의 이름과 성격만 보내요. 저장을 눌러야 바뀌어요.</div>`;
+    return `<div class="tw-cap">${LX('다른 펫과 나누는 대화', 'Talks with other pets')}</div>
+  <div class="tw-sub">${LX('같은 방 펫과 가까이 마주치거나 부딪히면, 위의', 'When it meets or bumps into a pet in the same room, they trade one of the')} "${LX('말 걸 때 / 말 걸어 오면', 'Talking to another pet / When another pet talks to it')}" ${LX('한 마디나 여기 적은 대화 중 하나를 주고받아요. 한 줄에', 'lines above, or one of the talks written here. Write each line as')} <b>${LX('이름: 말', 'Name: line')}</b>${LX(', 대화 사이는 빈 줄이에요. 대화 하나는', ', with a blank line between talks. Each talk is up to')} ${DUET_LINES}${LX('줄까지,', ' lines, and up to')} ${DUET_MAX}${LX('개까지 모여요. 다 쓰면 다시 섞어서 써요. 둘 중 하나라도 말하는 빈도가', ' talks are kept. Once all are used, they’re shuffled again. If either pet’s talking frequency is')} "${LX('끔', 'Off')}"${LX('이면 이 대화는 안 해요.', ', these talks are skipped.')}</div>
+  ${others.map(o => { const [la, lb] = duetLabels(p, o); return `<label class="tw-label">${esc(LX(josa(o.name, '과', '와'), `With ${o.name}`))}<textarea data-duet="${esc(o.id)}" rows="6" placeholder="${esc(LX(`${la}: 또 자?\n${lb}: …응\n${la}: 나도 옆에서 잘래`, `${la}: Sleeping again?\n${lb}: …yeah\n${la}: Me too, right next to you`))}"></textarea></label>
+  <div class="tw-btn tw-btn-small" data-act="aiduet" data-with="${esc(o.id)}"><i class="fa-solid fa-wand-magic-sparkles"></i> ${LX('AI로', 'Make')} ${DUET_ADD}${LX('개 더 만들기', ' more with AI')}</div>`; }).join('\n  ')}
+  <div class="tw-sub">${LX('누를 때만 한 번 만들어 아래에 붙여요. AI에게는 두 펫의 이름과 성격만 보내요. 저장을 눌러야 바뀌어요.', 'Runs once, only when pressed, and adds them below. Only the two pets’ names and personalities are sent to the AI. Press Save to keep them.')}</div>`;
 }
 
 async function aiDuet(oid) {
@@ -8659,25 +8690,25 @@ async function aiDuet(oid) {
     const btn = box?.querySelector(`[data-act="aiduet"][data-with="${CSS.escape(oid)}"]`);
     if (!ta || !btn) return;
     const have = parseDuet(ta.value, p, o).length;
-    if (have >= DUET_MAX) return say(`대화는 ${DUET_MAX}개까지예요. 몇 개 지운 뒤 눌러 주세요.`);
+    if (have >= DUET_MAX) return say(`${LX('대화는', 'Up to')} ${DUET_MAX}${LX('개까지예요. 몇 개 지운 뒤 눌러 주세요.', ' talks. Delete a few, then press again.')}`);
     const want = Math.min(DUET_ADD, DUET_MAX - have);
     const label = btn.innerHTML;
     busy = true;
     btn.classList.add('tw-busy');
-    btn.textContent = '만드는 중…';
+    btn.textContent = LX('만드는 중…', 'Making…');
     say('');
     try {
         const kp = p.personality?.base, ko = o.personality?.base;
         const system = 'You write very short dialogues between two tiny pets that live on a chat app screen. Answer with JSON only, no other text.';
         const user = [
-            `펫 A: ${p.name} — 성격 ${persName(p)} (${PERS_DESC[kp] || ''})`,
-            `펫 B: ${o.name} — 성격 ${persName(o)} (${PERS_DESC[ko] || ''})`,
-            '두 펫은 채팅 앱 화면에 같이 사는 작은 동반자예요. 화면에서 마주쳤을 때 나눌 짧은 한국어 대화를 써 주세요.',
-            `- 대화 ${want}개, 하나는 2~${DUET_LINES}줄, A와 B가 번갈아 말하기 (누가 먼저든 괜찮아요)`,
-            '- 한 줄은 25자 안쪽, 반말, 두 펫의 성격이 잘 드러나게, 대화마다 다른 이야기',
-            '- 이모지는 가끔만',
-            '- 화면 앞의 사람을 부를 때는 {{user}}라고 쓰기',
-            'JSON으로만 답하기. 예: {"talks": [[["A", "…"], ["B", "…"]], [["B", "…"], ["A", "…"], ["B", "…"]]]}',
+            `${LX('펫 A:', 'Pet A:')} ${p.name} ${LX('— 성격', '— personality')} ${persName(p)} (${PERS_DESC[kp] || ''})`,
+            `${LX('펫 B:', 'Pet B:')} ${o.name} ${LX('— 성격', '— personality')} ${persName(o)} (${PERS_DESC[ko] || ''})`,
+            LX('두 펫은 채팅 앱 화면에 같이 사는 작은 동반자예요. 화면에서 마주쳤을 때 나눌 짧은 한국어 대화를 써 주세요.', 'The two pets are tiny companions living together on a chat app screen. Write short English dialogues they’d have when they run into each other on screen.'),
+            `${LX('- 대화', '-')} ${want}${LX('개, 하나는 2~', ' talks, each 2–')}${DUET_LINES}${LX('줄, A와 B가 번갈아 말하기 (누가 먼저든 괜찮아요)', ' lines, A and B taking turns (either may start)')}`,
+            LX('- 한 줄은 25자 안쪽, 반말, 두 펫의 성격이 잘 드러나게, 대화마다 다른 이야기', '- Each line under 35 characters, casual, showing both personalities, a different topic per talk'),
+            LX('- 이모지는 가끔만', '- Emoji only occasionally'),
+            LX('- 화면 앞의 사람을 부를 때는 {{user}}라고 쓰기', '- Refer to the person at the screen as {{user}}'),
+            LX('JSON으로만 답하기. 예: {"talks": [[["A", "…"], ["B", "…"]], [["B", "…"], ["A", "…"], ["B", "…"]]]}', 'Answer in JSON only. Example: {"talks": [[["A", "…"], ["B", "…"]], [["B", "…"], ["A", "…"], ["B", "…"]]]}'),
         ].join('\n');
         const { text, fellBack } = await askAI(system, user);
         if (curPet() !== p || !ta.isConnected) return;
@@ -8692,12 +8723,12 @@ async function aiDuet(oid) {
             if (lines.length >= 2) add.push(lines.join('\n'));
             if (add.length >= want) break;
         }
-        if (!add.length) return say('AI 답을 알아보지 못했어요. 한 번 더 눌러 보세요.');
+        if (!add.length) return say(LX('AI 답을 알아보지 못했어요. 한 번 더 눌러 보세요.', 'Couldn’t understand the AI’s answer. Try pressing again.'));
         ta.value = [ta.value.trim(), ...add].filter(Boolean).join('\n\n');
-        say(`대화 ${add.length}개를 붙였어요. 마음에 들면 저장을 눌러 주세요.${fellBack ? ' (고른 연결을 찾지 못해서 지금 연결로 만들었어요)' : ''}`);
+        say(`${LX(`대화 ${add.length}개를 붙였어요. 마음에 들면 저장을 눌러 주세요.`, `Added ${add.length} talk${add.length === 1 ? '' : 's'}. Press Save if you like them.`)}${fellBack ? LX(' (고른 연결을 찾지 못해서 지금 연결로 만들었어요)', ' (the chosen connection wasn’t found, so the current one was used)') : ''}`);
     } catch (e) {
         console.error('[Tavvy] AI talks failed', e);
-        say('대화를 만들지 못했어요: ' + (e?.cause?.message || e?.message || e));
+        say(LX('대화를 만들지 못했어요: ', 'Couldn’t make talks: ') + (e?.cause?.message || e?.message || e));
     } finally {
         busy = false;
         btn.classList.remove('tw-busy');
@@ -8708,11 +8739,11 @@ async function aiDuet(oid) {
 /* ---------- AI: fill in the empty moments (only when the button is pressed) ---------- */
 
 const TALK_PROMPT_MOMENTS = {
-    wake: '깨워서 침대에서 나왔을 때', sleep: '재워서 침대로 들어갈 때', pat: '쓰다듬어 줄 때',
-    meal: '밥(채팅 메시지)을 다 먹었을 때', play: '혼자 놀고 있을 때', wait: '상대의 답을 기다릴 때',
-    level: '사람과 한 단계 더 친해졌을 때', reunion: '며칠 만에 다시 만났을 때',
-    reply: '상대(캐릭터)의 답이 막 도착했을 때', sent: '사람이 방금 메시지를 보냈을 때',
-    greet: '같은 방에 사는 다른 펫에게 먼저 말을 걸 때', answer: '다른 펫이 말을 걸어 와서 대답할 때',
+    wake: LX('깨워서 침대에서 나왔을 때', 'woken up and getting out of bed'), sleep: LX('재워서 침대로 들어갈 때', 'put to bed and going in'), pat: LX('쓰다듬어 줄 때', 'being patted'),
+    meal: LX('밥(채팅 메시지)을 다 먹었을 때', 'finishing a meal (chat messages)'), play: LX('혼자 놀고 있을 때', 'playing alone'), wait: LX('상대의 답을 기다릴 때', 'waiting for the other side’s reply'),
+    level: LX('사람과 한 단계 더 친해졌을 때', 'getting one step closer to the person'), reunion: LX('며칠 만에 다시 만났을 때', 'meeting again after a few days'),
+    reply: LX('상대(캐릭터)의 답이 막 도착했을 때', 'the character’s reply just arrived'), sent: LX('사람이 방금 메시지를 보냈을 때', 'the person just sent a message'),
+    greet: LX('같은 방에 사는 다른 펫에게 먼저 말을 걸 때', 'starting a chat with another pet in the same room'), answer: LX('다른 펫이 말을 걸어 와서 대답할 때', 'answering when another pet talks to it'),
 };
 
 /** Ask the chosen connection (or the current one). Returns the text of the answer. */
@@ -8726,7 +8757,7 @@ async function askAI(system, user) {
             return { text: typeof r === 'string' ? r : String(r?.content ?? ''), fellBack: false };
         }
     }
-    if (typeof c.generateRaw !== 'function') throw new Error('이 실리태번 버전에서는 AI 대사 만들기를 쓸 수 없어요');
+    if (typeof c.generateRaw !== 'function') throw new Error(LX('이 실리태번 버전에서는 AI 대사 만들기를 쓸 수 없어요', 'This SillyTavern version can’t make AI lines'));
     const text = await c.generateRaw({ prompt: user, systemPrompt: system, responseLength: 800 });
     return { text: String(text ?? ''), fellBack: !!id };
 }
@@ -8743,27 +8774,27 @@ async function aiFill() {
     if (!p || busy) return;
     const box = win.body.querySelector('[data-pane="talk"]');
     const empty = TALK_MOMENTS.filter(m => !box.querySelector(`[data-line="${m.key}"]`).value.trim());
-    if (!empty.length) return say('빈 칸이 없어요. 새로 만들고 싶은 칸을 비운 뒤 눌러 주세요.');
+    if (!empty.length) return say(LX('빈 칸이 없어요. 새로 만들고 싶은 칸을 비운 뒤 눌러 주세요.', 'No empty slots. Clear the ones you want remade, then press again.'));
     const btn = box.querySelector('[data-act="aifill"]');
     const label = btn.innerHTML;
     busy = true;
     btn.classList.add('tw-busy');
-    btn.textContent = '만드는 중…';
+    btn.textContent = LX('만드는 중…', 'Making…');
     say('');
     try {
         const k = p.personality?.base;
         const system = 'You write very short speech lines for a tiny pet that lives on a chat app screen. Answer with JSON only, no other text.';
         const user = [
-            `펫 이름: ${p.name}`,
-            `성격: ${persName(p)} — ${PERS_DESC[k] || ''}`,
-            '이 펫은 채팅 앱 화면에 사는 작은 동반자예요. 아래 순간마다 펫이 머리 위 말풍선으로 할 짧은 한국어 대사를 3개씩 써 주세요.',
-            '- 한 줄은 25자 안쪽, 반말, 성격이 잘 드러나게',
-            '- 이모지는 가끔만',
-            '- 화면 앞의 사람을 부를 때는 {{user}}라고 쓰기',
-            ...(empty.some(m => m.key === 'greet' || m.key === 'answer' || m.key === 'night') ? ['- 다른 펫을 부를 때는 {{pet}}이라고 쓰기'] : []),
-            '순간:',
+            `${LX('펫 이름:', 'Pet name:')} ${p.name}`,
+            `${LX('성격:', 'Personality:')} ${persName(p)} — ${PERS_DESC[k] || ''}`,
+            LX('이 펫은 채팅 앱 화면에 사는 작은 동반자예요. 아래 순간마다 펫이 머리 위 말풍선으로 할 짧은 한국어 대사를 3개씩 써 주세요.', 'This pet is a tiny companion living on a chat app screen. For each moment below, write 3 short English lines the pet says in a speech bubble above its head.'),
+            LX('- 한 줄은 25자 안쪽, 반말, 성격이 잘 드러나게', '- Each line under 35 characters, casual, showing its personality'),
+            LX('- 이모지는 가끔만', '- Emoji only occasionally'),
+            LX('- 화면 앞의 사람을 부를 때는 {{user}}라고 쓰기', '- Refer to the person at the screen as {{user}}'),
+            ...(empty.some(m => m.key === 'greet' || m.key === 'answer' || m.key === 'night') ? [LX('- 다른 펫을 부를 때는 {{pet}}이라고 쓰기', '- Refer to the other pet as {{pet}}')] : []),
+            LX('순간:', 'Moments:'),
             ...empty.map(m => `${m.key}: ${TALK_PROMPT_MOMENTS[m.key]}`),
-            `JSON으로만 답하기. 예: {"${empty[0].key}": ["…", "…", "…"]}`,
+            `${LX('JSON으로만 답하기. 예: {', 'Answer in JSON only. Example: {')}"${empty[0].key}": ["…", "…", "…"]}`,
         ].join('\n');
         const { text, fellBack } = await askAI(system, user);
         if (curPet() !== p) return;
@@ -8777,11 +8808,11 @@ async function aiFill() {
             const ta = box.querySelector(`[data-line="${m.key}"]`);
             if (lines.length && !ta.value.trim()) { ta.value = lines.join('\n'); n++; }
         }
-        say(n ? `${n}칸을 채웠어요. 마음에 들면 저장을 눌러 주세요.${fellBack ? ' (고른 연결을 찾지 못해서 지금 연결로 만들었어요)' : ''}`
-            : 'AI 답을 알아보지 못했어요. 한 번 더 눌러 보세요.');
+        say(n ? LX(`${n}칸을 채웠어요. 마음에 들면 저장을 눌러 주세요.${fellBack ? ' (고른 연결을 찾지 못해서 지금 연결로 만들었어요)' : ''}`, `Filled ${n} slot${n === 1 ? '' : 's'}. Press Save if you like them.${fellBack ? ' (the chosen connection wasn’t found, so the current one was used)' : ''}`)
+            : LX('AI 답을 알아보지 못했어요. 한 번 더 눌러 보세요.', 'Couldn’t understand the AI’s answer. Try pressing again.'));
     } catch (e) {
         console.error('[Tavvy] AI lines failed', e);
-        say('대사를 만들지 못했어요: ' + (e?.cause?.message || e?.message || e));
+        say(LX('대사를 만들지 못했어요: ', 'Couldn’t make lines: ') + (e?.cause?.message || e?.message || e));
     } finally {
         busy = false;
         btn.classList.remove('tw-busy');
@@ -8797,7 +8828,7 @@ function addWandItem() {
     const item = document.createElement('div');
     item.id = 'tavvy-wand';
     item.className = 'list-group-item flex-container flexGap5';
-    item.innerHTML = '<div class="fa-solid fa-paw extensionsMenuExtensionButton"></div><span>펫 정보</span>';
+    item.innerHTML = LX('<div class="fa-solid fa-paw extensionsMenuExtensionButton"></div><span>펫 정보</span>', '<div class="fa-solid fa-paw extensionsMenuExtensionButton"></div><span>Pet info</span>');
     item.addEventListener('click', openInfoFromMenu);
     menu.appendChild(item);
     return true;
@@ -8810,7 +8841,7 @@ function renderPanel() {
     const r = $id('tavvy-room');
     if (r && root) {
         const here = residents();
-        const text = !room ? '열려 있는 채팅방이 없어요.' : here.length ? `이 방에 사는 펫: ${here.map(p => p.name).join(', ')}` : '이 방에는 아직 펫이 없어요.';
+        const text = !room ? LX('열려 있는 채팅방이 없어요.', 'No chat is open.') : here.length ? `${LX('이 방에 사는 펫:', 'Pets in this room:')} ${here.map(p => p.name).join(', ')}` : LX('이 방에는 아직 펫이 없어요.', 'No pets in this room yet.');
         if (r.textContent !== text) r.textContent = text;
     }
     refreshWin();
