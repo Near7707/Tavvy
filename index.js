@@ -4967,7 +4967,7 @@ function panelHtml() {
 }
 
 function bindPanel() {
-    const host = $id('extensions_settings2') || $id('extensions_settings');
+    const host = $id('extensions_settings') || $id('extensions_settings2');   // 0.11.1: left column first
     if (!host) return;
     host.insertAdjacentHTML('beforeend', panelHtml());
     $id('tavvy-open').addEventListener('click', () => openWin('home'));
