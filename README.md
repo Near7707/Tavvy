@@ -33,7 +33,7 @@ Tavvy speaks Korean and English. It uses Korean when SillyTavern's or your brows
 You can pick it yourself at the top of ⚙ Settings (**언어 · Language**); the change applies after you reload the page.
 Text you write yourself (pet names, lines, notes) is never translated. In English the starter pets are called Mochi · Barley · Button, and AI-written lines come out in English.
 
-## What it does (0.11.5)
+## What it does (0.11.6)
 
 - **Making a pet**: three starter pets (Mochi · Barley · Button) or one picture of your own (PNG · JPG). A plain one-color background, like white, is removed automatically (**Remove background**, with a strength slider in the preview). **Crop by hand** lets you cut just the character out of a bigger picture.
 - **Five base personalities**: Sweet · Prim · Easygoing · Grumpy · Aloof. Walking, dozing, greetings, eating and how it reacts to you all differ by personality.
@@ -62,8 +62,8 @@ Text you write yourself (pet names, lines, notes) is never translated. In Englis
 - **The whole chat is a stage**: the tops of message bubbles are ledges (in line-style chats, the borders between messages).
   - It hops up onto messages, walks along them, pauses at the edge and jumps off.
   - It scrolls with the message it's standing on; if the message leaves the screen, it disappears too and drops back in from the top a moment later.
-- **Waiting for replies**: while a reply is being written it sometimes climbs onto it and waits with a "?". It fidgets, hops, hums, or dozes if it takes long. When a long reply arrives it climbs up to look.
-- **Spacing out (loading)** (Actions tab): now and then it stops and a small loading wheel spins over its head for 2–7 seconds. It happens about three times as often while the AI is writing.
+- **Waiting for replies**: while a reply is being written it sometimes climbs onto it and waits with a "?". Every 7–12 seconds or so it takes a few steps, hums, or dozes if it takes long, and once in a while hops; otherwise it just waits. When a long reply arrives it climbs up to look.
+- **Spacing out (loading)** (Actions tab): now and then it stops and a small loading wheel spins over its head for 3–10 seconds. It happens about three times as often while the AI is writing.
 - **With two or more pets** (each one Off / Rarely / Normal / Often in the Actions tab; all just for show, nobody's records change):
   - **Bumping**: pets walking into each other sometimes bump and react by personality. **Going over to talk**: it walks over to another pet to chat.
   - **Good night**: when a nearby pet starts dozing, its neighbor says something (or reacts by personality if the "When another pet dozes" line is empty).

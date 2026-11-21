@@ -195,7 +195,9 @@ const TAP_MS = 350, TAP_MOVE = 10;   // a short touch that didn't move = a tap (
 const WHERE_AWAY = 5;           // min away from this screen
 const WHERE_CHANCE = 0.6;
 const STARE_CHANCE = 0.5;       // starting to write → comes over to look
-const WAIT_FIDGET = [3.5, 6];   // s — waiting for a reply: a little something this often
+const WAIT_FIDGET = [7, 12];    // s — waiting for a reply: a little something this often (0.11.6: was 3.5–6)
+const IDLE_SLOW = 1.3;          // 0.11.6: × each personality's idle pause
+const AFTER_FIDGET = [1.5, 3];   // s — rest after a fidget (0.11.6: was 0.4–1.2)
 const STROLL_TIME = [8, 20];    // s — climbing about on the screen this long
 const RAPID_TAPS = 3, RAPID_WINDOW = 1.5;   // this many taps within this many seconds = 연타
 const REVISIT_DAYS = 3;         // away this long → a little bubble by the bed
@@ -378,7 +380,7 @@ const VISIT_TO = ['idle', 'fidget', 'look', 'perch', 'read', 'walk'];   // what 
 const VISIT_WAIT = 8;
 // 0.10.12 여러 마리 더 · 멍 — each "× 빈도" is the 행동 탭 setting (끔 / 드물게 / 보통 / 자주)
 const ZONE_P = { musim: 0.09, neugut: 0.07, aegyo: 0.03, saechim: 0.035, simsul: 0.03 };   // 멍 (로딩 중): × 빈도, each "what next?"
-const ZONE_LEN = { musim: [4, 7], neugut: [3, 6], aegyo: [2, 3.2], saechim: [2, 3.5], simsul: [2, 3] };   // s
+const ZONE_LEN = { musim: [6, 10], neugut: [4.5, 9], aegyo: [3, 5], saechim: [3, 5], simsul: [3, 4.5] };   // s (0.11.6: 1.5× longer)
 const ZONE_GEN = 3;              // × while a reply is being written (같이 로딩 중)
 const NIGHT_FROM = ['idle', 'walk', 'perch', 'fidget', 'look', 'read', 'watch'];   // awake and not busy
 const NIGHT_P = 0.6;             // 잘 자: × 빈도 — a pet close by starts dozing
@@ -1468,7 +1470,7 @@ class Actor {
         this.p = PERSONALITIES[rec.personality?.base] || PERSONALITIES.aegyo;
         this.x = 0; this.y = 0; this.vx = 0; this.vy = 0;
         this.dir = 1;
-        this.state = 'idle'; this.t = 0; this.until = rand(...this.p.idle);
+        this.state = 'idle'; this.t = 0; this.until = rand(...this.p.idle) * IDLE_SLOW;
         this.air = false; this.next = null;
         this.held = false;
         this.tilt = 0; this.tiltv = 0; this.tiltT = 0;
@@ -2529,7 +2531,7 @@ class Actor {
             }
         }
         this.sqT = 1;
-        if (s === 'idle') { this.until = rand(...this.p.idle); this.tiltT = 0; }
+        if (s === 'idle') { this.until = rand(...this.p.idle) * IDLE_SLOW; this.tiltT = 0; }
         if (s === 'doze') { this.until = rand(...this.p.dozeLen) * (this.isFull() ? FULL_DOZE_LEN : 1); this.fxT = 0.6; }
         if (s === 'sniff') { this.fxT = 0; this.tiltT = 0; this.until = 0.75; }
         if (s === 'eat') { this.eatIdle = 0; this.tiltT = 0; if (this.side && this.eatFrom != null && Math.abs(this.eatFrom - this.x) > 8) this.dir = this.eatFrom > this.x ? 1 : -1; }
@@ -3570,7 +3572,7 @@ class Actor {
                         pose = this.role('eat', 'idle');
                         if (this.fxT < 3 && this.t > 0.3 + this.fxT * 0.45) { this.fxT++; this.frame++; this.sq = Math.min(this.sq, 0.93); }
                     }
-                    if (this.t > this.until) { this.sqT = 1; this.tiltT = 0; this.setState('idle'); this.until = rand(0.4, 1.2); }
+                    if (this.t > this.until) { this.sqT = 1; this.tiltT = 0; this.setState('idle'); this.until = rand(...AFTER_FIDGET); }
                     break;
                 }
                 case 'perch':                          // sitting on a message
@@ -3640,10 +3642,11 @@ class Actor {
                         this.wvT = rand(...WAIT_FIDGET);
                         const r = Math.random(), [L, R] = this.range();
                         const long = (performance.now() - gen.t0) / 1000 > 10;
+                        // 0.11.6: walk 30% · sway 25% · doze 15% (long waits) · hop 8% (rarest) · the rest just stands
                         if (r < 0.3 && R - L > 50) { this.walkTo(clamp(this.x + (Math.random() < 0.5 ? -1 : 1) * rand(25, 70), L, R)); break; }
-                        if (r < 0.5) { this.hopInPlace('wait'); break; }
-                        if (r < 0.65 && long) { this.setState('doze'); this.until = rand(3, 6); break; }
-                        if (r < 0.85) { this.wsw = 1.6; fx(this, '♪', 'tavvy-fx-small'); }
+                        if (r < 0.55 && r >= 0.3) { this.wsw = 1.6; fx(this, '♪', 'tavvy-fx-small'); break; }
+                        if (r < 0.7 && r >= 0.55 && long) { this.setState('doze'); this.until = rand(3, 6); break; }
+                        if (r >= 0.92) { this.hopInPlace('wait'); break; }
                     }
                     break;
                 }
