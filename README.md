@@ -33,7 +33,7 @@ Tavvy speaks Korean and English. It uses Korean when SillyTavern's or your brows
 You can pick it yourself at the top of ⚙ Settings (**언어 · Language**); the change applies after you reload the page.
 Text you write yourself (pet names, lines, notes) is never translated. In English the starter pets are called Mochi · Barley · Button, and AI-written lines come out in English.
 
-## What it does (0.11.4)
+## What it does (0.11.5)
 
 - **Making a pet**: three starter pets (Mochi · Barley · Button) or one picture of your own (PNG · JPG). A plain one-color background, like white, is removed automatically (**Remove background**, with a strength slider in the preview). **Crop by hand** lets you cut just the character out of a bigger picture.
 - **Five base personalities**: Sweet · Prim · Easygoing · Grumpy · Aloof. Walking, dozing, greetings, eating and how it reacts to you all differ by personality.
@@ -47,7 +47,7 @@ Text you write yourself (pet names, lines, notes) is never translated. In Englis
   - **Reaction style**: When woken · When patted · Reacting to you · When eating · Landing · bumping · When you send · When put to bed. Pick which personality it reacts like at each moment, and mix freely (e.g. 💢 like Grumpy when patted, ♥ like Sweet when it looks at you).
   - **Reset** puts everything back to the base personality.
 - **Home room**: a pet lives in the chat it was made in and only shows up there. In other rooms it's put to bed automatically.
-  - **Bring to this room**: open the room you want, find the pet under "Pets in other rooms" and move it. Records, closeness and waiting food come along.
+  - **Bring to this room**: open the room you want, find the pet under "Pets in other rooms" and move it. Records, closeness and waiting food come along. If you rename a chat, its pet follows by itself. A chat made with **Import chat** (a copy of the old one) is not followed (0.11.5) — move or copy the pet there if you want. Known limit: a chat imported into a different character may still be taken for a rename.
   - **Copy into this room**: makes one more of that pet here. Look, personality, lines and anniversaries are copied; turn on "Copy records and closeness too" to copy its history as well.
 - **Pet files and PNG cards** (Style tab → **Export**, and **Import** on the first screen):
   - **Pet file** (.json): a full backup with pictures and records. Importing it adds a new pet to the current room.

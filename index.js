@@ -650,6 +650,8 @@ function checkHome(pet, r) {
     if (sameI && sameN) return { here: true, changed: false };
     if (sameI && !sameN) {
         if (r.branch || h.branch) return { here: false, changed: false };   // a branch (here or at home) — don't follow automatically
+        // 0.11.5: an imported chat keeps the old one's integrity too. Follow only when the old chat is gone (= renamed).
+        if (copyCheck.get(copyKey(h, r)) !== 'renamed') return { here: false, changed: false };
         h.chatId = r.chatId;                                      // the chat was renamed
         return { here: true, changed: true };
     }
@@ -661,6 +663,40 @@ function checkHome(pet, r) {
         return { here: true, changed: false };
     }
     return { here: false, changed: false };
+}
+
+/* 0.11.5: same integrity, different name — renamed, or a copy (대화 불러오기)?
+ * Asked once per pair: is the pet's old chat still in this character's / group's chat list?
+ * Still there → a copy, the pet stays home. Gone → renamed, it follows. Can't tell → stays (safe). */
+const copyCheck = new Map();   // copyKey → 'copy' | 'renamed' (runtime only)
+const copyKey = (h, r) => `${h.chatId}\u0000${r.chatId}`;
+
+/** Chat names of the open character or group, or null if they can't be read. */
+async function chatNames() {
+    const c = ctx();
+    try {
+        if (c.groupId) {
+            const g = (c.groups || []).find(x => String(x.id) === String(c.groupId));
+            return Array.isArray(g?.chats) ? new Set(g.chats.map(String)) : null;
+        }
+        const ch = c.characters?.[c.characterId];
+        if (!ch?.avatar) return null;
+        const res = await fetch('/api/characters/chats', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ avatar_url: ch.avatar, simple: true }) });
+        if (!res.ok) return null;
+        const list = await res.json();
+        if (!Array.isArray(list)) return null;
+        return new Set(list.map(x => String(x?.file_name || '').replace(/\.jsonl$/i, '')));
+    } catch { return null; }
+}
+
+async function checkCopies(r) {
+    if (!r?.integrity || r.branch || !root) return;
+    const todo = root.pets.filter(p => p.home && !p.home.branch && p.home.integrity === r.integrity
+        && p.home.chatId !== r.chatId && !copyCheck.has(copyKey(p.home, r)));
+    if (!todo.length) return;
+    const names = await chatNames();
+    if (!names) return;                                           // can't tell → not remembered, asked again next visit
+    for (const p of todo) copyCheck.set(copyKey(p.home, r), names.has(p.home.chatId) ? 'copy' : 'renamed');
 }
 
 /** The address of the open room, to keep as a pet's home. */
@@ -5040,6 +5076,10 @@ async function onChatChanged() {
     // SillyTavern sometimes reports a chat change without really leaving (e.g. after the app was in the
     // background). Same room → keep pets as they are.
     if (sameRoom(next, room)) { measure(); refreshBed(); renderPanel(); return; }
+    if (next && root) {                                           // 0.11.5: renamed or a copy? (asks only when it matters)
+        await checkCopies(next);
+        if (!sameRoom(readRoom(), next)) return;                  // moved on meanwhile — that change handles it
+    }
     // A change to "no chat" can be a passing moment while the chat reloads → look again shortly.
     clearTimeout(roomRetry);
     if (!next) roomRetry = setTimeout(recheckRoom, 800);
