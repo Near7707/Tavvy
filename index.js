@@ -334,14 +334,12 @@ const DASH_SPEED = 650;          // px/s — 휙휙
 const DASH_HOLD = [0.4, 1.1];    // s — a stop between darts
 const GHOST_GAP = 0.045;         // s — one afterimage this often while darting
 
-/** 0.11.3 차원문: a swirling door standing on (x = centre, y = feet height above the floor), sized to the pet. */
+/** 0.11.3 차원문 (0.11.4: a glowing blue ring, dark inside): a door standing on (x = centre, y = feet height above the floor), sized to the pet. */
 function openDoor(a, x, y) {
     if (!layer) return null;
     const el = document.createElement('div');
     el.className = 'tavvy-portal';
-    el.dataset.theme = THEMES[root?.settings?.winTheme] ? root.settings.winTheme : 'theme';
-    el.innerHTML = '<i></i>';
-    const w = Math.max(22, a.w * 0.9), h = Math.max(32, a.h * 1.2);
+    const w = Math.max(16, a.h * 0.55), h = Math.max(28, a.h * 1.05);  // 0.11.4: 55% / 105% of its height
     Object.assign(el.style, { width: w + 'px', height: h + 'px', left: (x - w / 2 - stage.ox) + 'px', top: (stage.floorY - y - h + a.basePx - stage.oy) + 'px' });
     layer.insertBefore(el, a.el);
     requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('tavvy-portal-on')));
