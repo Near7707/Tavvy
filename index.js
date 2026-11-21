@@ -325,11 +325,33 @@ const CLIMB_PULL = 0.55;         // s — one pull up the screen (moving, then a
 const CLIMB_SLIP = 0.05;         // chance per pull to slip down a little
 
 // 0.7.13: ways to get about on the screen (펫마다 고름; several → one of them each time)
-const MOVES = { wall: LX('오르기', 'Climb'), fly: LX('날기', 'Fly'), dash: LX('휙휙', 'Dash') };
+const MOVES = { wall: LX('오르기', 'Climb'), fly: LX('날기', 'Fly'), dash: LX('휙휙', 'Dash'), portal: LX('차원문', 'Portal') };
+const PORTAL_OPEN = 0.3;         // s — 0.11.3 차원문: a door opening / closing (same as the CSS)
+const PORTAL_IN = 0.35;          // s — shrinking into it / growing out of the other one
+const PORTAL_GAP = 0.5;          // s — out of sight in between
 const FLY_TILT = 12;             // ° — leaning into where it floats
 const DASH_SPEED = 650;          // px/s — 휙휙
 const DASH_HOLD = [0.4, 1.1];    // s — a stop between darts
 const GHOST_GAP = 0.045;         // s — one afterimage this often while darting
+
+/** 0.11.3 차원문: a swirling door standing on (x = centre, y = feet height above the floor), sized to the pet. */
+function openDoor(a, x, y) {
+    if (!layer) return null;
+    const el = document.createElement('div');
+    el.className = 'tavvy-portal';
+    el.dataset.theme = THEMES[root?.settings?.winTheme] ? root.settings.winTheme : 'theme';
+    el.innerHTML = '<i></i>';
+    const w = Math.max(22, a.w * 0.9), h = Math.max(32, a.h * 1.2);
+    Object.assign(el.style, { width: w + 'px', height: h + 'px', left: (x - w / 2 - stage.ox) + 'px', top: (stage.floorY - y - h + a.basePx - stage.oy) + 'px' });
+    layer.insertBefore(el, a.el);
+    requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('tavvy-portal-on')));
+    return el;
+}
+function shutDoor(el) {
+    if (!el) return;
+    el.classList.remove('tavvy-portal-on');
+    setTimeout(() => el.remove(), PORTAL_OPEN * 1000 + 80);
+}
 
 /** The ways this pet gets about on the screen (0.8.2: may be none — each one is 끔 in the 행동 tab). */
 function movesOf(rec) {
@@ -1054,6 +1076,7 @@ const BASIC_ACTS = [
     { key: 'wall',   name: LX('화면 오르기', 'Climb the screen') },     // 0.8.2: was one row '화면 돌아다니기' ('screen') + chips in 꾸미기
     { key: 'fly',    name: LX('날기', 'Fly') },
     { key: 'dash',   name: LX('휙휙', 'Dash') },
+    { key: 'portal', name: LX('차원문', 'Portal') },              // 0.11.3: into a door, out of another one somewhere else
     { key: 'climb',  name: LX('말풍선 오르기', 'Climb messages') },
     { key: 'doze',   name: LX('졸기', 'Doze') },
     { key: 'hum',    name: LX('흥얼거리기', 'Humming') },       // 0.9.0
@@ -1546,7 +1569,7 @@ class Actor {
 
     /** Free to react to things (not held, flying, hidden, leaving…). */
     free() {
-        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear', 'greet', 'sniff', 'eat', 'nod', 'dance', 'roll', 'resist', 'gift', 'sleepy', 'stroll', 'fly'].includes(this.state);
+        return !this.held && !this.air && !['off', 'tuck', 'wave', 'crouch', 'appear', 'greet', 'sniff', 'eat', 'nod', 'dance', 'roll', 'resist', 'gift', 'sleepy', 'stroll', 'fly', 'portal'].includes(this.state);
     }
 
     /** Can a sparkle reaching it be eaten right now? (dozing → piled beside it; held / flying → waits nearby) */
@@ -1658,6 +1681,7 @@ class Actor {
         if (!MOVES[m]) { const list = movesOf(this.rec); m = list[Math.floor(Math.random() * list.length)] || 'wall'; }
         this.y = 0;
         if (m === 'wall') return this.setState('stroll');
+        if (m === 'portal') return this.startPortal();
         this.fmode = m;                                           // 날기 / 휙휙
         this.setState('fly');
     }
@@ -1711,6 +1735,37 @@ class Actor {
         if (this.t > this.until) this.flyEnd(); else this.flyPick(false);
     }
 
+    /** 0.11.3 차원문: a door opens on the floor a little way off; it walks in. */
+    startPortal() {
+        const [L, R] = this.range();
+        if (R - L < this.w) return this.setState('idle');
+        let side = this.dir || 1;
+        if ((side > 0 ? R - this.x : this.x - L) < this.w * 1.2) side = -side;
+        const x = clamp(this.x + side * this.w * rand(1.1, 1.8), L, Math.max(L, R));
+        this.y = 0;
+        this.setState('portal');
+        this.pt = { ph: 'open', k: 0, x, a: openDoor(this, x, 0), b: null, to: null };
+    }
+
+    /** Where it comes out: up in the air (then falls), on top of a message, or on the floor. */
+    portalOut() {
+        const L = stage.left + this.w / 2, R = Math.max(L, stage.right - this.w / 2);
+        const r = Math.random();
+        if (r < 0.4 && ledgesOn()) {
+            const ok = plats.filter(p => p.right - p.left > this.w * 1.4 && p.top > (stage.chatTop || 0) + this.h * 1.5 && p.top < stage.floorY - this.h);
+            if (ok.length) {
+                const p = ok[Math.floor(Math.random() * ok.length)];
+                return { k: 'perch', x: rand(p.left + this.w * 0.7, p.right - this.w * 0.7), y: stage.floorY - p.top + this.h * 0.1 };
+            }
+        }
+        const top = this.strollTop();
+        if (r < 0.65 && top > this.h * 2) return { k: 'air', x: rand(L, R), y: rand(this.h * 1.6, top) };
+        const [fl, fr] = this.range();
+        let x = rand(fl, Math.max(fl, fr));
+        if (Math.abs(x - this.x) < this.w * 2) x = clamp(this.x + (this.x - fl > fr - this.x ? -1 : 1) * this.w * rand(2, 4), fl, Math.max(fl, fr));
+        return { k: 'land', x, y: 0 };
+    }
+
     /** 휙휙: a fading copy of itself left behind. */
     ghost() {
         if (!layer || !this.el.isConnected) return;
@@ -1729,6 +1784,11 @@ class Actor {
         this.tilt = 0; this.tiltv = 0; this.tiltT = 0;
         this.body.style.transformOrigin = '';
         this.sgoal = null; this.fgoal = null;
+        if (this.pt) {                                            // 0.11.3 차원문: doors close, it is back in sight
+            shutDoor(this.pt.a); shutDoor(this.pt.b);
+            this.pt = null;
+            this.el.style.opacity = '';
+        }
     }
 
     /** Highest a pet may go on the screen (feet height above the floor). */
@@ -2419,7 +2479,7 @@ class Actor {
 
     setState(s) {
         if (this.big && s !== this.state) this.endBig();
-        if (this.wallOn && s !== 'stroll' && s !== 'fly') this.endWall();
+        if (this.wallOn && s !== 'stroll' && s !== 'fly' && s !== 'portal') this.endWall();
         this.state = s; this.t = 0;
         this.aside = false; this.cheering = false;
         if (this.zoneT > 0 || this.zoneEl) this.unzone();            // 0.10.12 멍: only while it lasts
@@ -2470,6 +2530,12 @@ class Actor {
             this.until = rand(...STROLL_TIME); this.fgoal = null;
             this.hold = this.fmode === 'dash' ? 0.2 : 0;
             this.flyPick(true);
+        }
+        if (s === 'portal') {                       // 0.11.3 차원문
+            this.wallOn = true;
+            this.plat = null; this.pr = null;
+            this.body.style.transformOrigin = '50% 65%';
+            this.tiltT = 0; this.walkPh = 0;
         }
         if (s === 'stroll') {                       // 화면 산책
             this.wallOn = true;
@@ -2800,6 +2866,7 @@ class Actor {
         this.el.remove();
         this.propEl?.remove();
         this.unzone();
+        if (this.pt) { shutDoor(this.pt.a); shutDoor(this.pt.b); this.pt = null; }
         for (const el of [...(this.boxEls || []), ...(this.xgEls || [])]) el.remove();
         this.boxEls = this.xgEls = null;
         if (this.sayEl) { const el = this.sayEl; this.sayEl = null; clearTimeout(this.sayTimer); setTimeout(() => el.remove(), 1400); }   // "잘 자…" stays a moment
@@ -2816,7 +2883,7 @@ class Actor {
         let shiver = 0, bob = 0, waddle = 0, breath = 0;
         let pose = this.role('idle');
 
-        if (this.state !== 'tuck' && this.scale < 1) this.scale = Math.min(1, this.scale + dt * 4);
+        if (this.state !== 'tuck' && this.state !== 'portal' && this.scale < 1) this.scale = Math.min(1, this.scale + dt * 4);
         if (this.eatT > 0) this.eatT -= dt;
         if (this.zoneT > 0) { this.zoneT -= dt; this.drawZone(); } else if (this.zoneEl) this.unzone();   // 0.10.12 멍
 
@@ -3310,6 +3377,82 @@ class Actor {
                     this.tiltT = clamp(this.fvx * 0.12, -FLY_TILT, FLY_TILT);
                     if (Math.abs(this.fvx) > 8) this.dir = this.fvx > 0 ? 1 : -1;
                     breath = 1;
+                    break;
+                }
+                case 'portal': {                       // 0.11.3 차원문: walk in … out of sight … out of another one
+                    const P = this.pt;
+                    if (!P || this.t > 20) {                             // safety net
+                        const up = this.y > 1;
+                        this.endWall(); this.scale = 1;
+                        if (up) this.strollDrop(); else this.setState('idle');
+                        break;
+                    }
+                    P.k += dt;
+                    if (P.ph === 'open') {
+                        pose = this.role('idle');
+                        if (Math.abs(P.x - this.x) > 3) this.dir = P.x > this.x ? 1 : -1;
+                        if (P.k >= PORTAL_OPEN) { P.ph = 'walk'; P.k = 0; }
+                        break;
+                    }
+                    if (P.ph === 'walk' || P.ph === 'out') {             // walking (in: to the door / out: a few steps away)
+                        const sp = this.p.speed * paceOf(this.rec);
+                        const tx = P.ph === 'walk' ? P.x : P.tx;
+                        const d = tx - this.x;
+                        if (P.ph === 'out') {
+                            const f = Math.min(1, P.k / PORTAL_IN);
+                            this.scale = 0.1 + 0.9 * f;
+                            this.el.style.opacity = String(f);
+                            if (f >= 1 && P.b) { shutDoor(P.b); P.b = null; }
+                        }
+                        if (Math.abs(d) <= sp * dt || (P.ph === 'out' && P.to.k !== 'land')) {
+                            if (P.ph === 'walk') { this.x = P.x; P.ph = 'in'; P.k = 0; break; }
+                            if (P.k < PORTAL_IN) { pose = this.role('idle'); break; }   // still coming out
+                            const k = P.to.k;
+                            this.endWall(); this.scale = 1;
+                            if (k === 'land') { this.y = 0; this.sq = 0.92; this.setState('idle'); }
+                            else this.strollDrop();                      // air: falls / message: settles onto it
+                            break;
+                        }
+                        this.dir = d > 0 ? 1 : -1;
+                        this.x += this.dir * sp * dt;
+                        const before = Math.floor(this.walkPh);
+                        this.walkPh += sp / 22 * dt;
+                        bob = Math.pow(Math.sin((this.walkPh % 1) * Math.PI), 0.7) * 4 * this.k * this.scale;
+                        waddle = Math.sin(this.walkPh * Math.PI) * 1.5;
+                        if (Math.floor(this.walkPh) !== before) this.frame++;
+                        pose = this.role('walk');
+                        break;
+                    }
+                    if (P.ph === 'in') {                                 // shrinking into the door
+                        const f = Math.min(1, P.k / PORTAL_IN);
+                        this.scale = 1 - 0.9 * f;
+                        this.el.style.opacity = String(1 - f);
+                        pose = this.role('walk');
+                        if (f >= 1) { shutDoor(P.a); P.a = null; P.ph = 'gap'; P.k = 0; }
+                        break;
+                    }
+                    if (P.ph === 'gap') {                                // out of sight
+                        pose = this.role('idle');
+                        if (P.k < PORTAL_GAP) break;
+                        P.to = this.portalOut();
+                        this.x = P.to.x; this.y = P.to.y;
+                        P.b = openDoor(this, P.to.x, P.to.y - (P.to.k === 'perch' ? this.h * 0.1 : 0));
+                        P.ph = 'wait'; P.k = 0;
+                        break;
+                    }
+                    if (P.ph === 'wait') {                               // the other door opening
+                        pose = this.role('idle');
+                        if (P.k < PORTAL_OPEN) break;
+                        let s = Math.random() < 0.5 ? -1 : 1;
+                        if (P.to.k === 'land') {
+                            const [fl, fr] = this.range();
+                            if ((s > 0 ? fr - this.x : this.x - fl) < this.w) s = -s;
+                            P.tx = clamp(this.x + s * this.w * 0.9, fl, Math.max(fl, fr));
+                        } else P.tx = this.x;
+                        this.dir = s;
+                        P.ph = 'out'; P.k = 0;
+                        break;
+                    }
                     break;
                 }
                 case 'stroll': {                       // 화면 산책 — anywhere on the screen, stays put while scrolling
@@ -8743,6 +8886,8 @@ const TALK_PROMPT_MOMENTS = {
     meal: LX('밥(채팅 메시지)을 다 먹었을 때', 'finishing a meal (chat messages)'), play: LX('혼자 놀고 있을 때', 'playing alone'), wait: LX('상대의 답을 기다릴 때', 'waiting for the other side’s reply'),
     level: LX('사람과 한 단계 더 친해졌을 때', 'getting one step closer to the person'), reunion: LX('며칠 만에 다시 만났을 때', 'meeting again after a few days'),
     reply: LX('상대(캐릭터)의 답이 막 도착했을 때', 'the character’s reply just arrived'), sent: LX('사람이 방금 메시지를 보냈을 때', 'the person just sent a message'),
+    late: LX('상대(캐릭터)의 답이 오래 걸려서 기다리다 지칠 때', 'the character’s reply is taking a long time'),
+    night: LX('같은 방에 사는 다른 펫이 옆에서 꾸벅꾸벅 졸 때', 'another pet in the same room is dozing off nearby'),
     greet: LX('같은 방에 사는 다른 펫에게 먼저 말을 걸 때', 'starting a chat with another pet in the same room'), answer: LX('다른 펫이 말을 걸어 와서 대답할 때', 'answering when another pet talks to it'),
 };
 

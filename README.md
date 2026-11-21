@@ -33,12 +33,12 @@ Tavvy speaks Korean and English. It uses Korean when SillyTavern's or your brows
 You can pick it yourself at the top of ⚙ Settings (**언어 · Language**); the change applies after you reload the page.
 Text you write yourself (pet names, lines, notes) is never translated. In English the starter pets are called Mochi · Barley · Button, and AI-written lines come out in English.
 
-## What it does (0.11.0)
+## What it does (0.11.3)
 
 - **Making a pet**: three starter pets (Mochi · Barley · Button) or one picture of your own (PNG · JPG). A plain one-color background, like white, is removed automatically (**Remove background**, with a strength slider in the preview). **Crop by hand** lets you cut just the character out of a bigger picture.
 - **Five base personalities**: Sweet · Prim · Easygoing · Grumpy · Aloof. Walking, dozing, greetings, eating and how it reacts to you all differ by personality.
 - **Free tuning (Actions tab)**: the personality is only a starting point; change anything per pet. Changes save right away.
-  - **Frequency** for each everyday behavior (Climb the screen · Fly · Dash · Climb messages · Doze · Humming · Looking around · Sit · Pretending to read · Sudden runs · Peekaboo · Roll · Reacting to you · Spacing out) and each learned one: **Off / Rarely / Normal / Often**. Normal follows the personality, Rarely is about half, Often about double.
+  - **Frequency** for each everyday behavior (Climb the screen · Fly · Dash · Portal · Climb messages · Doze · Humming · Looking around · Sit · Pretending to read · Sudden runs · Peekaboo · Roll · Reacting to you · Spacing out) and each learned one: **Off / Rarely / Normal / Often**. Normal follows the personality, Rarely is about half, Often about double.
   - **Walking speed**: Slow / Normal / Fast.
   - **How it treats you** (off at first):
     - **Tagging along**: tap the screen and it walks over there.
@@ -57,7 +57,7 @@ Text you write yourself (pet names, lines, notes) is never translated. In Englis
 - **Life on the floor** (above the input box): breathing, walking, dozing, dangling when held, falling when dropped.
   - Playing alone: humming, looking around, pretending to read (walking slowly along a message, looking down), sudden runs, peekaboo at the edge of the screen, rolling. All of these use the pictures it already has. Add a **Sit** picture and it sometimes sits down to rest.
   - **Climb the screen**: now and then it turns its back and climbs up the screen, pull by pull, then drops off, climbs back down, or lands on a message. It never naps on the screen. Turn it off with **Roam around the screen** in ⚙ Settings.
-  - **Fly · Dash**: choose per pet how it gets around on the screen (Actions tab). **Climb**, **Fly** (floats in soft curves, leaning the way it goes) or **Dash** (darts, stops, darts again, leaving afterimages). After a trip it waits for the **Rest between screen trips** (1 / 3 / 5 / 10 min) before going up again.
+  - **Fly · Dash · Portal**: choose per pet how it gets around on the screen (Actions tab). **Climb**, **Fly** (floats in soft curves, leaning the way it goes), **Dash** (darts, stops, darts again, leaving afterimages) or **Portal** (0.11.3: a swirling door opens on the floor, it walks in, and comes out of another door somewhere else — on the floor, on top of a message, or up in the air and drops down; the door takes its color from the Tavvy window theme; off at first). After a trip it waits for the **Rest between screen trips** (1 / 3 / 5 / 10 min) before going up again.
   - Once it dozes off it sleeps a good while; sending or receiving messages doesn't wake it (a tap does).
 - **The whole chat is a stage**: the tops of message bubbles are ledges (in line-style chats, the borders between messages).
   - It hops up onto messages, walks along them, pauses at the edge and jumps off.
