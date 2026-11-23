@@ -1381,7 +1381,7 @@ function volOf(key) {
     return clamp(Number(v) || 0, 0, 100);
 }
 
-let sndStuck = false;     // a wake-up during a touch did not work → next touch makes a new one
+let sndStuck = false;     // a wake-up during a touch did not work, or 0.11.10: we came back from away → next touch makes a new one
 
 /** During a real touch / click: wake the sound up (iPhone: a stuck one is thrown away and made again). */
 function sndWake() {
@@ -1401,7 +1401,7 @@ function sndWake() {
 /** Phones only allow sound after a touch: get it ready then (only when sound is on). */
 function sndOnTouch() {
     sndTouched = true;
-    if ((root?.settings?.soundOn || root?.settings?.replyOn) && sndCtx?.state !== 'running') sndWake();
+    if ((root?.settings?.soundOn || root?.settings?.replyOn) && (sndStuck || sndCtx?.state !== 'running')) sndWake();   // 0.11.10: iPhone can say 'running' and stay silent
 }
 
 /** test = a try-out button (plays even when sound is off or the same sound just played). rec = the pet (its own sound file, if any).
@@ -1412,7 +1412,7 @@ function playSound(key, k = 1, test = false, rec = null, pick = null) {
     if (!test && (!(key === 'reply' ? s.replyOn : s.soundOn) || !sndTouched)) return;   // 0.10.11: 답 도착은 따로 켜고 끔
     const now = performance.now() / 1000;
     if (!test && (now < sndBusyTill || now - (sndLast[key] || -99) < SND_GAP)) return;   // one at a time
-    if (test && sndCtx?.state !== 'running') sndWake();                 // try-out buttons are touches
+    if (test) { if (sndCtx) sndStuck = true; sndWake(); }              // try-out buttons are touches — 0.11.10: always a fresh one (fixes a silent iPhone)
     if (!sndReady()) return;
     sndOut.gain.value = volOf(key) / 100 * 0.6;
     sndLast[key] = now;
@@ -9223,7 +9223,7 @@ function onReady() {
     window.addEventListener('blur', dropAll);
     let awayAt = 0;                                  // 0.9.0: when this screen went out of sight
     const onReturn = () => {
-        if (document.hidden) { if (!awayAt) awayAt = Date.now(); return dropAll(); }
+        if (document.hidden) { if (!awayAt) awayAt = Date.now(); if (sndCtx) sndStuck = true; return dropAll(); }   // 0.11.10: sound is made again on the first touch back
         if (awayAt && Date.now() - awayAt >= WHERE_AWAY * 60000) setTimeout(whereAll, 1500);
         awayAt = 0;
         measure(); recheckRoom();

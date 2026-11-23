@@ -33,7 +33,7 @@ Tavvy speaks Korean and English. It uses Korean when SillyTavern's or your brows
 You can pick it yourself at the top of ⚙ Settings (**언어 · Language**); the change applies after you reload the page.
 Text you write yourself (pet names, lines, notes) is never translated. In English the starter pets are called Mochi · Barley · Button, and AI-written lines come out in English.
 
-## What it does (0.11.9)
+## What it does (0.11.10)
 
 - **Making a pet**: three starter pets (Mochi · Barley · Button) or one picture of your own (PNG · JPG). A plain one-color background, like white, is removed automatically (**Remove background**, with a strength slider in the preview). **Crop by hand** lets you cut just the character out of a bigger picture.
 - **Five base personalities**: Sweet · Prim · Easygoing · Grumpy · Aloof. Walking, dozing, greetings, eating and how it reacts to you all differ by personality. When it reacts to you, it looks at you for a moment first and holds the reaction a little; at most once every 30 seconds (0.11.7).
@@ -129,7 +129,7 @@ Text you write yourself (pet names, lines, notes) is never translated. In Englis
 - **Sounds** (⚙ Settings, off by default): **Reply arrival alert** and **Pet sounds** turn on separately.
   - Pet sounds: heart, wake, sleep, cheer, boop (bumping), mumble (pets chatting).
   - Reply arrival alert: plays when a new reply, regeneration, swipe or continue finishes (in rooms with a pet, even while it sleeps). The checked sounds out of 12 take turns; preview with ▶, and add up to 10 of your own sound files.
-  - Sounds are generated in code, need no files, with separate volumes for pet sounds and the reply sound (0.11.8). The 12 built-in reply sounds are level-matched. No sounds on other tabs; on phones they start after your first tap. iPhones in silent mode stay silent.
+  - Sounds are generated in code, need no files, with separate volumes for pet sounds and the reply sound (0.11.8). The 12 built-in reply sounds are level-matched. No sounds on other tabs; on phones they start after your first tap (after another app or the screen going off, the first tap makes the sound fresh — 0.11.10; if it is still silent, press a ▶ try-out button once). iPhones in silent mode stay silent.
   - **My sound**: in the Style tab, upload a sound file per pet (mp3 · wav · ogg · m4a, up to 3 s) to replace a sound.
 
 ## Where is my data stored?
