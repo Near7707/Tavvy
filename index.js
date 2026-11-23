@@ -345,7 +345,7 @@ function openDoor(a, x, y) {
     if (!layer) return null;
     const el = document.createElement('div');
     el.className = 'tavvy-portal';
-    const w = Math.max(16, a.h * 0.55), h = Math.max(28, a.h * 1.05);  // 0.11.4: 55% / 105% of its height
+    const w = Math.max(16, a.h * 0.47), h = Math.max(28, a.h * 0.9);    // 0.11.4: 55% / 105% of its height → 0.11.12: 90% tall, same shape
     Object.assign(el.style, { width: w + 'px', height: h + 'px', left: (x - w / 2 - stage.ox) + 'px', top: (stage.floorY - y - h + a.basePx - stage.oy) + 'px' });
     layer.insertBefore(el, a.el);
     requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('tavvy-portal-on')));
@@ -1602,6 +1602,7 @@ class Actor {
     fitStage() {
         this.resize();
         if (this.held || this.state === 'off') return;
+        if (this.state === 'portal' && this.pt?.ph === 'in') return;   // 0.11.12: walking through a door near the edge goes past it — don't pull it back (it got stuck)
         if (this.air) {
             const L = stage.left + this.w / 2, R = stage.right - this.w / 2;
             this.x = R > L ? clamp(this.x, L, R) : (stage.left + stage.right) / 2;
