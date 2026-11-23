@@ -351,12 +351,11 @@ function openDoor(a, x, y) {
     requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('tavvy-portal-on')));
     return el;
 }
-/** 0.11.9: the door lights up while it is walked through (g = 0 … 1). */
+/** 0.11.9: the door lights up while it is walked through (g = 0 … 1). 0.11.11: only a little (¼ of before, no white rim). */
 function glowDoor(el, g) {
     if (!el) return;
-    const b = 10 + g * 14, sp = 3 + g * 4;
+    const b = 10 + g * 3.5, sp = 3 + g * 1;
     el.style.boxShadow = g > 0.01 ? `0 0 ${b.toFixed(1)}px ${sp.toFixed(1)}px #6f86ff, inset 0 0 ${b.toFixed(1)}px ${sp.toFixed(1)}px #6f86ff` : '';
-    el.style.borderColor = g > 0.3 ? '#ffffff' : '';
 }
 function shutDoor(el) {
     if (!el) return;
@@ -1320,7 +1319,7 @@ const SOUNDS = {
         for (const f of [523, 659, 784]) sndTone(f, 0.45, { type: 'square', v: 0.07, k, lp: 2000, at: 0.3 });
     }],
     bump: [0.15, (k) => sndTone(720, 0.13, { to: 360, type: 'triangle', v: 0.35, k })],                       // 0.10.13 부딪힐 때 콩
-    chat: [0.3, (k) => [470, 560, 500].forEach((f, i) => sndTone(f, 0.08, { to: f * 1.1, type: 'triangle', v: 0.18, k, at: i * 0.1 }))],   // 0.10.13 펫끼리 말할 때 웅얼
+    chat: [0.3, (k) => [470, 560, 500].forEach((f, i) => sndTone(f, 0.08, { to: f * 1.1, type: 'triangle', v: 0.36, k, at: i * 0.1 }))],   // 0.10.13 펫끼리 말할 때 웅얼 (0.11.11: ×2, was too quiet)
 };
 
 // 0.10.11 답 도착 소리: 체크한 것만 답이 올 때마다 돌아가며. [key, 이름, 길이(초), play(k)]
