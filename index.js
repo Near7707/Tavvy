@@ -442,6 +442,7 @@ function defaultSettings() {
         replyOff: [],                          // 0.10.11 답 도착 소리 중 끈 것 (기본 소리 key / 내 파일 id)
         replyFiles: [],                        // 0.10.11 답 도착 내 소리 파일: [{ id, path, name }]
         soundVol: 60,                          // 0..100
+        replyVol: null,                        // 0.11.8 답 도착 음량 0..100 (null = same as soundVol until moved)
         lang: 'auto',                          // 0.11.0 'auto' / 'ko' / 'en' (applies after a reload)
         backup: { lastDay: null, files: [] },  // daily backups: [{ day, path, pets }]
     };
@@ -1320,16 +1321,17 @@ const REPLY_SOUNDS = [
     ['tok', LX('톡톡', 'Tap tap'), 0.21, (k) => { sndTone(1200, 0.07, { v: 0.35, k }); sndTone(1200, 0.07, { v: 0.3, k, at: 0.12 }); }],
     ['boing', LX('뽀롱', 'Pop'), 0.32, (k) => { sndTone(500, 0.15, { to: 900, v: 0.35, k }); sndTone(900, 0.18, { to: 1400, v: 0.3, k, at: 0.12 }); }],
     ['marimba', LX('마림바', 'Marimba'), 0.46, (k) => { sndTone(659, 0.22, { v: 0.4, k }); sndTone(523, 0.3, { v: 0.4, k, at: 0.14 }); }],
-    ['arrive', LX('도착', 'Arrival'), 0.37, (k) => { sndTone(1047, 0.1, { type: 'square', v: 0.08, k, lp: 1800 }); sndTone(1319, 0.25, { type: 'square', v: 0.08, k, lp: 1800, at: 0.1 }); }],
-    ['orgel', LX('오르골', 'Music box'), 1.14, (k) => { sndTone(1568, 0.6, { v: 0.18, k }); sndTone(2093, 0.6, { v: 0.15, k, at: 0.16 }); sndTone(1760, 0.8, { v: 0.15, k, at: 0.32 }); }],
-    ['whistle', LX('휘파람', 'Whistle'), 0.56, (k) => { sndTone(900, 0.25, { to: 1300, v: 0.22, k, atk: 0.06 }); sndTone(1300, 0.3, { to: 1000, v: 0.22, k, atk: 0.03, at: 0.24 }); }],
+    ['arrive', LX('도착', 'Arrival'), 0.37, (k) => { sndTone(1047, 0.1, { type: 'square', v: 0.26, k, lp: 1800 }); sndTone(1319, 0.25, { type: 'square', v: 0.26, k, lp: 1800, at: 0.1 }); }],   // 0.11.8: was 0.08 (too quiet)
+    ['orgel', LX('오르골', 'Music box'), 1.14, (k) => { sndTone(1568, 0.6, { v: 0.32, k }); sndTone(2093, 0.6, { v: 0.27, k, at: 0.16 }); sndTone(1760, 0.8, { v: 0.27, k, at: 0.32 }); }],   // 0.11.8: ×1.8
+    ['whistle', LX('휘파람', 'Whistle'), 0.56, (k) => { sndTone(900, 0.25, { to: 1300, v: 0.33, k, atk: 0.06 }); sndTone(1300, 0.3, { to: 1000, v: 0.33, k, atk: 0.03, at: 0.24 }); }],   // 0.11.8: ×1.5
     ['bubble', LX('뾱', 'Boop'), 0.11, (k) => sndTone(300, 0.09, { to: 1200, v: 0.4, k })],
     ['letter', LX('편지 종', 'Letter bell'), 1.02, (k) => {
         sndTone(880, 0.6, { v: 0.25, k }); sndTone(1760, 0.3, { v: 0.06, k });
         sndTone(660, 0.7, { v: 0.25, k, at: 0.3 }); sndTone(1320, 0.3, { v: 0.05, k, at: 0.3 });
     }],
-    ['trill', LX('피리릭', 'Flute'), 0.25, (k) => { [1568, 1760, 2093].forEach((f, i) => sndTone(f, 0.09, { type: 'square', v: 0.06, k, lp: 2400, at: i * 0.07 })); }],
-    ['sparkle', LX('반짝', 'Twinkle'), 0.34, (k) => { [2093, 2637, 3136].forEach((f, i) => sndTone(f, 0.18, { v: 0.1, k, at: i * 0.07 })); }],
+    // 0.11.8: 도착·피리릭·반짝 3~4×, 오르골 1.8×, 휘파람 1.5× — they were much quieter than the rest
+    ['trill', LX('피리릭', 'Flute'), 0.25, (k) => { [1568, 1760, 2093].forEach((f, i) => sndTone(f, 0.09, { type: 'square', v: 0.26, k, lp: 2400, at: i * 0.07 })); }],
+    ['sparkle', LX('반짝', 'Twinkle'), 0.34, (k) => { [2093, 2637, 3136].forEach((f, i) => sndTone(f, 0.18, { v: 0.32, k, at: i * 0.07 })); }],
 ];
 const REPLY_FILES_MAX = 10;
 let replyLast = '';
@@ -1361,6 +1363,13 @@ function sndReady() {
     // 0.10.8: iPhone also has 'interrupted' (after another app / the screen going off) — wake it from any not-running state
     if (sndCtx.state !== 'running') sndCtx.resume().catch(() => {});
     return true;
+}
+
+/** 0.11.8: the reply sound has its own volume (starts at the pet-sound volume). */
+function volOf(key) {
+    const s = root?.settings || {};
+    const v = key === 'reply' ? (s.replyVol ?? s.soundVol ?? 60) : (s.soundVol ?? 60);
+    return clamp(Number(v) || 0, 0, 100);
 }
 
 let sndStuck = false;     // a wake-up during a touch did not work → next touch makes a new one
@@ -1396,7 +1405,7 @@ function playSound(key, k = 1, test = false, rec = null, pick = null) {
     if (!test && (now < sndBusyTill || now - (sndLast[key] || -99) < SND_GAP)) return;   // one at a time
     if (test && sndCtx?.state !== 'running') sndWake();                 // try-out buttons are touches
     if (!sndReady()) return;
-    sndOut.gain.value = clamp(Number(s.soundVol ?? 60), 0, 100) / 100 * 0.6;
+    sndOut.gain.value = volOf(key) / 100 * 0.6;
     sndLast[key] = now;
     let path = rec?.sounds?.[key], len = def[0], play = def[1];
     if (key === 'reply' && typeof path !== 'string') {                  // 0.10.11: 그 펫의 내 소리가 없으면 설정의 답 도착 소리
@@ -6285,8 +6294,9 @@ function settingsHtml() {
   <div class="tw-row"><div class="tw-btn tw-btn-small" data-act="replyup">${LX('내 소리 올리기', 'Upload my sound')}</div><span class="tw-sub">mp3 · wav · ogg · m4a, ${SND_MAX_SEC}${LX('초까지,', ' s max,')} ${REPLY_FILES_MAX}${LX('개까지', ' files max')}</span></div>
   <input type="file" accept="${SND_ACCEPT}" data-f="replyfile">
   <div class="tw-msg tw-replymsg"></div>
+  <div class="tw-row"><span class="tw-sub">${LX('답 도착 음량', 'Reply volume')}</span><input type="range" min="0" max="100" step="5" data-s="replyVol" class="tw-grow"><span class="tw-sub tw-volpct" data-pct="replyVol"></span></div>
   <label class="tw-check"><input type="checkbox" data-s="soundOn"> ${LX('펫 소리 (♥ · 깨우기 · 재우기 · 축하 · 콩 · 웅얼)', 'Pet sounds (♥ · wake · sleep · cheer · boop · mumble)')}</label>
-  <div class="tw-row"><span class="tw-sub">${LX('음량', 'Volume')}</span><input type="range" min="0" max="100" step="5" data-s="soundVol" class="tw-grow"><span class="tw-sub tw-volpct"></span></div>
+  <div class="tw-row"><span class="tw-sub">${LX('펫 소리 음량', 'Pet sound volume')}</span><input type="range" min="0" max="100" step="5" data-s="soundVol" class="tw-grow"><span class="tw-sub tw-volpct" data-pct="soundVol"></span></div>
   <div class="tw-sub">${LX('다른 탭을 보고 있을 땐 소리가 나지 않아요. 폰은 화면을 한 번 누른 뒤부터 나요.', 'No sounds while you’re on another tab. On phones, sounds start after you tap the screen once.')}</div>
 
   <div class="tw-cap">${LX('대사', 'Lines')}</div>
@@ -6325,10 +6335,12 @@ function fillSettings() {
     box.querySelector('[data-s="heartMode"]').value = s.heartMode || 'both';
     box.querySelector('[data-s="soundOn"]').checked = !!s.soundOn;
     box.querySelector('[data-s="replyOn"]').checked = !!s.replyOn;
-    const vol = box.querySelector('[data-s="soundVol"]');
-    vol.value = clamp(Number(s.soundVol ?? 60), 0, 100);
-    vol.disabled = !s.soundOn && !s.replyOn;
-    box.querySelector('.tw-volpct').textContent = `${vol.value}%`;
+    for (const [k, on] of [['soundVol', s.soundOn], ['replyVol', s.replyOn]]) {   // 0.11.8: two volumes
+        const vol = box.querySelector(`[data-s="${k}"]`);
+        vol.value = volOf(k === 'replyVol' ? 'reply' : 'heart');
+        vol.disabled = !on;
+        box.querySelector(`[data-pct="${k}"]`).textContent = `${vol.value}%`;
+    }
     box.querySelectorAll('[data-theme-pick]').forEach(t => t.classList.toggle('tw-on', t.dataset.themePick === (THEMES[s.winTheme] ? s.winTheme : 'theme')));
     // connection profiles (only when SillyTavern's Connection Manager is there)
     const profiles = connectionProfiles();
@@ -7623,12 +7635,12 @@ function onWinInput(e) {
         if (s === 'heartMode') return setSetting(s, ['both', 'hearts', 'name', 'hide'].includes(t.value) ? t.value : 'both');
         if (s === 'talkProfile') return setSetting(s, String(t.value || ''));
         if (s === 'lang') return setSetting(s, ['ko', 'en'].includes(t.value) ? t.value : 'auto');
-        if (s === 'soundVol') { setSetting(s, clamp(Math.round(Number(t.value) || 0), 0, 100)); fillSettings(); return playSound(root.settings.soundOn || !root.settings.replyOn ? 'heart' : 'reply', 1, true); }
+        if (s === 'soundVol' || s === 'replyVol') { setSetting(s, clamp(Math.round(Number(t.value) || 0), 0, 100)); fillSettings(); return playSound(s === 'soundVol' ? 'heart' : 'reply', 1, true); }
         setSetting(s, t.checked);
         if (s === 'soundOn' || s === 'replyOn') { fillSettings(); if (t.checked) { sndTouched = true; playSound(s === 'soundOn' ? 'heart' : 'reply', 1, true); } }
         return;
     }
-    if (s === 'soundVol') { const pct = win.body.querySelector('.tw-volpct'); if (pct) pct.textContent = `${t.value}%`; }
+    if (s === 'soundVol' || s === 'replyVol') { const pct = win.body.querySelector(`[data-pct="${s}"]`); if (pct) pct.textContent = `${t.value}%`; }
 }
 
 /* ---------- 0.10.0 선물 tab: pictures you give the pet ---------- */
