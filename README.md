@@ -33,7 +33,7 @@ Tavvy speaks Korean and English. It uses Korean when SillyTavern's or your brows
 You can pick it yourself at the top of ⚙ Settings (**언어 · Language**); the change applies after you reload the page.
 Text you write yourself (pet names, lines, notes) is never translated. In English the starter pets are called Mochi · Barley · Button, and AI-written lines come out in English.
 
-## What it does (0.11.8)
+## What it does (0.11.9)
 
 - **Making a pet**: three starter pets (Mochi · Barley · Button) or one picture of your own (PNG · JPG). A plain one-color background, like white, is removed automatically (**Remove background**, with a strength slider in the preview). **Crop by hand** lets you cut just the character out of a bigger picture.
 - **Five base personalities**: Sweet · Prim · Easygoing · Grumpy · Aloof. Walking, dozing, greetings, eating and how it reacts to you all differ by personality. When it reacts to you, it looks at you for a moment first and holds the reaction a little; at most once every 30 seconds (0.11.7).
@@ -57,7 +57,7 @@ Text you write yourself (pet names, lines, notes) is never translated. In Englis
 - **Life on the floor** (above the input box): breathing, walking, dozing, dangling when held, falling when dropped.
   - Playing alone: humming, looking around, pretending to read (walking slowly along a message, looking down), sudden runs, peekaboo at the edge of the screen, rolling. All of these use the pictures it already has. Add a **Sit** picture and it sometimes sits down to rest.
   - **Climb the screen**: now and then it turns its back and climbs up the screen, pull by pull, then drops off, climbs back down, or lands on a message. It never naps on the screen. Turn it off with **Roam around the screen** in ⚙ Settings.
-  - **Fly · Dash · Portal**: choose per pet how it gets around on the screen (Actions tab). **Climb**, **Fly** (floats in soft curves, leaning the way it goes), **Dash** (darts, stops, darts again, leaving afterimages) or **Portal** (0.11.3: a swirling door opens on the floor, it walks in, and comes out of another door somewhere else — on the floor, on top of a message, or up in the air and drops down; the door is a glowing blue ring, dark inside; off at first). After a trip it waits for the **Rest between screen trips** (1 / 3 / 5 / 10 min) before going up again.
+  - **Fly · Dash · Portal**: choose per pet how it gets around on the screen (Actions tab). **Climb**, **Fly** (floats in soft curves, leaning the way it goes), **Dash** (darts, stops, darts again, leaving afterimages) or **Portal** (0.11.3: a swirling door opens on the floor, it walks in (0.11.9: walks right through it — gone past the door's middle with a soft edge, the door lights up and the pet wobbles a little), and comes out of another door somewhere else — on the floor, on top of a message, or up in the air and drops down; the door is a glowing blue ring, dark inside; off at first). After a trip it waits for the **Rest between screen trips** (1 / 3 / 5 / 10 min) before going up again.
   - Once it dozes off it sleeps a good while; sending or receiving messages doesn't wake it (a tap does).
 - **The whole chat is a stage**: the tops of message bubbles are ledges (in line-style chats, the borders between messages).
   - It hops up onto messages, walks along them, pauses at the edge and jumps off.

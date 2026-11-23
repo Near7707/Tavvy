@@ -333,6 +333,8 @@ const MOVES = { wall: LX('오르기', 'Climb'), fly: LX('날기', 'Fly'), dash: 
 const PORTAL_OPEN = 0.3;         // s — 0.11.3 차원문: a door opening / closing (same as the CSS)
 const PORTAL_IN = 0.35;          // s — shrinking into it / growing out of the other one
 const PORTAL_GAP = 0.5;          // s — out of sight in between
+const PORTAL_SOFT = 0.3;         // 0.11.9: soft edge where it walks into the door (× its width)
+const PORTAL_WOB = 0.06;         // 0.11.9: a little wobble going through (± height)
 const FLY_TILT = 12;             // ° — leaning into where it floats
 const DASH_SPEED = 650;          // px/s — 휙휙
 const DASH_HOLD = [0.4, 1.1];    // s — a stop between darts
@@ -348,6 +350,13 @@ function openDoor(a, x, y) {
     layer.insertBefore(el, a.el);
     requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('tavvy-portal-on')));
     return el;
+}
+/** 0.11.9: the door lights up while it is walked through (g = 0 … 1). */
+function glowDoor(el, g) {
+    if (!el) return;
+    const b = 10 + g * 14, sp = 3 + g * 4;
+    el.style.boxShadow = g > 0.01 ? `0 0 ${b.toFixed(1)}px ${sp.toFixed(1)}px #6f86ff, inset 0 0 ${b.toFixed(1)}px ${sp.toFixed(1)}px #6f86ff` : '';
+    el.style.borderColor = g > 0.3 ? '#ffffff' : '';
 }
 function shutDoor(el) {
     if (!el) return;
@@ -1791,7 +1800,7 @@ class Actor {
         const x = clamp(this.x + side * this.w * rand(1.1, 1.8), L, Math.max(L, R));
         this.y = 0;
         this.setState('portal');
-        this.pt = { ph: 'open', k: 0, x, a: openDoor(this, x, 0), b: null, to: null };
+        this.pt = { ph: 'open', k: 0, x, s: x >= this.x ? 1 : -1, a: openDoor(this, x, 0), b: null, to: null };
     }
 
     /** Where it comes out: up in the air (then falls), on top of a message, or on the floor. */
@@ -1836,6 +1845,14 @@ class Actor {
             this.pt = null;
             this.el.style.opacity = '';
         }
+        this.portalMask(null);
+    }
+
+    /** 0.11.9 차원문: the part past the door's middle line is out of sight (cut = { E: line x, s: walking side }); null = all back. */
+    portalMask(cut) {
+        this.pcut = cut;
+        this.wobY = 0;
+        if (!cut) { this.el.style.webkitMaskImage = this.el.style.maskImage = ''; }
     }
 
     /** Highest a pet may go on the screen (feet height above the floor). */
@@ -2915,6 +2932,7 @@ class Actor {
         this.propEl?.remove();
         this.unzone();
         if (this.pt) { shutDoor(this.pt.a); shutDoor(this.pt.b); this.pt = null; }
+        this.pcut = null;
         for (const el of [...(this.boxEls || []), ...(this.xgEls || [])]) el.remove();
         this.boxEls = this.xgEls = null;
         if (this.sayEl) { const el = this.sayEl; this.sayEl = null; clearTimeout(this.sayTimer); setTimeout(() => el.remove(), 1400); }   // "잘 자…" stays a moment
@@ -3444,7 +3462,7 @@ class Actor {
                     }
                     if (P.ph === 'walk' || P.ph === 'out') {             // walking (in: to the door / out: a few steps away)
                         const sp = this.p.speed * paceOf(this.rec);
-                        const tx = P.ph === 'walk' ? P.x : P.tx;
+                        const tx = P.ph === 'walk' ? P.x - P.s * this.w / 2 : P.tx;   // 0.11.9: to where its front touches the door's middle
                         const d = tx - this.x;
                         if (P.ph === 'out') {
                             const f = Math.min(1, P.k / PORTAL_IN);
@@ -3453,7 +3471,7 @@ class Actor {
                             if (f >= 1 && P.b) { shutDoor(P.b); P.b = null; }
                         }
                         if (Math.abs(d) <= sp * dt || (P.ph === 'out' && P.to.k !== 'land')) {
-                            if (P.ph === 'walk') { this.x = P.x; P.ph = 'in'; P.k = 0; break; }
+                            if (P.ph === 'walk') { this.x = tx; P.ph = 'in'; P.k = 0; P.x0 = tx; this.portalMask({ E: P.x, s: P.s }); break; }
                             if (P.k < PORTAL_IN) { pose = this.role('idle'); break; }   // still coming out
                             const k = P.to.k;
                             this.endWall(); this.scale = 1;
@@ -3471,12 +3489,25 @@ class Actor {
                         pose = this.role('walk');
                         break;
                     }
-                    if (P.ph === 'in') {                                 // shrinking into the door
-                        const f = Math.min(1, P.k / PORTAL_IN);
-                        this.scale = 1 - 0.9 * f;
-                        this.el.style.opacity = String(1 - f);
+                    if (P.ph === 'in') {                                 // 0.11.9: walking on through the door — gone past its middle line
+                        const sp = this.p.speed * paceOf(this.rec);
+                        const go = this.w * (1 + PORTAL_SOFT);
+                        this.dir = P.s;
+                        this.x += P.s * sp * dt;
+                        const f = Math.min(1, (this.x - P.x0) * P.s / go);
+                        const before = Math.floor(this.walkPh);
+                        this.walkPh += sp / 22 * dt;
+                        bob = Math.pow(Math.sin((this.walkPh % 1) * Math.PI), 0.7) * 4 * this.k;
+                        waddle = Math.sin(this.walkPh * Math.PI) * 1.5;
+                        if (Math.floor(this.walkPh) !== before) this.frame++;
                         pose = this.role('walk');
-                        if (f >= 1) { shutDoor(P.a); P.a = null; P.ph = 'gap'; P.k = 0; }
+                        this.wobY = Math.sin(f * Math.PI * 3) * PORTAL_WOB;
+                        glowDoor(P.a, Math.sin(f * Math.PI));
+                        if (f >= 1) {
+                            this.el.style.opacity = '0';
+                            this.portalMask(null);
+                            shutDoor(P.a); P.a = null; P.ph = 'gap'; P.k = 0;
+                        }
                         break;
                     }
                     if (P.ph === 'gap') {                                // out of sight
@@ -3860,7 +3891,20 @@ class Actor {
             if (hid <= 0 && this.state !== 'hide') { this.clipEdge = null; this.el.style.clipPath = ''; }
             else { const v = Math.max(0, hid).toFixed(1); this.el.style.clipPath = ce.s < 0 ? `inset(-200% -200% -200% ${v}px)` : `inset(-200% ${v}px -200% -200%)`; }
         }
-        this.body.style.transform = `rotate(${((this.tilt + waddle) * TILT_K + this.spin).toFixed(2)}deg) scale(${(sx * this.scale).toFixed(3)}, ${(sy * this.scale).toFixed(3)})`;
+        const pc = this.pcut;                                                     // 0.11.9 차원문: soft edge at the door's middle
+        if (pc) {
+            const c = pc.E - left, soft = this.w * PORTAL_SOFT, O = 2000;          // a wide mask so name tags etc. are not cut off elsewhere
+            const g = pc.s > 0
+                ? `linear-gradient(to right, #000 ${(O + c - soft).toFixed(1)}px, transparent ${(O + c).toFixed(1)}px)`
+                : `linear-gradient(to right, transparent ${(O + c).toFixed(1)}px, #000 ${(O + c + soft).toFixed(1)}px)`;
+            const st = this.el.style;
+            st.webkitMaskImage = st.maskImage = g;
+            st.webkitMaskSize = st.maskSize = `${O * 2}px 100%`;
+            st.webkitMaskPosition = st.maskPosition = `${-O}px 0`;
+            st.webkitMaskRepeat = st.maskRepeat = 'repeat-y';
+        }
+        const wy = this.wobY || 0;                                                // 0.11.9: a little wobble through the door
+        this.body.style.transform = `rotate(${((this.tilt + waddle) * TILT_K + this.spin).toFixed(2)}deg) scale(${(sx * (1 - wy * 0.83) * this.scale).toFixed(3)}, ${(sy * (1 + wy) * this.scale).toFixed(3)})`;
         const look = this.rec.look;
         const list = pose && pose.length ? pose : look.roles.idle;
         const rk = roleKeyOf(look, list);
