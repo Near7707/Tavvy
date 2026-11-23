@@ -158,7 +158,9 @@ const LEVELS = [
 ];
 const CLOSE = 50;               // closeness from which "친하면" reactions show (friends)
 const ME_SCALE = 0.3;           // "react to you" chance × this when it decides by itself
-const ME_REST = 15;             // s — not twice in a row within this
+const ME_REST = 30;             // s — not twice in a row within this (0.11.7: was 15)
+const ME_LOOK = 1.2;            // s — 0.11.7: it just looks at you this long before reacting
+const ME_HOLD = 0.6;            // s — 0.11.7: and stays like that a little after
 // 0.9.0: everyday behaviours of their own (no new pictures needed). Chance each time it decides what's next (× 빈도).
 const NEW_ACTS = { hum: 0.07, scan: 0.08, sit: 0.07, peek: 0.04, roll: 0.04 };
 // 0.10.0 선물 주기: pictures you give a pet — now and then it takes one out
@@ -2587,6 +2589,7 @@ class Actor {
             this.until = can(this, 'soft')
                 ? { saechim: 1.2, neugut: 1.5, simsul: 1.1, musim: 1.1 }[kindOf(this, 'me')] || 1.0
                 : { aegyo: 1.0, saechim: close ? 1.9 : 1.1, neugut: 1.4, simsul: close ? 1.5 : 1.0, musim: 0.8 }[kindOf(this, 'me')] || 1.2;
+            this.until += ME_LOOK + ME_HOLD;   // 0.11.7
         }
         const k = kindOf(this, 'me');
         if (s === 'peekin') { this.fxT = 0; this.until = { aegyo: 1.5, neugut: 1.8, simsul: 1.7 }[k] || 1.4; }
@@ -3706,43 +3709,45 @@ class Actor {
                     breath = 1;
                     const k = kindOf(this, 'me'), close = closenessOf(this.rec) >= CLOSE, d = this.side ? this.dir : 1;
                     pose = this.role('look', 'idle');
-                    if (k !== 'aegyo' && can(this, 'soft')) {           // 내편: one layer softer
+                    const t = this.t - ME_LOOK;                          // 0.11.7: a good look at you first
+                    if (t < 0) this.tiltT = d * 3;
+                    else if (k !== 'aegyo' && can(this, 'soft')) {           // 내편: one layer softer
                         if (k === 'saechim') {                           // no turning away — a small ♥ right away
                             this.tiltT = d * 4;
-                            if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '♥', 'tavvy-fx-small'); }
+                            if (this.fxT === 0 && t > 0.2) { this.fxT = 1; fx(this, '♥', 'tavvy-fx-small'); }
                         } else if (k === 'simsul') {                     // no 💢 — just ♥
                             this.tiltT = 0; pose = this.role('happy', 'idle');
-                            if (this.fxT === 0 && this.t > 0.1) { this.fxT = 1; fx(this, '♥'); }
+                            if (this.fxT === 0 && t > 0.1) { this.fxT = 1; fx(this, '♥'); }
                         } else if (k === 'musim') {                      // stays, sometimes a ♥
                             this.tiltT = d * 3;
-                            if (this.fxT === 0 && this.t > 0.1) { this.fxT = 1; fx(this, '…'); }
-                            if (this.meHeart && this.fxT === 1 && this.t > 0.6) { this.fxT = 2; fx(this, '♥', 'tavvy-fx-small'); }
+                            if (this.fxT === 0 && t > 0.1) { this.fxT = 1; fx(this, '…'); }
+                            if (this.meHeart && this.fxT === 1 && t > 0.6) { this.fxT = 2; fx(this, '♥', 'tavvy-fx-small'); }
                         } else {                                         // 느긋: ♪, a small ♥, then a happy doze
                             this.tiltT = d * 3;
-                            if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '♪'); }
-                            if (this.fxT === 1 && this.t > 0.75) { this.fxT = 2; fx(this, '♥', 'tavvy-fx-small'); }
+                            if (this.fxT === 0 && t > 0.2) { this.fxT = 1; fx(this, '♪'); }
+                            if (this.fxT === 1 && t > 0.75) { this.fxT = 2; fx(this, '♥', 'tavvy-fx-small'); }
                         }
                     } else if (k === 'aegyo') {                                 // ♥♥ 통통
                         pose = this.role('happy', 'idle'); this.tiltT = 0;
-                        bob = Math.abs(Math.sin(this.t * Math.PI * 2.5)) * 6 * this.k;
-                        if (this.fxT === 0 && this.t > 0.05) { this.fxT = 1; fx(this, '♥'); }
-                        if (this.fxT === 1 && this.t > 0.45) { this.fxT = 2; fx(this, '♥'); }
+                        bob = Math.abs(Math.sin(t * Math.PI * 2.5)) * 6 * this.k;
+                        if (this.fxT === 0 && t > 0.05) { this.fxT = 1; fx(this, '♥'); }
+                        if (this.fxT === 1 && t > 0.45) { this.fxT = 2; fx(this, '♥'); }
                     } else if (k === 'saechim') {                        // looks… turns away (close: looks back, small ♥)
-                        this.tiltT = this.t < 0.6 ? d * 5 : close && this.t > 1.2 ? d * 4 : -d * 9;
-                        if (this.t >= 0.6 && !(close && this.t > 1.2)) pose = this.rp('flick');
-                        if (close && this.fxT === 0 && this.t > 1.3) { this.fxT = 1; fx(this, '♥', 'tavvy-fx-small'); }
+                        this.tiltT = t < 0.6 ? d * 5 : close && t > 1.2 ? d * 4 : -d * 9;
+                        if (t >= 0.6 && !(close && t > 1.2)) pose = this.rp('flick');
+                        if (close && this.fxT === 0 && t > 1.3) { this.fxT = 1; fx(this, '♥', 'tavvy-fx-small'); }
                     } else if (k === 'neugut') {                         // looks, ♪ (then dozes off)
                         this.tiltT = d * 3;
-                        if (this.fxT === 0 && this.t > 0.2) { this.fxT = 1; fx(this, '♪'); }
+                        if (this.fxT === 0 && t > 0.2) { this.fxT = 1; fx(this, '♪'); }
                     } else if (k === 'simsul') {                         // 💢 (close: then ♥)
-                        if (this.fxT === 0 && this.t > 0.1) { this.fxT = 1; fx(this, '💢'); }
-                        if (close && this.fxT === 1 && this.t > 0.9) { this.fxT = 2; fx(this, '♥'); }
+                        if (this.fxT === 0 && t > 0.1) { this.fxT = 1; fx(this, '💢'); }
+                        if (close && this.fxT === 1 && t > 0.9) { this.fxT = 2; fx(this, '♥'); }
                         this.tiltT = this.fxT === 2 ? 0 : -d * 4;
                         if (this.fxT === 2) pose = this.role('happy', 'idle');
                         else if (this.fxT === 1) pose = this.rp('angry');
                     } else {                                             // 무심: "…" (then backs off)
                         this.tiltT = 0;
-                        if (this.fxT === 0 && this.t > 0.1) { this.fxT = 1; fx(this, '…'); }
+                        if (this.fxT === 0 && t > 0.1) { this.fxT = 1; fx(this, '…'); }
                     }
                     if (this.t > this.until) this.endMe();
                     break;
@@ -7527,6 +7532,7 @@ function onWinClick(e) {
     if (act === 'refit') return openRefit();
     if (act === 'refitok') return confirmRefit();
     if (act === 'refitno') return closeRefit();
+    if (act === 'copyprompt') return void copyPrompt();
     if (act === 'sheetall') return win.body.querySelector('[data-f="sheetfile"]')?.click();
     if (act === 'sheetok') return confirmSheet();
     if (act === 'sheetno') { win.sheet = null; return drawRoles(); }
@@ -7894,6 +7900,34 @@ function lookNote(p) {
     return LX('여기 넣은 그림은 이 펫에게 들어가요.', 'Pictures added here go to this pet.');
 }
 
+// 0.11.7: an example to copy into a picture AI (Tavvy itself never calls one)
+const AI_PIC_PROMPT = `Sprite sheet of one small chibi character: [describe your character here].
+Same character in every frame, full body, same size and scale.
+4 columns x 3 rows grid, clear empty space between frames,
+plain white background, no text, no numbers.
+Row 1: standing (front), walking (side view) x2, sleeping
+Row 2: happy, angry, surprised, curious
+Row 3: sitting, eating, looking up, waving`;
+
+function aiPromptHtml() {
+    return `<details class="tw-fold" data-group="aiprompt"${win.rolesOpen.has('aiprompt') ? ' open' : ''}><summary>${LX('AI로 그림 만들 때 예시', 'Example for making pictures with an AI')}</summary>
+<div class="tw-sub">${LX('그림 AI에 붙여 넣을 예시예요. [ ] 안에 생김새를 적어 주세요. 그림 AI는 영어를 잘 알아들어요.', 'An example to paste into a picture AI. Write the look inside [ ].')}</div>
+<textarea class="tw-aiprompt" readonly rows="10">${esc(AI_PIC_PROMPT)}</textarea>
+<div class="tw-row"><div class="tw-btn tw-btn-small" data-act="copyprompt"><i class="fa-regular fa-copy"></i> ${LX('복사', 'Copy')}</div></div>
+<div class="tw-sub">${LX('· 그림 사이를 띄워 두면 "시트로 한꺼번에 넣기"의 자동 찾기로 잘 나뉘어요. 안 되면 칸 수 4 × 3으로 나눠요.<br>· 걷기는 옆모습이 자연스러워요. 배경은 한 가지 색이 좋아요.<br>· 그림마다 키가 어긋나면 키 맞추기로 맞춰요.', '· With space between pictures, auto-find in "Add from a sheet" splits them well. If not, split by 4 × 3.<br>· Walking looks best from the side. A one-colour background works best.<br>· If the heights do not match, fix them with height matching.')}</div>
+</details>`;
+}
+
+async function copyPrompt() {
+    let ok = false;
+    try { await navigator.clipboard.writeText(AI_PIC_PROMPT); ok = true; } catch { }
+    if (!ok) {
+        const ta = win?.body.querySelector('.tw-aiprompt');
+        if (ta) { ta.focus(); ta.select(); try { ok = document.execCommand('copy'); } catch { } }
+    }
+    say(ok ? LX('복사했어요.', 'Copied.') : LX('복사가 안 됐어요. 글을 길게 눌러 직접 복사해 주세요.', 'Could not copy. Press and hold the text to copy it.'));
+}
+
 function rolesHtml(p) {
     const groups = ROLE_GROUPS.map((g, i) => {
         const grid = `<div class="tw-slots">${g.roles.map(r => slotHtml(p, r)).join('')}</div>`;
@@ -7905,6 +7939,7 @@ function rolesHtml(p) {
 <div class="tw-row tw-sheetbar"><div class="tw-btn tw-btn-small" data-act="sheetall"><i class="fa-solid fa-table-cells"></i> ${LX('시트로 한꺼번에 넣기', 'Add from a sheet')}</div><span class="tw-sub">${LX('한 장을 나눠서 여러 동작에', 'Split one image across several actions')}</span></div>
 <input type="file" accept="${PIC_ACCEPT}" data-f="sheetfile">
 ${groups}
+${aiPromptHtml()}
 <div class="tw-sub" style="margin-top:10px">${lookNote(p)}</div>
 <div class="tw-msg"></div>`;
 }

@@ -1268,3 +1268,5 @@
     transition: transform .3s cubic-bezier(.3, 1.4, .5, 1), opacity .3s ease;
 }
 .tavvy-portal.tavvy-portal-on { transform: scale(1, 1); opacity: 1; }
+/* 0.11.7: AI picture prompt example */
+.tavvy-win .tw-aiprompt { width: 100%; box-sizing: border-box; margin: 6px 0; font-family: ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.4; resize: vertical; }
