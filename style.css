@@ -792,6 +792,10 @@
 .tavvy-win .tw-slot-empty { font-size: 11px; color: var(--tw-sub); gap: 4px; }
 .tavvy-win .tw-fold { margin-top: 10px; border-top: 1px solid var(--tw-line); padding-top: 8px; }
 .tavvy-win .tw-fold summary { cursor: pointer; font-size: 13px; font-weight: 600; padding: 4px 0 8px; color: var(--tw-fg); }
+.tavvy-win .tw-fold summary .tw-sub { display: inline; font-weight: 400; margin-left: 4px; }
+/* 0.11.17 대사 탭 묶음 */
+.tavvy-win .tw-fold-in { margin: 12px 0 4px 8px; padding-left: 8px; border-top: none; border-left: 2px solid var(--tw-line); }
+.tavvy-win .tw-minicap { font-size: 11px; color: var(--tw-sub); margin: 10px 0 2px; }
 .tavvy-win .tw-roled-head { display: flex; align-items: center; gap: 12px; margin: 12px 0 2px; }
 .tavvy-win .tw-roled-head b { font-size: 16px; }
 .tavvy-win .tw-roled-prev {

@@ -316,7 +316,126 @@ const TALK_MOMENTS = [
     { key: 'greet', name: LX('다른 펫에게 말 걸 때', 'Talking to another pet'), ex: LX('{{pet}}야, 뭐 해?', '{{pet}}, what are you doing?') },     // 0.10.8 펫끼리 말하기
     { key: 'answer', name: LX('다른 펫이 말 걸어 오면', 'When another pet talks to it'), ex: LX('응? 왜 불러~', 'Hm? You called?') },
     { key: 'night', name: LX('다른 펫이 졸 때', 'When another pet dozes'), ex: LX('잘 자, {{pet}}', 'Sleep well, {{pet}}') },              // 0.10.12
+    // 0.11.17 알아보고 말하기: things you do in SillyTavern. Empty → the personality's default lines (NOTICE_LINES)
+    { key: 'retype', name: LX('썼다 지웠다', 'Writing and erasing') },
+    { key: 'long', name: LX('아주 긴 글 보내기', 'Sending a very long message') },
+    { key: 'swipe', name: LX('스와이프', 'Swiping') },
+    { key: 'regen', name: LX('다시 생성', 'Regenerating') },
+    { key: 'edit', name: LX('메시지 고치기', 'Editing a message') },
+    { key: 'del', name: LX('메시지 지우기', 'Deleting a message') },
+    { key: 'old', name: LX('옛날 대화 보기', 'Reading old messages') },
+    { key: 'menu', name: LX('메뉴 열기 (모든 메뉴)', 'Opening a menu (any menu)') },
+    { key: 'back', name: LX('다른 방 갔다 돌아오기', 'Back from another chat') },
+    { key: 'menuChar', name: LX('캐릭터 목록', 'Character list') },
+    { key: 'menuWorld', name: LX('월드인포', 'World Info') },
+    { key: 'menuAi', name: LX('AI 설정', 'AI settings') },
+    { key: 'menuApi', name: LX('연결', 'Connections') },
+    { key: 'menuPersona', name: LX('페르소나', 'Persona') },
+    { key: 'menuBg', name: LX('배경', 'Background') },
+    { key: 'menuFormat', name: LX('서식', 'Formatting') },
 ];
+// 0.11.17 대사 탭 묶음 (접는 칸, 한 번에 하나만 펼침). rows: [작은 줄 이름 or '', keys]
+const TALK_GROUPS = [
+    { key: 'daily', name: LX('평소', 'Everyday'), rows: [['', ['wake', 'sleep', 'pat', 'meal', 'play']]] },
+    { key: 'msg', name: LX('메시지', 'Messages'), rows: [
+        [LX('쓰기', 'Writing'), ['retype']], [LX('보내기', 'Sending'), ['sent', 'long']], [LX('기다리기', 'Waiting'), ['wait', 'late']],
+        [LX('답', 'Replies'), ['reply', 'swipe', 'regen']], [LX('그 뒤', 'Afterwards'), ['edit', 'del', 'old']]] },
+    { key: 'look', name: LX('둘러보기', 'Looking around'), rows: [['', ['menu', 'back']]],
+        fold: { key: 'menuEach', name: LX('메뉴마다', 'Per menu'), keys: ['menuChar', 'menuWorld', 'menuAi', 'menuApi', 'menuPersona', 'menuBg', 'menuFormat'] } },
+    { key: 'pets', name: LX('다른 펫과', 'With other pets'), rows: [['', ['greet', 'answer', 'night']]], duets: true },
+    { key: 'special', name: LX('특별한 순간', 'Special moments'), rows: [['', ['level', 'reunion']]] },
+];
+// what each menu is called in {{menu}}; drawer id in SillyTavern's top bar → moment key
+const MENU_DRAWERS = { rightNavHolder: 'menuChar', 'WI-SP-button': 'menuWorld', 'ai-config-button': 'menuAi', 'sys-settings-button': 'menuApi',
+    'persona-management-button': 'menuPersona', 'backgrounds-button': 'menuBg', 'advanced-formatting-button': 'menuFormat' };
+const NOTICE_REST = 60;          // s — the same thing isn't remarked on again sooner than this
+const LONG_SEND = 500;           // characters — "아주 긴 글"
+const OLD_SCREENS = 3;           // scrolled up more than this many screens from the bottom → 옛날 대화 보기
+const RETYPE_DEL = 20;           // characters erased within RETYPE_WIN s → 썼다 지웠다
+const RETYPE_WIN = 3;
+const RETYPE_LONG = 60;          // s writing without sending → 썼다 지웠다 too
+const BACK_MIN = 10;             // min — back in the room within this → 돌아오기 (longer → the usual hello)
+// default lines by personality (used only while that moment's box is empty)
+const NOTICE_LINES = {
+    swipe: {
+        aegyo: LX(['다른 것도 궁금해?', '이번 건 어떨까~'], ['Curious about another one?', 'How about this one~']),
+        saechim: LX(['…그게 맘에 안 들었구나', '까다롭긴.'], ['…you didn’t like that one', 'So picky.']),
+        neugut: LX(['천천히 골라~', '다음 것도 괜찮을걸…'], ['Take your time picking~', 'The next one might be fine too…']),
+        simsul: LX(['내가 봐도 별로였어.', '잠깐, 나 못봤어!'], ['Even I thought that was bad.', 'Wait, I didn’t see it!']),
+        musim: LX(['…', '다음.'], ['…', 'Next.']),
+    },
+    regen: {
+        aegyo: LX(['다시 써 달라고 하자!', '이번엔 더 좋을 거야'], ['Let’s ask for a new one!', 'This one will be even better']),
+        saechim: LX(['처음부터 다시? 흥', '이번엔 잘 쓰라고 해'], ['From scratch? Hmph', 'Tell it to write well this time']),
+        neugut: LX(['다시 기다리면 되지~', '하암… 또 기다려야겠다'], ['We can just wait again~', '*yawn*… more waiting']),
+        simsul: LX(['또 처음부터야?', '또? 질리지도 않냐.'], ['From the start again?', 'Again? Don’t you ever get tired?']),
+        musim: LX(['다시.', '…또.'], ['Again.', '…again.']),
+    },
+    edit: {
+        aegyo: LX(['고쳐 주는 거야?', '{{user}} 꼼꼼해~'], ['Fixing it up?', '{{user}}, so careful~']),
+        saechim: LX(['…틀린 거 봤어', '이제야 고치네'], ['…I saw the mistake', 'Fixing it only now']),
+        neugut: LX(['천천히 고쳐~', '그 정도면 괜찮았는데…'], ['Fix it slowly~', 'It was fine as it was…']),
+        simsul: LX(['처음부터 잘 쓰지.', '또 고쳐?'], ['Should’ve written it right the first time.', 'Fixing it again?']),
+        musim: LX(['수정.', '…'], ['Edited.', '…']),
+    },
+    del: {
+        aegyo: LX(['안녕… 잘 가', '없던 걸로 하자!'], ['Bye-bye… farewell', 'Let’s pretend it never happened!']),
+        saechim: LX(['…못 본 걸로 할게', '지우는 게 낫겠어'], ['…I’ll act like I didn’t see it', 'Better off deleted']),
+        neugut: LX(['사라졌네~', '하암… 없어졌다'], ['It’s gone~', '*yawn*… vanished']),
+        simsul: LX(['아깝게 왜 지워', '흥, 지워 버렸네'], ['Why delete it, what a waste', 'Hmph, you deleted it']),
+        musim: LX(['삭제.', '…'], ['Deleted.', '…']),
+    },
+    long: {
+        aegyo: LX(['와, 열심히 썼다!', '{{user}} 대단해!'], ['Wow, you wrote so much!', '{{user}}, amazing!']),
+        saechim: LX(['…꽤 길게 썼네', '흥, 공들였구나'], ['…that’s pretty long', 'Hmph, you put work into it']),
+        neugut: LX(['길다… 읽다 졸겠다', '수고했어~'], ['So long… I’ll doze off reading', 'Good work~']),
+        simsul: LX(['뭘 이렇게 길게 써', '손 안 아파?'], ['Why write so much?', 'Don’t your hands hurt?']),
+        musim: LX(['길다.', '…'], ['Long.', '…']),
+    },
+    menu: {
+        aegyo: LX(['{{menu}} 보는 거야? 나도!', '뭐 바꿔?'], ['Looking at {{menu}}? Me too!', 'Changing something?']),
+        saechim: LX(['…{{menu}} 만지는구나', '괜히 망가뜨리지 마'], ['…fiddling with {{menu}}', 'Don’t go breaking things']),
+        neugut: LX(['천천히 둘러봐~', '뭐 찾는 거야…'], ['Look around slowly~', 'What are you looking for…']),
+        simsul: LX(['또 뭘 건드려', '{{menu}}? 귀찮게'], ['What are you poking now', '{{menu}}? What a bother']),
+        musim: LX(['{{menu}}.', '…'], ['{{menu}}.', '…']),
+    },
+    menuChar: { aegyo: LX(['다른 애 보러 가는 거 아니지?'], ['You’re not going to see someone else, right?']), saechim: LX(['…나 말고 누구 찾아?'], ['…who are you looking for, if not me?']), neugut: LX(['누구 보러 가~?'], ['Who are we visiting~?']), simsul: LX(['딴 애 찾냐?'], ['Looking for someone else?']), musim: LX(['…'], ['…']) },
+    menuWorld: { aegyo: LX(['세계 설정 보는 거야?'], ['Looking at the world settings?']), saechim: LX(['…설정 또 바꿔?'], ['…changing the settings again?']), neugut: LX(['이야기 속 세상이구나~'], ['The world inside the story~']), simsul: LX(['설정 함부로 건드리지 마'], ['Don’t mess with the setting']), musim: LX(['설정.'], ['Settings.']) },
+    menuAi: { aegyo: LX(['똑똑하게 만들어 줘!'], ['Make it smart!']), saechim: LX(['…숫자 만지는 거야?'], ['…playing with numbers?']), neugut: LX(['어려운 거 한다~'], ['Doing hard stuff~']), simsul: LX(['괜히 망치지 마'], ['Don’t go ruining it']), musim: LX(['숫자.'], ['Numbers.']) },
+    menuApi: { aegyo: LX(['누구랑 연결해?'], ['Who are we connecting to?']), saechim: LX(['…이번엔 뭘로 하는데?'], ['…what are you using this time?']), neugut: LX(['연결 잘 되려나~'], ['Hope it connects~']), simsul: LX(['또 끊겼냐?'], ['Cut off again?']), musim: LX(['연결.'], ['Connection.']) },
+    menuPersona: { aegyo: LX(['{{user}} 변신해?'], ['{{user}}, transforming?']), saechim: LX(['…이번엔 누구야?'], ['…who are you this time?']), neugut: LX(['다른 사람 되는 거야~'], ['Becoming someone else~']), simsul: LX(['누가 되든 너지'], ['Whoever you become, it’s still you']), musim: LX(['…'], ['…']) },
+    menuBg: { aegyo: LX(['이사 가는 거야?'], ['Are we moving?']), saechim: LX(['…분위기 바꾸게?'], ['…changing the mood?']), neugut: LX(['여기 좋은데~'], ['I like it here~']), simsul: LX(['아까 게 나았어'], ['The old one was better']), musim: LX(['배경.'], ['Background.']) },
+    menuFormat: { aegyo: LX(['예쁘게 꾸며?'], ['Making it pretty?']), saechim: LX(['…글씨 바꾸는 거야?'], ['…changing the text?']), neugut: LX(['꾸미는구나~'], ['Decorating~']), simsul: LX(['또 뭘 만져'], ['What are you touching now']), musim: LX(['…'], ['…']) },
+    back: {
+        aegyo: LX(['어디 갔다 왔어? 기다렸어!', '돌아왔다!'], ['Where did you go? I waited!', 'You’re back!']),
+        saechim: LX(['…금방 올 거면서', '흥, 왔네'], ['…knew you’d be right back', 'Hmph, you’re here']),
+        neugut: LX(['다녀왔어~', '하암… 왔구나'], ['Welcome back~', '*yawn*… you’re back']),
+        simsul: LX(['기다리게 할래?', '늦었잖아'], ['Gonna keep me waiting?', 'You’re late']),
+        musim: LX(['왔네.', '…'], ['You’re back.', '…']),
+    },
+    old: {
+        aegyo: LX(['그때 생각난다~', '어디 보고 있어?'], ['That brings back memories~', 'Where are you looking?']),
+        saechim: LX(['…옛날 거 보는 거야?', '재밌긴 했지'], ['…reading old stuff?', 'It was fun, I guess']),
+        neugut: LX(['옛날 얘기구나~', '천천히 봐…'], ['Old stories~', 'Take your time…']),
+        simsul: LX(['스크롤 어디까지 올라가', '부끄럽게 뭘 봐'], ['How far up are you going?', 'Stop looking, it’s embarrassing']),
+        musim: LX(['옛날 거.', '…'], ['Old stuff.', '…']),
+    },
+    retype: {
+        aegyo: LX(['천천히 해도 돼!', '뭐라고 쓸지 고민돼?'], ['Take your time!', 'Not sure what to write?']),
+        saechim: LX(['…뭘 그렇게 망설여', '다 보이거든'], ['…why so hesitant?', 'I can see everything, you know']),
+        neugut: LX(['급할 거 없어~', '생각 중이구나…'], ['No need to rush~', 'Thinking it over…']),
+        simsul: LX(['그냥 써!', '아까 거 좋았는데'], ['Just write it!', 'The last one was good']),
+        musim: LX(['…', '고민 중.'], ['…', 'Thinking.']),
+    },
+};
+const menuName = (key) => TALK_MOMENTS.find(m => m.key === key)?.name || '';
+/** Lines for a moment: what you wrote, else the personality's default (0.11.17 moments only). */
+function linesFor(rec, key) {
+    const mine = (rec?.lines?.[key] || []).filter(x => typeof x === 'string' && x.trim());
+    if (mine.length) return mine;
+    const d = NOTICE_LINES[key];
+    return d ? (d[rec?.personality?.base] || d.aegyo || []) : [];
+}
 const TALK_FREQ = { off: LX('끔', 'Off'), some: LX('가끔', 'Sometimes'), often: LX('자주', 'Often') };
 const TALK_CHANCE = { some: 0.35, often: 0.7 };          // a moment comes → says something
 const TALK_PLAY = { some: 0.05, often: 0.12 };           // each "what next?" while playing alone
@@ -1059,6 +1178,30 @@ function measurePlats() {
             left: Math.max(r.left, stage.left), right: Math.min(r.right, stage.right),
             user: el.getAttribute('is_user') === 'true',
         });
+    }
+    measurePanels(chat);
+}
+
+// 0.11.17 같은 화면의 창: another extension's panel above the input box, a floating window over the chat…
+// Their top edges are ledges too. Only the part inside the chat column counts; a window that hides most of the chat
+// (a menu laid over it) is skipped.
+const PANEL_SEL = '#form_sheld > :not(#send_form), #movingDivs > *, #sheld > :not(#chat):not(#form_sheld)';
+const PANEL_COVER = 0.6;         // covers more than this share of the chat → in front of it, not a ledge
+function measurePanels(chat) {
+    const cr = chat.getBoundingClientRect();
+    const area = Math.max(1, cr.width * cr.height);
+    for (const el of document.querySelectorAll(PANEL_SEL)) {
+        if (el.id?.startsWith('tavvy') || el.closest('#chat')) continue;
+        const r = el.getBoundingClientRect();
+        if (r.height < 24) continue;
+        const left = Math.max(r.left, stage.left), right = Math.min(r.right, stage.right);
+        if (right - left < 60) continue;                     // beside the chat column, not in it
+        if (r.top < stage.chatTop || r.top > stage.floorY - 6) continue;
+        const ow = Math.min(r.right, cr.right) - Math.max(r.left, cr.left), oh = Math.min(r.bottom, cr.bottom) - Math.max(r.top, cr.top);
+        if (ow > 0 && oh > 0 && ow * oh / area > PANEL_COVER) continue;
+        const cs = getComputedStyle(el);
+        if (cs.visibility === 'hidden' || cs.display === 'none' || Number(cs.opacity) < 0.1) continue;
+        plats.push({ el, top: r.top, left, right, user: false, panel: true });
     }
 }
 
@@ -2421,7 +2564,7 @@ class Actor {
         // a special day: first of all coloured ✦, a dance, and what it wants to say
         const sp = this.special; this.special = null;
         if (sp?.length) q.unshift({ k: 'party', d: 1.9, days: sp }, ...sp.map(x => ({ k: 'line', d: 2.9, text: x.text })));
-        else if (!(plan.away >= REVISIT_DAYS * 86400e3 && this.talk('reunion'))) this.talk('wake');
+        else if (!(plan.away >= REVISIT_DAYS * 86400e3 && this.talk('reunion'))) this.talk(backSoon(this.rec) ? 'back' : 'wake');   // 0.11.17 돌아오기
         if (plan.teary) q.push({ k: 'teary', d: 1.6 });          // so glad it is teary
         if (greets) {
             const g = { aegyo: [['wave', 0.7], ['bounce', 0.8]], saechim: [['flick', 1.0]], neugut: [['yawn', 1.1], ['wave', 0.7]], simsul: [['grumpy', 1.0]] }[k] || [];
@@ -2843,7 +2986,7 @@ class Actor {
         if (!this.plat) return true;
         if (!ledgesOn()) { this.dropOff(); return false; }
         const r = liveRect(this.plat);
-        if (!r) { this.dropOff(); return false; }
+        if (!r || (!this.plat.closest('#chat') && !platOf(this.plat))) { this.dropOff(); return false; }   // 0.11.17: a window hidden / closed / now covering the chat
         if (r.top < stage.chatTop - 1) { this.goOff(); return false; }
         if (r.top >= stage.floorY - 1) { this.plat = null; this.pr = null; this.y = 0; return true; }   // scrolled down to the floor
         this.pr = r;
@@ -3985,11 +4128,12 @@ class Actor {
     /* ---------- speech bubble over its head ---------- */
 
     /** Say a line from this moment's list (if it has any, and it's in the mood). */
-    talk(moment, force = false) {
+    talk(moment, force = false, opt = null) {
         const rec = this.rec;
         const freq = TALK_FREQ[rec.talkFreq] ? rec.talkFreq : 'some';
         if (freq === 'off') return false;
-        const list = (rec.lines?.[moment] || []).filter(x => typeof x === 'string' && x.trim());
+        let list = linesFor(rec, moment);
+        if (opt?.also) list = [...list, ...linesFor(rec, opt.also)];      // 0.11.17 메뉴: that menu's lines + the common ones
         if (!list.length) return false;
         const always = force || TALK_ALWAYS.includes(moment);
         const now = performance.now();
@@ -3999,7 +4143,8 @@ class Actor {
             if (Math.random() >= ch) return false;
         }
         this.lastTalk = now;
-        this.speak(list[Math.floor(Math.random() * list.length)]);
+        const line = list[Math.floor(Math.random() * list.length)];
+        this.speak(opt?.menu ? fillName(line, 'menu', opt.menu) : line);
         return true;
     }
 
@@ -4503,7 +4648,7 @@ function spawnMeal(a, take, tier, speed = 1) {
     const mine = Math.round(count * take.me / Math.max(1, n));
     const kinds = Array.from({ length: count }, (_, i) => (i < mine ? 'me' : 'them')).sort(() => Math.random() - 0.5);
     // where they come from: my / their messages on screen when there are some
-    const from = { me: plats.filter(p => p.user).map(p => p.el), them: plats.filter(p => !p.user).map(p => p.el) };
+    const from = { me: plats.filter(p => p.user).map(p => p.el), them: plats.filter(p => !p.user && !p.panel).map(p => p.el) };   // 0.11.17: not from windows
     const src = (k) => { const l = from[k].length ? from[k] : [...from.me, ...from.them]; return l.length ? l[Math.floor(Math.random() * l.length)] : null; };
     const big = new Set();
     while (big.size < Math.min(clumps, count)) big.add(Math.floor(Math.random() * count));
@@ -5083,6 +5228,7 @@ function onGenStart(type, opts, dryRun) {
     gen.late = false;
     gen.target = null;
     for (const a of actors) a.restless = false;
+    if (gen.type === 'regenerate') setTimeout(() => notice('regen'), 300);   // 0.11.17
     // regenerate removes the old reply right after this signal → look a moment later
     setTimeout(() => {
         if (!gen.active) return;
@@ -5098,6 +5244,7 @@ function onStreamToken() {
 }
 
 function onGenEnd() {
+    gen.endAt = performance.now();
     if (!gen.active) return;
     genTarget();
     measurePlats();
@@ -5146,6 +5293,71 @@ function onReplyReceived(id, type) {
 /** Awake enough to say something about a message (not napping, not going to bed). */
 const canChat = (a) => !['off', 'doze', 'sleepy', 'tuck', 'wave', 'appear'].includes(a.state);
 
+/* ---------- 0.11.17 알아보고 말하기: what you do in SillyTavern ---------- */
+
+const noticeAt = new Map();      // moment → when last said (performance.now)
+const leftAt = new Map();        // pet id → when you left its room (Date.now; not saved)
+
+/** One pet (at random, awake) may say something about it — not the same thing twice within NOTICE_REST. */
+function notice(moment, opt = null) {
+    if (!actors.length || document.hidden) return false;
+    const now = performance.now();
+    if (now - (noticeAt.get(moment) ?? -1e9) < NOTICE_REST * 1000) return false;
+    const who = actors.filter(a => canChat(a) && !a.held);
+    if (!who.length) return false;
+    const a = who[Math.floor(Math.random() * who.length)];
+    if (!a.talk(moment, false, opt)) return false;
+    noticeAt.set(moment, now);
+    return true;
+}
+
+/** Woken just after coming back from another room (within BACK_MIN). Asks once. */
+function backSoon(rec) {
+    const t = leftAt.get(rec.id);
+    leftAt.delete(rec.id);
+    return typeof t === 'number' && Date.now() - t < BACK_MIN * 60000;
+}
+
+/** A menu in the top bar opened. */
+function watchMenus() {
+    for (const [id, key] of Object.entries(MENU_DRAWERS)) {
+        const el = $id(id)?.querySelector('.drawer-content');
+        if (!el || el.dataset.tavvyWatch) continue;
+        el.dataset.tavvyWatch = '1';
+        let open = el.classList.contains('openDrawer');
+        new MutationObserver(() => {
+            const now = el.classList.contains('openDrawer');
+            if (now && !open && ready) notice(key, { also: 'menu', menu: menuName(key) });
+            open = now;
+        }).observe(el, { attributes: true, attributeFilter: ['class'] });
+    }
+}
+
+/** The chat scrolled: far up = reading old messages. */
+let oldAway = false;
+function onChatScroll(el) {
+    const fromBottom = el.scrollHeight - el.clientHeight - el.scrollTop;
+    if (fromBottom < el.clientHeight) { oldAway = false; return; }
+    if (oldAway || fromBottom <= el.clientHeight * OLD_SCREENS) return;
+    oldAway = true;                                   // once per trip up
+    notice('old');
+}
+
+/** The input box changed: erasing a lot, or writing a long time without sending. */
+const writing = { len: 0, start: 0, said: false, dels: [] };
+function onWriting(value) {
+    const now = Date.now(), len = String(value || '').length;
+    if (!len) { writing.len = 0; writing.start = 0; writing.said = false; writing.dels = []; return; }   // sent / cleared (not counted)
+    if (!writing.start) writing.start = now;
+    if (len < writing.len) {
+        writing.dels.push([now, writing.len - len]);
+        writing.dels = writing.dels.filter(d => now - d[0] < RETYPE_WIN * 1000);
+        if (writing.dels.reduce((s, d) => s + d[1], 0) > RETYPE_DEL && notice('retype')) writing.dels = [];
+    }
+    writing.len = len;
+    if (!writing.said && now - writing.start > RETYPE_LONG * 1000) writing.said = notice('retype') || writing.said;
+}
+
 /** I sent a message: a short look toward my new message. */
 function onMySend(id) {
     if (!actors.length) return;
@@ -5159,6 +5371,7 @@ function onMySend(id) {
             a.after = a.state === 'perch' ? 'idle' : a.waiting ? 'wait' : 'idle';
             a.startLook(persOf(a, 'send').send, x);
         }
+        if (String(ctx().chat?.[id]?.mes || '').length > LONG_SEND && notice('long')) return;   // 0.11.17 아주 긴 글
         for (const a of actors) if (canChat(a)) a.talk('sent');
     }, 120);
 }
@@ -5183,6 +5396,7 @@ async function onChatChanged() {
     clearTimeout(roomRetry);
     if (!next) roomRetry = setTimeout(recheckRoom, 800);
 
+    if (room && root) { const t = Date.now(); for (const p of residents()) leftAt.set(p.id, t); }   // 0.11.17 돌아오기
     sleepInstant();
     gen.active = false; gen.target = null;
     watched.clear();
@@ -8885,10 +9099,10 @@ function talkHtml(p) {
     <select data-t="freq">${Object.entries(TALK_FREQ).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
   </label>
   <div class="tw-sub">${LX('순간마다 한 줄에 하나씩 적어요. 여러 줄이면 그때그때 하나를 골라 펫 머리 위 말풍선으로 말해요.', 'Write one line per row for each moment. With several, one is picked each time and said in a bubble above the pet.')} <b>{{user}}</b>${LX('는 나를 부르는 이름(꾸미기 탭, 비우면 내 이름)으로,', ' becomes what it calls you (Style tab; empty = your name),')} <b>{{pet}}</b>${LX('은 상대 펫 이름으로 바뀌어요. 바로 뒤 조사(은/는·이/가 등)는 이름에 맞게 저절로 바뀌어요. 한 줄은', ' becomes the other pet’s name. A line can be up to')} ${LINE_MAX}${LX('자까지예요.', ' characters.')}</div>
-  ${TALK_MOMENTS.map(m => `<label class="tw-label">${esc(m.name)}<textarea data-line="${m.key}" rows="2" placeholder="${LX('예)', 'e.g.')} ${esc(m.ex)}"></textarea></label>`).join('')}
+  <div class="tw-sub">${LX('회색 글씨가 기본 대사인 칸은 비워 두면 성격에 맞는 그 대사를 해요. 직접 적으면 적은 것만 써요.', 'Where the grey text shows default lines, an empty box uses those (they suit its personality). Write your own and only yours are used.')}</div>
+  ${TALK_GROUPS.map(g => talkGroupHtml(p, g)).join('\n  ')}
   <div class="tw-btn tw-wide" data-act="aifill"><i class="fa-solid fa-wand-magic-sparkles"></i> ${LX('AI로 빈 칸 채우기', 'Fill empty slots with AI')}</div>
   <div class="tw-sub">${LX('누를 때만 한 번 만들어요. AI에게는 펫 이름과 성격만 보내요. 마음에 안 드는 줄은 저장하기 전에 고치거나 지우면 돼요.', 'Runs once, only when pressed. Only the pet’s name and personality are sent to the AI. Edit or delete lines you don’t like before saving.')}</div>
-${duetHtml(p)}
 
   <div class="tw-cap">${LX('기념일', 'Anniversary')}</div>
   <label class="tw-check"><input type="checkbox" data-t="met"> ${LX(`만난 날(${met[0]}월 ${met[1]}일)도 매년 축하하기`, `Also celebrate the day we met (${EN_MON[met[0] - 1]} ${met[1]}) every year`)}</label>
@@ -8901,6 +9115,39 @@ ${duetHtml(p)}
 </div>`;
 }
 
+/** One line box of the 대사 tab. */
+function talkBoxHtml(p, key) {
+    const m = TALK_MOMENTS.find(x => x.key === key);
+    if (!m) return '';
+    const def = NOTICE_LINES[key] ? linesFor({ personality: p.personality }, key) : null;
+    const ph = def ? `${LX('기본:', 'Default:')} ${def.join(' / ')}` : `${LX('예)', 'e.g.')} ${m.ex}`;
+    return `<label class="tw-label">${esc(m.name)}<textarea data-line="${m.key}" rows="2" placeholder="${esc(ph)}"></textarea></label>`;
+}
+
+/** 0.11.17: a group of the 대사 tab, folded (one open at a time). */
+function talkGroupHtml(p, g) {
+    const open = (win.talkOpen ?? 'daily') === g.key;
+    const rows = g.rows.map(([cap, keys]) => (cap ? `<div class="tw-minicap">${esc(cap)}</div>` : '') + keys.map(k => talkBoxHtml(p, k)).join('')).join('');
+    const sub = g.fold ? `<details class="tw-fold tw-fold-in" data-tsub="${g.fold.key}"${win.talkSubOpen ? ' open' : ''}><summary>${esc(g.fold.name)} <span class="tw-sub" data-tcount="${g.fold.key}"></span></summary>
+    <div class="tw-sub">${LX('여기 적은 대사와 위 "메뉴 열기" 대사 중 하나를 골라 말해요. 확장 메뉴는 알아보지 않아요.', 'It says one of these or one of the "Opening a menu" lines above. The Extensions menu isn’t noticed.')}</div>
+    ${g.fold.keys.map(k => talkBoxHtml(p, k)).join('')}</details>` : '';
+    return `<details class="tw-fold" data-tgroup="${g.key}"${open ? ' open' : ''}><summary>${esc(g.name)} <span class="tw-sub" data-tcount="${g.key}"></span></summary>${rows}${sub}${g.duets ? duetHtml(p) : ''}</details>`;
+}
+
+/** "2/5칸 적음" next to each group. */
+function talkCounts() {
+    const box = win?.body.querySelector('[data-pane="talk"]');
+    if (!box) return;
+    const keysOf = (g) => g.rows.flatMap(r => r[1]);
+    const put = (key, keys) => {
+        const el = box.querySelector(`[data-tcount="${key}"]`);
+        if (!el) return;
+        const n = keys.filter(k => box.querySelector(`[data-line="${k}"]`)?.value.trim()).length;
+        el.textContent = `${n}/${keys.length}${LX('칸 적음', ' written')}`;
+    };
+    for (const g of TALK_GROUPS) { put(g.key, keysOf(g)); if (g.fold) put(g.fold.key, g.fold.keys); }
+}
+
 function fillTalk(p) {
     const box = win.body.querySelector('[data-pane="talk"]');
     if (!box) return;
@@ -8911,6 +9158,18 @@ function fillTalk(p) {
     for (const ta of box.querySelectorAll('[data-duet]')) {
         const o = root.pets.find(x => x.id === ta.dataset.duet);
         ta.value = o ? duetText(p, o) : '';
+    }
+    talkCounts();
+    if (!box.dataset.tfold) {                     // 0.11.17: one group open at a time; counts follow typing
+        box.dataset.tfold = '1';
+        box.addEventListener('toggle', (e) => {
+            const d = e.target;
+            if (d.dataset?.tsub) { win.talkSubOpen = d.open; return; }
+            if (!d.dataset?.tgroup) return;
+            if (d.open) { win.talkOpen = d.dataset.tgroup; for (const o of box.querySelectorAll('[data-tgroup]')) if (o !== d) o.open = false; }
+            else if (win.talkOpen === d.dataset.tgroup) win.talkOpen = '';
+        }, true);
+        box.addEventListener('input', (e) => { if (e.target?.dataset?.line) talkCounts(); });
     }
     win.talkBase = JSON.stringify(readTalk());
 }
@@ -9101,21 +9360,34 @@ const TALK_PROMPT_MOMENTS = {
     late: LX('상대(캐릭터)의 답이 오래 걸려서 기다리다 지칠 때', 'the character’s reply is taking a long time'),
     night: LX('같은 방에 사는 다른 펫이 옆에서 꾸벅꾸벅 졸 때', 'another pet in the same room is dozing off nearby'),
     greet: LX('같은 방에 사는 다른 펫에게 먼저 말을 걸 때', 'starting a chat with another pet in the same room'), answer: LX('다른 펫이 말을 걸어 와서 대답할 때', 'answering when another pet talks to it'),
+    // 0.11.17 알아보고 말하기
+    retype: LX('사람이 입력창에 썼다 지웠다 하며 망설일 때', 'the person keeps writing and erasing in the input box'),
+    long: LX('사람이 아주 긴 메시지를 보냈을 때', 'the person just sent a very long message'),
+    swipe: LX('사람이 캐릭터의 답을 넘겨 다른 답을 볼 때(스와이프)', 'the person swiped to another version of the character’s reply'),
+    regen: LX('사람이 캐릭터의 답을 처음부터 다시 쓰게 할 때', 'the person asked for the character’s reply to be written again'),
+    edit: LX('사람이 메시지를 고쳤을 때', 'the person edited a message'), del: LX('사람이 메시지를 지웠을 때', 'the person deleted a message'),
+    old: LX('사람이 채팅을 한참 위로 올려 옛날 대화를 볼 때', 'the person scrolled far up to read old messages'),
+    menu: LX('사람이 설정 메뉴를 열었을 때 (메뉴 이름은 {{menu}})', 'the person opened a settings menu (its name is {{menu}})'),
+    back: LX('사람이 다른 채팅방에 갔다가 금방 돌아왔을 때', 'the person went to another chat and soon came back'),
+    menuChar: LX('사람이 캐릭터 목록을 열었을 때', 'the person opened the character list'), menuWorld: LX('사람이 월드인포(세계 설정)를 열었을 때', 'the person opened World Info (the story’s world settings)'),
+    menuAi: LX('사람이 AI 설정(숫자 조절)을 열었을 때', 'the person opened the AI settings (number sliders)'), menuApi: LX('사람이 AI 연결 설정을 열었을 때', 'the person opened the AI connection settings'),
+    menuPersona: LX('사람이 자기 페르소나(자기가 맡는 인물) 설정을 열었을 때', 'the person opened their persona (the character they play) settings'),
+    menuBg: LX('사람이 채팅 배경을 고르는 메뉴를 열었을 때', 'the person opened the chat background menu'), menuFormat: LX('사람이 글 서식 설정을 열었을 때', 'the person opened the text formatting settings'),
 };
 
 /** Ask the chosen connection (or the current one). Returns the text of the answer. */
-async function askAI(system, user) {
+async function askAI(system, user, len = 800) {
     const c = ctx();
     const id = root?.settings?.talkProfile;
     if (id) {
         const prof = connectionProfiles()?.find(p => p.id === id);
         if (prof) {
-            const r = await c.ConnectionManagerRequestService.sendRequest(id, [{ role: 'system', content: system }, { role: 'user', content: user }], 800);
+            const r = await c.ConnectionManagerRequestService.sendRequest(id, [{ role: 'system', content: system }, { role: 'user', content: user }], len);
             return { text: typeof r === 'string' ? r : String(r?.content ?? ''), fellBack: false };
         }
     }
     if (typeof c.generateRaw !== 'function') throw new Error(LX('이 실리태번 버전에서는 AI 대사 만들기를 쓸 수 없어요', 'This SillyTavern version can’t make AI lines'));
-    const text = await c.generateRaw({ prompt: user, systemPrompt: system, responseLength: 800 });
+    const text = await c.generateRaw({ prompt: user, systemPrompt: system, responseLength: len });
     return { text: String(text ?? ''), fellBack: !!id };
 }
 
@@ -9149,11 +9421,12 @@ async function aiFill() {
             LX('- 이모지는 가끔만', '- Emoji only occasionally'),
             LX('- 화면 앞의 사람을 부를 때는 {{user}}라고 쓰기', '- Refer to the person at the screen as {{user}}'),
             ...(empty.some(m => m.key === 'greet' || m.key === 'answer' || m.key === 'night') ? [LX('- 다른 펫을 부를 때는 {{pet}}이라고 쓰기', '- Refer to the other pet as {{pet}}')] : []),
+            ...(empty.some(m => m.key === 'menu') ? [LX('- menu 순간에 메뉴 이름을 말할 때는 {{menu}}라고 쓰기', '- In the menu moment, refer to the menu’s name as {{menu}}')] : []),
             LX('순간:', 'Moments:'),
             ...empty.map(m => `${m.key}: ${TALK_PROMPT_MOMENTS[m.key]}`),
             `${LX('JSON으로만 답하기. 예: {', 'Answer in JSON only. Example: {')}"${empty[0].key}": ["…", "…", "…"]}`,
         ].join('\n');
-        const { text, fellBack } = await askAI(system, user);
+        const { text, fellBack } = await askAI(system, user, Math.max(800, empty.length * 110));   // 0.11.17: more boxes → room for all
         if (curPet() !== p) return;
         const data = looseJson(text);
         let n = 0;
@@ -9232,6 +9505,8 @@ function onReady() {
     ready = true;
     log('ready', { pets: root?.pets.length ?? 0, readOnly });
     onChatChanged();
+    watchMenus();
+    setTimeout(watchMenus, 5000);                  // 0.11.17: in case the top bar is built a little later
     setTimeout(maybeBackup, 8000);
     setInterval(maybeBackup, 15 * 60 * 1000);     // also when the day changes while open
 }
@@ -9254,17 +9529,23 @@ function onReady() {
     on('MESSAGE_SENT', (id) => { noteUserAct(); wakeSleepy(); onCounted(id, true); });
     // messages added / removed / reloaded → ledges moved
     const ledgesMoved = () => { if (actors.length) requestAnimationFrame(measurePlats); };
+    // 0.11.17 알아보고 말하기 (not while a reply is being written: regenerate removes the old one, writing updates it)
+    const byHand = () => ready && !gen.active && performance.now() - (gen.endAt || -1e9) > 3000;
+    on('MESSAGE_SWIPED', () => { if (ready) setTimeout(() => notice('swipe'), 200); });
+    on('MESSAGE_EDITED', () => { if (byHand()) notice('edit'); });
+    on('MESSAGE_DELETED', () => { if (byHand()) setTimeout(() => notice('del'), 200); });
     ['MESSAGE_DELETED', 'MORE_MESSAGES_LOADED', 'MESSAGE_SWIPED', 'CHARACTER_MESSAGE_RENDERED', 'MESSAGE_UPDATED'].forEach(n => on(n, ledgesMoved));
     // the chat scrolling (capture: the chat box scrolls by itself, not the window)
     let st = 0;
-    document.addEventListener('scroll', () => {
+    document.addEventListener('scroll', (e) => {
         if (!actors.length) return;
         noteUserAct();
+        if (e.target?.id === 'chat') onChatScroll(e.target);
         if (st) return;
         st = requestAnimationFrame(() => { st = 0; measurePlats(); });
     }, { capture: true, passive: true });
     // you: writing in the input box, where your hand / finger is
-    document.addEventListener('input', (e) => { if (e.target?.id === 'send_textarea') onTyping(); }, true);
+    document.addEventListener('input', (e) => { if (e.target?.id === 'send_textarea') { onTyping(); onWriting(e.target.value); } }, true);
     const seeHand = (e) => { if (!actors.length) return; hand.x = e.clientX; hand.y = e.clientY; hand.t = performance.now(); };
     document.addEventListener('pointermove', seeHand, { capture: true, passive: true });
     document.addEventListener('pointerdown', seeHand, { capture: true, passive: true });
