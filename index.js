@@ -210,7 +210,7 @@ const REVISIT_LINES = {
     saechim: (n) => LX(`…${n}일 만이네. 딱히 기다린 건 아니야.`, `…${n} days, huh. Not that I was waiting.`),
     neugut:  (n) => LX(`하암… 벌써 ${n}일 지났어?`, `Yawn… ${n} days already?`),
     simsul:  (n) => LX(`${n}일이나 어디 갔었어 💢`, `${n} days! Where were you 💢`),
-    musim:   (n) => LX(`…${n}일.`, `…${n} days.`),
+    musim:   (n) => LX(`${n}일 만이네. …어서 와.`, `${n} days, huh. …Welcome back.`),
 };
 
 // unlocked behaviours (stage 6-1). lv = closeness level needed (1 친구 · 2 친한 친구 · 3 단짝 · 4 내편).
@@ -362,70 +362,70 @@ const NOTICE_LINES = {
         saechim: LX(['…그게 맘에 안 들었구나', '까다롭긴.'], ['…you didn’t like that one', 'So picky.']),
         neugut: LX(['천천히 골라~', '다음 것도 괜찮을걸…'], ['Take your time picking~', 'The next one might be fine too…']),
         simsul: LX(['내가 봐도 별로였어.', '잠깐, 나 못봤어!'], ['Even I thought that was bad.', 'Wait, I didn’t see it!']),
-        musim: LX(['…', '다음.'], ['…', 'Next.']),
+        musim: LX(['다음 거 보는구나.', '…아까 것도 괜찮던데.'], ['Looking at the next one.', '…The last one was fine too.']),
     },
     regen: {
         aegyo: LX(['다시 써 달라고 하자!', '이번엔 더 좋을 거야'], ['Let’s ask for a new one!', 'This one will be even better']),
         saechim: LX(['처음부터 다시? 흥', '이번엔 잘 쓰라고 해'], ['From scratch? Hmph', 'Tell it to write well this time']),
         neugut: LX(['다시 기다리면 되지~', '하암… 또 기다려야겠다'], ['We can just wait again~', '*yawn*… more waiting']),
         simsul: LX(['또 처음부터야?', '또? 질리지도 않냐.'], ['From the start again?', 'Again? Don’t you ever get tired?']),
-        musim: LX(['다시.', '…또.'], ['Again.', '…again.']),
+        musim: LX(['다시 쓰게 하는구나.', '…이번 건 마음에 들면 좋겠네.'], ['Having it write again.', '…Hope you like this one.']),
     },
     edit: {
         aegyo: LX(['고쳐 주는 거야?', '{{user}} 꼼꼼해~'], ['Fixing it up?', '{{user}}, so careful~']),
         saechim: LX(['…틀린 거 봤어', '이제야 고치네'], ['…I saw the mistake', 'Fixing it only now']),
         neugut: LX(['천천히 고쳐~', '그 정도면 괜찮았는데…'], ['Fix it slowly~', 'It was fine as it was…']),
         simsul: LX(['처음부터 잘 쓰지.', '또 고쳐?'], ['Should’ve written it right the first time.', 'Fixing it again?']),
-        musim: LX(['수정.', '…'], ['Edited.', '…']),
+        musim: LX(['고쳤네. 그게 낫겠다.', '…손보는 중이구나.'], ['You fixed it. That’s better.', '…Touching it up.']),
     },
     del: {
         aegyo: LX(['안녕… 잘 가', '없던 걸로 하자!'], ['Bye-bye… farewell', 'Let’s pretend it never happened!']),
         saechim: LX(['…못 본 걸로 할게', '지우는 게 낫겠어'], ['…I’ll act like I didn’t see it', 'Better off deleted']),
         neugut: LX(['사라졌네~', '하암… 없어졌다'], ['It’s gone~', '*yawn*… vanished']),
         simsul: LX(['아깝게 왜 지워', '흥, 지워 버렸네'], ['Why delete it, what a waste', 'Hmph, you deleted it']),
-        musim: LX(['삭제.', '…'], ['Deleted.', '…']),
+        musim: LX(['지웠구나. 뭐, 괜찮아.', '…없어졌네.'], ['Deleted it. Well, that’s fine.', '…It’s gone.']),
     },
     long: {
         aegyo: LX(['와, 열심히 썼다!', '{{user}} 대단해!'], ['Wow, you wrote so much!', '{{user}}, amazing!']),
         saechim: LX(['…꽤 길게 썼네', '흥, 공들였구나'], ['…that’s pretty long', 'Hmph, you put work into it']),
         neugut: LX(['길다… 읽다 졸겠다', '수고했어~'], ['So long… I’ll doze off reading', 'Good work~']),
         simsul: LX(['뭘 이렇게 길게 써', '손 안 아파?'], ['Why write so much?', 'Don’t your hands hurt?']),
-        musim: LX(['길다.', '…'], ['Long.', '…']),
+        musim: LX(['길게 썼네. 다 읽어 볼게.', '…공들였구나.'], ['That’s a long one. I’ll read it all.', '…You put work into that.']),
     },
     menu: {
         aegyo: LX(['{{menu}} 보는 거야? 나도!', '뭐 바꿔?'], ['Looking at {{menu}}? Me too!', 'Changing something?']),
         saechim: LX(['…{{menu}} 만지는구나', '괜히 망가뜨리지 마'], ['…fiddling with {{menu}}', 'Don’t go breaking things']),
         neugut: LX(['천천히 둘러봐~', '뭐 찾는 거야…'], ['Look around slowly~', 'What are you looking for…']),
         simsul: LX(['또 뭘 건드려', '{{menu}}? 귀찮게'], ['What are you poking now', '{{menu}}? What a bother']),
-        musim: LX(['{{menu}}.', '…'], ['{{menu}}.', '…']),
+        musim: LX(['{{menu}} 보는구나.', '…볼일 보고 와.'], ['Looking at {{menu}}.', '…Go do your thing.']),
     },
-    menuChar: { aegyo: LX(['다른 애 보러 가는 거 아니지?'], ['You’re not going to see someone else, right?']), saechim: LX(['…나 말고 누구 찾아?'], ['…who are you looking for, if not me?']), neugut: LX(['누구 보러 가~?'], ['Who are we visiting~?']), simsul: LX(['딴 애 찾냐?'], ['Looking for someone else?']), musim: LX(['…'], ['…']) },
-    menuWorld: { aegyo: LX(['세계 설정 보는 거야?'], ['Looking at the world settings?']), saechim: LX(['…설정 또 바꿔?'], ['…changing the settings again?']), neugut: LX(['이야기 속 세상이구나~'], ['The world inside the story~']), simsul: LX(['설정 함부로 건드리지 마'], ['Don’t mess with the setting']), musim: LX(['설정.'], ['Settings.']) },
-    menuAi: { aegyo: LX(['똑똑하게 만들어 줘!'], ['Make it smart!']), saechim: LX(['…숫자 만지는 거야?'], ['…playing with numbers?']), neugut: LX(['어려운 거 한다~'], ['Doing hard stuff~']), simsul: LX(['괜히 망치지 마'], ['Don’t go ruining it']), musim: LX(['숫자.'], ['Numbers.']) },
-    menuApi: { aegyo: LX(['누구랑 연결해?'], ['Who are we connecting to?']), saechim: LX(['…이번엔 뭘로 하는데?'], ['…what are you using this time?']), neugut: LX(['연결 잘 되려나~'], ['Hope it connects~']), simsul: LX(['또 끊겼냐?'], ['Cut off again?']), musim: LX(['연결.'], ['Connection.']) },
-    menuPersona: { aegyo: LX(['{{user}} 변신해?'], ['{{user}}, transforming?']), saechim: LX(['…이번엔 누구야?'], ['…who are you this time?']), neugut: LX(['다른 사람 되는 거야~'], ['Becoming someone else~']), simsul: LX(['누가 되든 너지'], ['Whoever you become, it’s still you']), musim: LX(['…'], ['…']) },
-    menuBg: { aegyo: LX(['이사 가는 거야?'], ['Are we moving?']), saechim: LX(['…분위기 바꾸게?'], ['…changing the mood?']), neugut: LX(['여기 좋은데~'], ['I like it here~']), simsul: LX(['아까 게 나았어'], ['The old one was better']), musim: LX(['배경.'], ['Background.']) },
-    menuFormat: { aegyo: LX(['예쁘게 꾸며?'], ['Making it pretty?']), saechim: LX(['…글씨 바꾸는 거야?'], ['…changing the text?']), neugut: LX(['꾸미는구나~'], ['Decorating~']), simsul: LX(['또 뭘 만져'], ['What are you touching now']), musim: LX(['…'], ['…']) },
+    menuChar: { aegyo: LX(['다른 애 보러 가는 거 아니지?'], ['You’re not going to see someone else, right?']), saechim: LX(['…나 말고 누구 찾아?'], ['…who are you looking for, if not me?']), neugut: LX(['누구 보러 가~?'], ['Who are we visiting~?']), simsul: LX(['딴 애 찾냐?'], ['Looking for someone else?']), musim: LX(['누구 보러 가는지는 안 물을게.'], ['I won’t ask who you’re going to see.']) },
+    menuWorld: { aegyo: LX(['세계 설정 보는 거야?'], ['Looking at the world settings?']), saechim: LX(['…설정 또 바꿔?'], ['…changing the settings again?']), neugut: LX(['이야기 속 세상이구나~'], ['The world inside the story~']), simsul: LX(['설정 함부로 건드리지 마'], ['Don’t mess with the setting']), musim: LX(['세계 설정이구나. 천천히 봐.'], ['The world settings. Take your time.']) },
+    menuAi: { aegyo: LX(['똑똑하게 만들어 줘!'], ['Make it smart!']), saechim: LX(['…숫자 만지는 거야?'], ['…playing with numbers?']), neugut: LX(['어려운 거 한다~'], ['Doing hard stuff~']), simsul: LX(['괜히 망치지 마'], ['Don’t go ruining it']), musim: LX(['숫자 만지는구나. 난 잘 몰라.'], ['Fiddling with numbers. I wouldn’t know.']) },
+    menuApi: { aegyo: LX(['누구랑 연결해?'], ['Who are we connecting to?']), saechim: LX(['…이번엔 뭘로 하는데?'], ['…what are you using this time?']), neugut: LX(['연결 잘 되려나~'], ['Hope it connects~']), simsul: LX(['또 끊겼냐?'], ['Cut off again?']), musim: LX(['연결 바꾸는구나. 잘 되면 좋겠네.'], ['Changing the connection. Hope it works.']) },
+    menuPersona: { aegyo: LX(['{{user}} 변신해?'], ['{{user}}, transforming?']), saechim: LX(['…이번엔 누구야?'], ['…who are you this time?']), neugut: LX(['다른 사람 되는 거야~'], ['Becoming someone else~']), simsul: LX(['누가 되든 너지'], ['Whoever you become, it’s still you']), musim: LX(['오늘은 누구로 할지 고르는구나.'], ['Picking who to be today.']) },
+    menuBg: { aegyo: LX(['이사 가는 거야?'], ['Are we moving?']), saechim: LX(['…분위기 바꾸게?'], ['…changing the mood?']), neugut: LX(['여기 좋은데~'], ['I like it here~']), simsul: LX(['아까 게 나았어'], ['The old one was better']), musim: LX(['배경 바꾸게? 난 아무 데나 괜찮아.'], ['New background? Anywhere’s fine with me.']) },
+    menuFormat: { aegyo: LX(['예쁘게 꾸며?'], ['Making it pretty?']), saechim: LX(['…글씨 바꾸는 거야?'], ['…changing the text?']), neugut: LX(['꾸미는구나~'], ['Decorating~']), simsul: LX(['또 뭘 만져'], ['What are you touching now']), musim: LX(['글 모양 손보는구나.'], ['Tidying up how the text looks.']) },
     back: {
         aegyo: LX(['어디 갔다 왔어? 기다렸어!', '돌아왔다!'], ['Where did you go? I waited!', 'You’re back!']),
         saechim: LX(['…금방 올 거면서', '흥, 왔네'], ['…knew you’d be right back', 'Hmph, you’re here']),
         neugut: LX(['다녀왔어~', '하암… 왔구나'], ['Welcome back~', '*yawn*… you’re back']),
         simsul: LX(['기다리게 할래?', '늦었잖아'], ['Gonna keep me waiting?', 'You’re late']),
-        musim: LX(['왔네.', '…'], ['You’re back.', '…']),
+        musim: LX(['왔네. 어서 와.', '…생각보다 빨리 왔네.'], ['You’re back. Welcome.', '…That was quicker than I thought.']),
     },
     old: {
         aegyo: LX(['그때 생각난다~', '어디 보고 있어?'], ['That brings back memories~', 'Where are you looking?']),
         saechim: LX(['…옛날 거 보는 거야?', '재밌긴 했지'], ['…reading old stuff?', 'It was fun, I guess']),
         neugut: LX(['옛날 얘기구나~', '천천히 봐…'], ['Old stories~', 'Take your time…']),
         simsul: LX(['스크롤 어디까지 올라가', '부끄럽게 뭘 봐'], ['How far up are you going?', 'Stop looking, it’s embarrassing']),
-        musim: LX(['옛날 거.', '…'], ['Old stuff.', '…']),
+        musim: LX(['옛날 얘기 보는구나.', '…그때 거 아직 기억나.'], ['Looking at old times.', '…I still remember that one.']),
     },
     retype: {
         aegyo: LX(['천천히 해도 돼!', '뭐라고 쓸지 고민돼?'], ['Take your time!', 'Not sure what to write?']),
         saechim: LX(['…뭘 그렇게 망설여', '다 보이거든'], ['…why so hesitant?', 'I can see everything, you know']),
         neugut: LX(['급할 거 없어~', '생각 중이구나…'], ['No need to rush~', 'Thinking it over…']),
         simsul: LX(['그냥 써!', '아까 거 좋았는데'], ['Just write it!', 'The last one was good']),
-        musim: LX(['…', '고민 중.'], ['…', 'Thinking.']),
+        musim: LX(['천천히 써도 돼.', '…고민되는구나.'], ['Take your time writing.', '…Hard to decide, huh.']),
     },
 };
 const menuName = (key) => TALK_MOMENTS.find(m => m.key === key)?.name || '';
@@ -537,10 +537,10 @@ const PERS_DESC = {
 const DATE_KINDS = { me: LX('내 생일', 'My birthday'), char: LX('캐릭터 생일', 'Character’s birthday'), anniv: LX('기념일', 'Anniversary') };
 const LATE_DAYS = 7;             // missed the day → a "늦었지만…" version within this many days (the day itself counts)
 const SPECIAL_LINES = {
-    me: { aegyo: LX('생일 축하해 ♥', 'Happy birthday ♥'), saechim: LX('…생일이라며. 축하해 줄게', '…Your birthday, huh. Happy birthday, I guess'), neugut: LX('하암… 생일이구나. 축하해~', 'Yawn… it’s your birthday. Happy birthday~'), simsul: LX('생일이라고? …축하해 💢', 'Your birthday? …Happy birthday 💢'), musim: LX('…생일 축하해.', '…Happy birthday.') },
-    char: { aegyo: LX('오늘 내 생일이야! 축하해 줘 ♥', 'It’s my birthday today! Celebrate me ♥'), saechim: LX('…오늘 내 생일인 거 알지?', '…You know it’s my birthday, right?'), neugut: LX('오늘 내 생일이래… 하암', 'Apparently it’s my birthday… yawn'), simsul: LX('내 생일인데 선물은? 💢', 'It’s my birthday. Where’s my present? 💢'), musim: LX('…생일.', '…Birthday.') },
-    anniv: { aegyo: LX('오늘 우리 기념일이야 ♥', 'It’s our anniversary today ♥'), saechim: LX('…기념일인 거 기억했어?', '…Did you remember our anniversary?'), neugut: LX('기념일이네~ 느긋하게 보내자', 'Anniversary~ let’s take it easy'), simsul: LX('기념일 잊은 거 아니지? 💢', 'You didn’t forget our anniversary, right? 💢'), musim: LX('…기념일. 고마워.', '…Anniversary. Thanks.') },
-    met: { aegyo: LX('만난 지 {n}년! 고마워 ♥', '{n} years together! Thank you ♥'), saechim: LX('…만난 지 {n}년이네. 나쁘지 않았어.', '…{n} years, huh. Not bad.'), neugut: LX('벌써 {n}년이야? 하암…', '{n} years already? Yawn…'), simsul: LX('{n}년이나 같이 있었네 💢 …앞으로도.', '{n} whole years 💢 …and more to come.'), musim: LX('…{n}년.', '…{n} years.') },
+    me: { aegyo: LX('생일 축하해 ♥', 'Happy birthday ♥'), saechim: LX('…생일이라며. 축하해 줄게', '…Your birthday, huh. Happy birthday, I guess'), neugut: LX('하암… 생일이구나. 축하해~', 'Yawn… it’s your birthday. Happy birthday~'), simsul: LX('생일이라고? …축하해 💢', 'Your birthday? …Happy birthday 💢'), musim: LX('생일이구나. …축하해, 진심으로.', 'It’s your birthday. …Happy birthday. I mean it.') },
+    char: { aegyo: LX('오늘 내 생일이야! 축하해 줘 ♥', 'It’s my birthday today! Celebrate me ♥'), saechim: LX('…오늘 내 생일인 거 알지?', '…You know it’s my birthday, right?'), neugut: LX('오늘 내 생일이래… 하암', 'Apparently it’s my birthday… yawn'), simsul: LX('내 생일인데 선물은? 💢', 'It’s my birthday. Where’s my present? 💢'), musim: LX('…오늘 내 생일이래. 별건 아니고.', '…Apparently it’s my birthday. No big deal.') },
+    anniv: { aegyo: LX('오늘 우리 기념일이야 ♥', 'It’s our anniversary today ♥'), saechim: LX('…기념일인 거 기억했어?', '…Did you remember our anniversary?'), neugut: LX('기념일이네~ 느긋하게 보내자', 'Anniversary~ let’s take it easy'), simsul: LX('기념일 잊은 거 아니지? 💢', 'You didn’t forget our anniversary, right? 💢'), musim: LX('기념일이네. …같이 있어 줘서 고마워.', 'It’s our anniversary. …Thanks for staying with me.') },
+    met: { aegyo: LX('만난 지 {n}년! 고마워 ♥', '{n} years together! Thank you ♥'), saechim: LX('…만난 지 {n}년이네. 나쁘지 않았어.', '…{n} years, huh. Not bad.'), neugut: LX('벌써 {n}년이야? 하암…', '{n} years already? Yawn…'), simsul: LX('{n}년이나 같이 있었네 💢 …앞으로도.', '{n} whole years 💢 …and more to come.'), musim: LX('벌써 {n}년이네. …앞으로도 옆에 있을게.', '{n} years already. …I’ll stay by your side.') },
 };
 
 /* =====================================================================
