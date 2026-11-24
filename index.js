@@ -80,8 +80,8 @@ function dateText(y, m, d) {
 const PERSONALITIES = {
     aegyo:   { name: LX('애교', 'Sweet'), speed: 72, idle: [0.8, 2],   doze: 0.06, dozeLen: [6, 12], tap: '♥',  climb: [0.16, 0.24], perch: [2, 5],   land: '♥',  send: '♥',  bump: '♥',     me: [0.60, 0.95], eat: 0.7, wall: 0.4 },
     saechim: { name: LX('새침', 'Prim'), speed: 55, idle: [1.2, 3],   doze: 0.10, dozeLen: [6, 12], tap: '?',  climb: [0.07, 0.12], perch: [2, 5],   land: 'flick', send: 'glance', bump: 'flick', me: [0.15, 0.60], eat: 1, fussy: true, wall: 0.4 },
-    neugut:  { name: LX('느긋', 'Easygoing'), speed: 30, idle: [2, 4],     doze: 0.35, dozeLen: [12, 24], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: LX('하암', 'yawn'), send: '♪',  bump: '?',     me: [0.15, 0.50], eat: 1.3, wall: 0.4 },
-    simsul:  { name: LX('심술', 'Grumpy'), speed: 58, idle: [1.2, 3],   doze: 0.08, dozeLen: [6, 11], tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: LX('흥', 'hmph'),  bump: '💢',    me: [0.20, 0.60], eat: 1, fussy: true, wall: 0.4 },
+    neugut:  { name: LX('느긋', 'Easygoing'), speed: 30, idle: [2, 4],     doze: 0.35, dozeLen: [12, 24], tap: '♪',  climb: [0.02, 0.04], perch: 'doze',   land: 'yawn', send: '♪',  bump: '?',     me: [0.15, 0.50], eat: 1.3, wall: 0.4 },
+    simsul:  { name: LX('심술', 'Grumpy'), speed: 58, idle: [1.2, 3],   doze: 0.08, dozeLen: [6, 11], tap: '💢', climb: [0.07, 0.12], perch: [2, 5],   land: '💢', send: 'hmph',  bump: '💢',    me: [0.20, 0.60], eat: 1, fussy: true, wall: 0.4 },
     musim:   { name: LX('무심', 'Aloof'), speed: 42, idle: [2, 4.5],   doze: 0.12, dozeLen: [8, 16], tap: '…',  climb: [0.08, 0.14], perch: [8, 16],  land: '…',  send: '…',  bump: 'aside', me: [0.05, 0.25], eat: 1, wall: 0.4 },
 };
 
@@ -514,20 +514,20 @@ const ZONE_GEN = 3;              // × while a reply is being written (같이 �
 const NIGHT_FROM = ['idle', 'walk', 'perch', 'fidget', 'look', 'read', 'watch'];   // awake and not busy
 const NIGHT_P = 0.6;             // 잘 자: × 빈도 — a pet close by starts dozing
 const NIGHT_REST = 120;          // s — the same two, not again sooner
-const NIGHT_FX = { aegyo: '♥', saechim: LX('흥', 'hmph'), neugut: LX('하암', 'yawn'), simsul: '💢', musim: '…' };   // no line written → this
+const NIGHT_FX = { aegyo: '♥', saechim: '', neugut: '', simsul: '💢', musim: '…' };   // no line written → this
 const NAP_P = { neugut: 0.5, aegyo: 0.4, saechim: 0.15, simsul: 0.15, musim: 0.08 };   // 같이 졸기: × 빈도
 const NAP_NEAR = 320;            // px — how far away it still walks over to doze next to it
 const TAG_P = { simsul: 0.04, aegyo: 0.025, saechim: 0.015, neugut: 0.01, musim: 0.006 };   // 쫓아가기 장난: × 빈도, each "what next?"
 const TAG_CHASE = { aegyo: 0.9, simsul: 0.9, saechim: 0.7, neugut: 0.5, musim: 0.2 };   // the one tapped runs after it
-const TAG_END = { aegyo: '♥', saechim: LX('흥', 'hmph'), neugut: '♪', simsul: '💢', musim: '…' };    // caught up
+const TAG_END = { aegyo: '♥', saechim: '', neugut: '♪', simsul: '💢', musim: '…' };    // caught up
 const TAG_NEAR = 260;            // px
 const TAG_REST = 90;             // s
 const RACE_P = 0.35;             // 먼저 달려가기: × 빈도 (the lower one) — two or more go to look at a new reply
-const RACE_LATE = { aegyo: '♥', saechim: LX('흥', 'hmph'), neugut: '?', simsul: '💢', musim: '…' };  // got there second
+const RACE_LATE = { aegyo: '♥', saechim: '', neugut: '?', simsul: '💢', musim: '…' };  // got there second
 const SHARE_P = 0.5;             // 나눠 먹기: × 빈도 — done eating, another one still eating close by
 const SHARE_NEAR = 300;          // px
 const SHARE_REST = 120;          // s
-const SHARE_MINE = { aegyo: '♥', neugut: '♪', saechim: LX('흥', 'hmph'), musim: '…', simsul: '💢' };   // the eater (심술: turns its back)            // s the other one stays put while it comes over
+const SHARE_MINE = { aegyo: '♥', neugut: '♪', saechim: '', musim: '…', simsul: '💢' };   // the eater (심술: turns its back)            // s the other one stays put while it comes over
 const PERS_DESC = {
     aegyo: LX('애교 많고 다정해요', 'Affectionate and sweet'), saechim: LX('새침하고 쑥스러움을 잘 타요', 'Prim and easily shy'), neugut: LX('느긋하고 늘 졸려요', 'Laid-back and always sleepy'),
     simsul: LX('툴툴대지만 속은 다정해요', 'Grumbles, but kind inside'), musim: LX('말수가 적고 무심해요', 'Quiet and aloof'),
@@ -1417,6 +1417,7 @@ function ensureLayer() {
 }
 
 function fx(actor, text, cls = '') {
+    if (!text) return;   // '' = no mark (only a gesture)
     const el = document.createElement('div');
     el.className = 'tavvy-fx ' + cls;
     el.textContent = text;
@@ -2348,7 +2349,7 @@ class Actor {
             const b = go.who;
             if (duetAlive(b) && b.plat === this.plat && Math.abs(b.x - this.x) <= (this.w + b.w) * 1.5) {
                 if (this.side && Math.abs(b.x - this.x) > 4) this.dir = b.x >= this.x ? 1 : -1;
-                fx(this, TAG_END[kindOf(this, '')] || '♪', 'tavvy-fx-small');
+                fx(this, TAG_END[kindOf(this, '')] ?? '♪', 'tavvy-fx-small');
             }
             return;
         }
@@ -2509,7 +2510,7 @@ class Actor {
             this.after = 'idle';
             return this.startLook('?', b.x);
         }
-        fx(b, SHARE_MINE[k] || '♥', 'tavvy-fx-small');
+        fx(b, SHARE_MINE[k] ?? '♥', 'tavvy-fx-small');
         this.fk = 'nibble';
         this.setState('fidget');
     }
@@ -3079,7 +3080,7 @@ class Actor {
         this.until = kind === 'glance' || kind === 'flick' ? 1.1 : kind === 'peek' ? rand(1.2, 2) : 1.4;
         if (kind === 'peek') { if (this.fidgety() || Math.random() < 0.4) fx(this, '?', 'tavvy-fx-small'); }
         else if (kind === 'up') fx(this, '!');
-        else if (kind !== 'glance' && kind !== 'flick') fx(this, kind);
+        else if (kind !== 'glance' && kind !== 'flick' && kind !== 'hmph' && kind !== 'yawn') fx(this, kind);   // hmph·yawn: just the gesture, no text
     }
 
     /* ---------- waiting for a reply / watching it ---------- */
@@ -3561,9 +3562,8 @@ class Actor {
                             } else if (k === 'neugut') {                     // ♪
                                 if (!T.f && lt > 0.5) { T.f = 1; fx(this, '♪'); }
                                 if (lt > 2.4) T.out = true;
-                            } else if (k === 'simsul') {                     // "흥" and it's whisked away
+                            } else if (k === 'simsul') {                     // turns away and it's whisked away
                                 pose = this.role('angry', 'idle');
-                                if (!T.f && lt > 0.25) { T.f = 1; fx(this, LX('흥', 'hmph'), 'tavvy-fx-small'); }
                                 if (lt > 0.9) { T.out = true; T.fast = true; }
                             } else {                                         // 무심: "…" then a small ♥
                                 pose = this.role('look', 'idle');
@@ -3881,7 +3881,7 @@ class Actor {
                     else if (k === 'up') { this.tiltT = d * 4; }
                     else if (k === 'peek' || k === '?') { this.tiltT = d * 4; pose = this.rp('curious'); }
                     else if (k === '♥') { this.tiltT = 0; pose = this.role('happy', 'idle'); }
-                    else if (k === '💢' || k === LX('흥', 'hmph')) { this.tiltT = d * 4; pose = this.rp('angry'); }
+                    else if (k === '💢' || k === 'hmph') { this.tiltT = d * 4; pose = this.rp('angry'); }
                     else this.tiltT = d * 4;
                     if (this.t > this.until) {
                         this.look = null;
@@ -4067,7 +4067,7 @@ class Actor {
                             if (first) fx(this, '♥');
                             break;
                         case 'flick': this.tiltT = this.t < 0.15 ? d * 4 : -d * 9; if (this.t >= 0.15) pose = this.rp('flick'); break;   // 밥 못 본 척 고개 홱
-                        case 'yawn': this.tiltT = -d * 3; pose = this.role('idle'); if (first) fx(this, LX('하암', 'yawn')); break;
+                        case 'yawn': this.tiltT = -d * 3; pose = this.role('idle'); break;
                         case 'grumpy': this.tiltT = -d * 4; pose = this.rp('angry'); if (first) fx(this, '💢'); break;   // 왜 이제 와
                         default: break;
                     }
@@ -4465,7 +4465,7 @@ function nightCheck(a) {
             if (b.side && b.state !== 'walk' && dx > 8) b.dir = a.x >= b.x ? 1 : -1;
             const lines = talkFreqOf(b) !== 'off' ? linesOf(b, 'night') : [];
             if (lines.length) { b.lastTalk = performance.now(); playSound('chat', 1, false, b.rec); b.speak(fillPet(lines[Math.floor(Math.random() * lines.length)], a)); }
-            else fx(b, NIGHT_FX[kindOf(b, '')] || '…', 'tavvy-fx-small');
+            else fx(b, NIGHT_FX[kindOf(b, '')] ?? '…', 'tavvy-fx-small');
         }
         if (Math.random() < chance(b, 'napwith', NAP_P[kindOf(b, '')] ?? 0.1)) setTimeout(() => b.startNapWith(a), said ? 1800 : 400);
     }
@@ -4481,7 +4481,7 @@ function raceLand(a, el) {
     if (performance.now() > rc.till) { race = null; return; }
     rc.who.delete(a);
     if (!rc.first) { rc.first = a; fx(a, '!'); a.sq = 0.85; }
-    else fx(a, RACE_LATE[kindOf(a, '')] || '…', 'tavvy-fx-small');
+    else fx(a, RACE_LATE[kindOf(a, '')] ?? '…', 'tavvy-fx-small');
     if (!rc.who.size) race = null;
 }
 
