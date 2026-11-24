@@ -465,7 +465,8 @@ function newPetRecord({ id, name, personality, look }) {
     return {
         id,
         name,
-        callMe: '',                                   // 0.11.14: what it calls you ({{user}}); empty = your SillyTavern name
+        callMe: '',
+        chatVoice: 'ungeol',                          // 0.11.15: its voice when pets chat (CHAT_VOICES)                                   // 0.11.14: what it calls you ({{user}}); empty = your SillyTavern name
         createdAt: now,
         acts090: true,                                // 0.9.0 rows (흥얼·두리번·앉기 out of 제자리 놀기) already in place
         look,                                         // images, facing, size, softness
@@ -1324,6 +1325,12 @@ const SOUNDS = {
     chat: [0.3, (k) => [470, 560, 500].forEach((f, i) => sndTone(f, 0.08, { to: f * 1.1, type: 'triangle', v: 0.36, k, at: i * 0.1 }))],   // 0.10.13 펫끼리 말할 때 웅얼 (0.11.11: ×2, was too quiet)
 };
 
+// 0.11.15 펫마다 대화 목소리 (펫끼리 말할 때). [이름, 길이(초), play(k)] — 'ungeol' is SOUNDS.chat
+const CHAT_VOICES = {
+    ungeol: [LX('웅얼', 'Mumble'), 0.3, (k) => SOUNDS.chat[1](k)],
+    byorong: [LX('뾰롱', 'Boing'), 0.24, (k) => { sndTone(700, 0.1, { to: 1100, v: 0.3, k }); sndTone(950, 0.12, { v: 0.28, k, at: 0.1 }); }],
+};
+
 // 0.10.11 답 도착 소리: 체크한 것만 답이 올 때마다 돌아가며. [key, 이름, 길이(초), play(k)]
 const REPLY_SOUNDS = [
     ['dingdong', LX('딩동', 'Ding-dong'), 0.7, (k) => SOUNDS.reply[1](k)],
@@ -1434,6 +1441,7 @@ function playSound(key, k = 1, test = false, rec = null, pick = null) {
     sndOut.gain.value = volOf(key) / 100 * SND_MASTER;
     sndLast[key] = now;
     let path = rec?.sounds?.[key], len = def[0], play = def[1];
+    if (key === 'chat' && CHAT_VOICES[rec?.chatVoice]) [, len, play] = CHAT_VOICES[rec.chatVoice];   // 0.11.15
     if (key === 'reply' && typeof path !== 'string') {                  // 0.10.11: 그 펫의 내 소리가 없으면 설정의 답 도착 소리
         const r = pick || pickReply();
         replyLast = r.id;
@@ -6124,8 +6132,28 @@ function soundsHtml(p) {
         const mine = typeof p.sounds?.[k] === 'string';
         return `<div class="tw-sndrow"><span class="tw-sndname">${name}</span>${mine ? LX('<span class="tw-chip">내 소리</span>', '<span class="tw-chip">My sound</span>') : LX('<span class="tw-sub">기본 소리</span>', '<span class="tw-sub">Default sound</span>')}
   <div class="tw-btn tw-btn-small" data-sndplay="${k}" title="${LX('듣기', 'Play')}"><i class="fa-solid fa-play"></i></div>
-  ${mine ? `<div class="tw-btn tw-btn-small" data-snddel="${k}" title="${LX('기본으로', 'Use default')}">✕</div>` : `<div class="tw-btn tw-btn-small" data-sndup="${k}">${LX('올리기', 'Upload')}</div>`}</div>`;
+  ${mine ? `<div class="tw-btn tw-btn-small" data-snddel="${k}" title="${LX('기본으로', 'Use default')}">✕</div>` : `<div class="tw-btn tw-btn-small" data-sndup="${k}">${LX('올리기', 'Upload')}</div>`}</div>`
+            + (k === 'chat' ? voiceRowHtml(p, mine) : '');
     }).join('');
+}
+
+/** 0.11.15: which voice this pet uses when pets chat (a sound file of its own still comes first). */
+function voiceRowHtml(p, mine) {
+    const cur = CHAT_VOICES[p.chatVoice] ? p.chatVoice : 'ungeol';
+    return `<div class="tw-sndrow"><span class="tw-sndname">${LX('목소리', 'Voice')}</span><span class="tw-seg" style="flex:1">${Object.entries(CHAT_VOICES).map(([v, [n]]) =>
+        `<span class="${v === cur ? 'on' : ''}" data-voice="${v}">${n}</span>`).join('')}</span></div>`
+        + (mine ? `<div class="tw-sub">${LX('내 소리를 올려 둬서 목소리 대신 그 소리가 나요.', 'Its own sound file plays instead of the voice.')}</div>` : '');
+}
+
+function setVoice(v) {
+    const p = curPet();
+    if (!p || !CHAT_VOICES[v]) return;
+    sndTouched = true;
+    playSound('chat', 1, true, { chatVoice: v });       // hear the voice itself, even with a file of its own
+    if (p.chatVoice === v) return;
+    p.chatVoice = v;
+    drawSounds(p);
+    saveSoon();
 }
 
 function drawSounds(p) {
@@ -7388,6 +7416,7 @@ function cleanPet(src, look) {
     if (isObj(src.lines)) for (const [k, v] of Object.entries(src.lines)) if (/^[a-zA-Z]{1,20}$/.test(k)) { const l = strList(v, 30); if (l.length) rec.lines[k] = l; }
     if (TALK_FREQ[src.talkFreq]) rec.talkFreq = src.talkFreq;
     if (typeof src.callMe === 'string') rec.callMe = src.callMe.trim().slice(0, 20);
+    if (CHAT_VOICES[src.chatVoice]) rec.chatVoice = src.chatVoice;
     src = { ...src, off: Array.isArray(src.off) ? [...src.off] : src.off, freq: isObj(src.freq) ? { ...src.freq } : src.freq };
     splitScreen(src);                                   // a pet file from before 0.8.2
     splitFidget(src);                                   // …and before 0.9.0
@@ -7650,6 +7679,8 @@ function onWinClick(e) {
     if (tab) return showTab(tab.dataset.tab);
     const dl = t.closest('[data-dellook]');
     if (dl) return deleteLook(dl.dataset.dellook);
+    const vc = t.closest('[data-voice]');
+    if (vc) return setVoice(vc.dataset.voice);
     const sp = t.closest('[data-sndplay]');
     if (sp) { sndTouched = true; return playSound(sp.dataset.sndplay, 1, true, curPet()); }
     const su = t.closest('[data-sndup]');
