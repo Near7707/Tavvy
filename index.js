@@ -1622,7 +1622,7 @@ function playSound(key, k = 1, test = false, rec = null, pick = null) {
 /* ---------- 0.10.6 내 소리: a short file per pet and per sound (empty = the usual sound) ---------- */
 
 const SOUND_SLOTS = [['heart', LX('♥ 하트', '♥ Heart')], ['wake', LX('깨우기', 'Wake')], ['sleep', LX('재우기', 'Sleep')], ['cheer', LX('축하', 'Celebrate')], ['bump', LX('부딪힐 때', 'Bumping')], ['chat', LX('펫끼리 말할 때', 'Pets chatting')], ['reply', LX('답 도착', 'Reply arrives')]];
-const SND_MAX_SEC = 3;
+const SND_MAX_SEC = 5;           // 0.11.18: was 3 (a long one still keeps other sounds waiting until it ends)
 const SND_MAX_BYTES = 2 * 1024 * 1024;
 const SND_ACCEPT = 'audio/mpeg,audio/wav,audio/x-wav,audio/ogg,audio/mp4,audio/x-m4a,audio/aac,.mp3,.wav,.ogg,.m4a';
 const sndBufs = new Map();            // file path → Promise<AudioBuffer | null>
@@ -6412,7 +6412,7 @@ async function saveSoundChange(p, key, old, fresh) {
 async function sndLoad(file, base, say) {
     const ext = sndExt(file.name, file.type);
     if (!ext) return say(LX('mp3 · wav · ogg · m4a 파일만 넣을 수 있어요.', 'Only mp3 · wav · ogg · m4a files.')), null;
-    if (file.size > SND_MAX_BYTES) return say(LX('파일이 너무 커요. 짧은 효과음(3초까지)을 넣어 주세요.', 'The file is too big. Use a short sound (up to 3 s).')), null;
+    if (file.size > SND_MAX_BYTES) return say(LX(`파일이 너무 커요. 짧은 효과음(${SND_MAX_SEC}초까지)을 넣어 주세요.`, `The file is too big. Use a short sound (up to ${SND_MAX_SEC} s).`)), null;
     if (!sndReady()) return say(LX('이 브라우저에서는 소리를 쓸 수 없어요.', 'This browser can’t play sounds.')), null;
     say(LX('읽는 중…', 'Reading…'));
     const bytes = await file.arrayBuffer();
