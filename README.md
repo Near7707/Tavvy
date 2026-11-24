@@ -33,7 +33,7 @@ Tavvy speaks Korean and English. It uses Korean when SillyTavern's or your brows
 You can pick it yourself at the top of ⚙ Settings (**언어 · Language**); the change applies after you reload the page.
 Text you write yourself (pet names, lines, notes) is never translated. In English the starter pets are called Mochi · Barley · Button, and AI-written lines come out in English.
 
-## What it does (0.11.18)
+## What it does (0.11.19)
 
 - **Making a pet**: three starter pets (Mochi · Barley · Button) or one picture of your own (PNG · JPG). A plain one-color background, like white, is removed automatically (**Remove background**, with a strength slider in the preview). **Crop by hand** lets you cut just the character out of a bigger picture.
 - **Five base personalities**: Sweet · Prim · Easygoing · Grumpy · Aloof. Walking, dozing, greetings, eating and how it reacts to you all differ by personality. When it reacts to you, it looks at you for a moment first and holds the reaction a little; at most once every 30 seconds (0.11.7).
@@ -138,6 +138,7 @@ Text you write yourself (pet names, lines, notes) is never translated. In Englis
   - ♥♥♥♥ Always yours: softer reactions / Sweet pets hold out a clover to wish you luck.
 - **Settings (⚙)**: language, window color, wake pets automatically when entering a room, stage (whole chat / floor only), line borders as ledges, food count on the bed, closeness display, wake button position, backups.
 - **Sounds** (⚙ Settings, off by default): **Reply arrival alert** and **Pet sounds** turn on separately.
+  - **Sound style** (0.11.19, ⚙ Settings → Sounds): **Crisp** (default, the sounds so far) / **Soft** (round tones that fade in and out slowly, with a little echo). Switches pet sounds (pop, wake, sleep, cheer, boop, mumble, heart Glint and Tink) and reply sounds (Ding-dong, Bell, Tap tap, Marimba, Arrival, Music box, Flute, Xylophone) together. The rest (Boing, Boing-up, Pop, Letter bell, Twinkle, Wind chime) and your own files stay as they are. Soft sounds ring a little longer (up to about 2 s), and other sounds are skipped meanwhile.
   - Pet sounds: heart (each pet picks Pop, Glint, Tink or Boing-up since 0.11.16 — Style tab → Sounds → Heart sound), wake, sleep, cheer, boop (bumping), mumble (pets chatting). Each pet picks its chat voice, Mumble or Boing (0.11.15, Style tab → Sounds → Voice; Mumble at first; its own sound file still comes first).
   - Reply arrival alert: plays when a new reply, regeneration, swipe or continue finishes (in rooms with a pet, even while it sleeps). The checked sounds out of 12 take turns; preview with ▶, and add up to 10 of your own sound files.
   - Sounds are generated in code, need no files, with separate volumes for pet sounds and the reply sound (0.11.8). The 12 built-in reply sounds are level-matched (0.11.13: Xylophone and Wind chime replace Whistle and Boop; everything is 3.3× louder than before — use the sliders if it’s too much). Under Reply volume, one line tells whether the last reply sound played or why it was skipped. No sounds on other tabs; on phones they start after your first tap (after another app or the screen going off, the first tap makes the sound fresh — 0.11.10; if it is still silent, press a ▶ try-out button once). iPhones in silent mode stay silent.

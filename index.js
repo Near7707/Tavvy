@@ -570,6 +570,7 @@ function defaultSettings() {
         replyFiles: [],                        // 0.10.11 답 도착 내 소리 파일: [{ id, path, name }]
         soundVol: 60,                          // 0..100
         replyVol: null,                        // 0.11.8 답 도착 음량 0..100 (null = same as soundVol until moved)
+        soundFeel: 'clear',                    // 0.11.19 소리 느낌: 'clear' 또렷하게 / 'soft' 부드럽게
         lang: 'auto',                          // 0.11.0 'auto' / 'ko' / 'en' (applies after a reload)
         backup: { lastDay: null, files: [] },  // daily backups: [{ day, path, pets }]
     };
@@ -1508,10 +1509,71 @@ const REPLY_SOUNDS = [
 const REPLY_FILES_MAX = 10;
 let replyLast = '';
 
+/* ---------- 0.11.19 소리 느낌: 부드럽게 — sine tones that fade in, ring a little longer, top cut, a touch of echo ---------- */
+const SOFT_S = 0.88;             // 부드러움 0..1 (slower start, longer fade, darker)
+const SOFT_R = 0.11;             // 울림 0..1 (echo)
+let sndRev = null, sndRevCtx = null;
+function sndReverb() {
+    if (sndRevCtx !== sndCtx) {
+        const c = sndCtx, L = Math.floor(c.sampleRate * 1.8), b = c.createBuffer(2, L, c.sampleRate);
+        for (let ch = 0; ch < 2; ch++) { const d = b.getChannelData(ch); for (let i = 0; i < L; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / L, 3.2); }
+        sndRev = c.createConvolver(); sndRev.buffer = b; sndRev.connect(sndOut);
+        sndRevCtx = c;
+    }
+    return sndRev;
+}
+/** A soft tone. o: at, v, k, to (glide), atk, p (an overtone × f) + pv (its loudness). */
+function sndSoft(f, d, o = {}) {
+    const c = sndCtx, t = c.currentTime + (o.at || 0), v = (o.v || 0.4) * (o.k || 1);
+    const a = o.atk ?? (0.008 + SOFT_S * 0.035), D = d * (1 + SOFT_S * 0.6);
+    const g = c.createGain(), lp = c.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = Math.max(f * 1.6, 7000 - SOFT_S * 5200); lp.Q.value = 0.4;
+    const o1 = c.createOscillator();
+    o1.type = 'sine'; o1.frequency.setValueAtTime(f, t);
+    if (o.to) o1.frequency.exponentialRampToValueAtTime(o.to, t + d * 0.7);
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(v, t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + D);
+    o1.connect(g);
+    if (o.p) {
+        const o2 = c.createOscillator(), g2 = c.createGain();
+        o2.type = 'sine'; o2.frequency.value = f * o.p;
+        g2.gain.setValueAtTime(0.0001, t); g2.gain.linearRampToValueAtTime(v * (o.pv || 0.15), t + a); g2.gain.exponentialRampToValueAtTime(0.0001, t + D * 0.35);
+        o2.connect(g2); g2.connect(g); o2.start(t); o2.stop(t + D + 0.05);
+    }
+    g.connect(lp); lp.connect(sndOut);
+    if (SOFT_R > 0) { const rs = c.createGain(); rs.gain.value = SOFT_R * 0.7; lp.connect(rs); rs.connect(sndReverb()); }
+    o1.start(t); o1.stop(t + D + 0.05);
+}
+const softLen = (d, at = 0) => +(at + d * (1 + SOFT_S * 0.6) + 0.05).toFixed(2);
+// soft versions: sound key, 'heart:<pick>' (PICK_SOUNDS) or 'reply:<id>'. Not listed → plays as it is.
+const SOFT_SOUNDS = {
+    heart: [softLen(0.22), (k) => sndSoft(700, 0.22, { to: 1050, v: 0.42, k, p: 2 })],
+    wake: [softLen(0.8, 0.14), (k) => { sndSoft(784, 0.6, { v: 0.38, k, p: 2, pv: 0.1 }); sndSoft(1175, 0.8, { v: 0.32, k, at: 0.14, p: 2, pv: 0.08 }); }],
+    sleep: [softLen(1.1, 0.35), (k) => { sndSoft(523, 0.9, { to: 392, v: 0.3, k, atk: 0.12 }); sndSoft(392, 1.1, { v: 0.22, k, at: 0.35, atk: 0.15 }); }],
+    cheer: [softLen(0.7, 0.27), (k) => [523, 659, 784, 1047].forEach((f, i) => sndSoft(f, 0.7, { v: 0.26, k, at: i * 0.09, p: 2, pv: 0.1 }))],
+    bump: [softLen(0.2), (k) => sndSoft(330, 0.2, { to: 220, v: 0.6, k, atk: 0.006 })],
+    chat: [softLen(0.13, 0.22), (k) => [392, 466, 415].forEach((f, i) => sndSoft(f, 0.13, { v: 0.42, k, at: i * 0.11, atk: 0.02 }))],
+    'heart:chorong': [softLen(0.5, 0.07), (k) => { sndSoft(1568, 0.4, { v: 0.26, k, p: 2.4, pv: 0.08 }); sndSoft(2093, 0.5, { v: 0.22, k, at: 0.07, p: 2.4, pv: 0.06 }); }],
+    'heart:tokbell': [softLen(0.3, 0.08), (k) => { sndSoft(1318, 0.3, { v: 0.34, k, p: 3, pv: 0.12, atk: 0.006 }); sndSoft(1760, 0.3, { v: 0.28, k, at: 0.08, p: 3, pv: 0.1, atk: 0.006 }); }],
+    'reply:dingdong': [softLen(1, 0.22), (k) => { sndSoft(988, 0.7, { v: 0.34, k, p: 2.76, pv: 0.08 }); sndSoft(784, 1, { v: 0.34, k, at: 0.22, p: 2.76, pv: 0.08 }); }],
+    'reply:bell': [softLen(1.1), (k) => sndSoft(1318, 1.1, { v: 0.32, k, p: 2.4, pv: 0.12 })],
+    'reply:tok': [softLen(0.12, 0.13), (k) => { sndSoft(1050, 0.12, { v: 0.42, k, atk: 0.004, p: 2, pv: 0.1 }); sndSoft(1050, 0.12, { v: 0.36, k, at: 0.13, atk: 0.004, p: 2, pv: 0.1 }); }],
+    'reply:marimba': [softLen(0.5, 0.16), (k) => { sndSoft(659, 0.4, { v: 0.45, k, p: 4, pv: 0.2, atk: 0.006 }); sndSoft(523, 0.5, { v: 0.45, k, at: 0.16, p: 4, pv: 0.2, atk: 0.006 }); }],
+    'reply:arrive': [softLen(0.5, 0.12), (k) => { sndSoft(1047, 0.25, { v: 0.36, k, p: 2, pv: 0.12 }); sndSoft(1319, 0.5, { v: 0.36, k, at: 0.12, p: 2, pv: 0.12 }); }],
+    'reply:orgel': [softLen(1.2, 0.36), (k) => { sndSoft(1568, 0.9, { v: 0.3, k, p: 3, pv: 0.06 }); sndSoft(2093, 0.9, { v: 0.25, k, at: 0.18, p: 3, pv: 0.05 }); sndSoft(1760, 1.2, { v: 0.25, k, at: 0.36, p: 3, pv: 0.05 }); }],
+    'reply:trill': [softLen(0.16, 0.16), (k) => [1568, 1760, 2093].forEach((f, i) => sndSoft(f, 0.16, { v: 0.32, k, at: i * 0.08, atk: 0.01 }))],
+    'reply:xylo': [softLen(0.4, 0.24), (k) => [784, 988, 1175].forEach((f, i) => sndSoft(f, 0.4, { v: 0.38, k, at: i * 0.12, p: 4, pv: 0.15, atk: 0.005 }))],
+};
+// loudness match: highest point at 100% ≈ 0.78 like the crisp ones (measured; never past 1.0)
+const SOFT_K = { heart: 0.86, wake: 0.85, cheer: 0.83, bump: 0.67, chat: 0.93, 'reply:dingdong': 0.94, 'reply:tok': 0.85, 'reply:marimba': 0.78, 'reply:arrive': 0.9, 'reply:orgel': 0.96, 'reply:xylo': 0.8 };
+for (const [id, x] of Object.entries(SOFT_K)) { const f = SOFT_SOUNDS[id][1]; SOFT_SOUNDS[id][1] = (k) => f(k * x); }
+const softOn = () => root?.settings?.soundFeel === 'soft';
+/** The soft version of a sound when 부드럽게 is chosen (and there is one). */
+const feel = (id, len, play) => (softOn() && SOFT_SOUNDS[id] ? SOFT_SOUNDS[id] : [len, play]);
+
 /** One answer sound by id (built-in key or my file id): { id, len, play } or { id, path }. */
 function replyById(id) {
     const b = REPLY_SOUNDS.find(x => x[0] === id);
-    if (b) return { id, len: b[2], play: b[3] };
+    if (b) { const [len, play] = feel(`reply:${id}`, b[2], b[3]); return { id, len, play }; }   // 0.11.19 부드럽게
     const f = (root?.settings?.replyFiles || []).find(x => x?.id === id);
     return f && typeof f.path === 'string' ? { id, path: f.path } : null;
 }
@@ -1594,9 +1656,9 @@ function playSound(key, k = 1, test = false, rec = null, pick = null) {
         : LX('울리려 했지만 폰이 소리를 막고 있었을 수 있어요 (▶ 한 번 눌러 주세요)', 'tried, but the phone may have blocked it (press ▶ once)'));
     sndOut.gain.value = volOf(key) / 100 * SND_MASTER;
     sndLast[key] = now;
-    let path = rec?.sounds?.[key], len = def[0], play = def[1];
+    let path = rec?.sounds?.[key], [len, play] = feel(key, def[0], def[1]);   // 0.11.19 부드럽게
     const pk = PICK_SOUNDS[key], pv = pk && rec?.[pk[0]];               // 0.11.15 목소리 · 0.11.16 하트 소리
-    if (pv && Object.hasOwn(pk[1], pv)) [, len, play] = pk[1][pv];
+    if (pv && pv !== pk[2] && Object.hasOwn(pk[1], pv)) [len, play] = feel(`${key}:${pv}`, pk[1][pv][1], pk[1][pv][2]);
     if (key === 'reply' && typeof path !== 'string') {                  // 0.10.11: 그 펫의 내 소리가 없으면 설정의 답 도착 소리
         const r = pick || pickReply();
         replyLast = r.id;
@@ -1606,7 +1668,7 @@ function playSound(key, k = 1, test = false, rec = null, pick = null) {
         sndBusyTill = now + SND_MAX_SEC;
         sndBuf(path).then((b) => {
             try {
-                if (!b) return SOUNDS[key][1](k);                       // could not read it → the usual sound
+                if (!b) return play(k);                                 // could not read it → the usual sound
                 const src = sndCtx.createBufferSource(), g = sndCtx.createGain();
                 src.buffer = b; g.gain.value = k;
                 src.connect(g); g.connect(sndOut); src.start();
@@ -6608,6 +6670,8 @@ function settingsHtml() {
   </label>
 
   <div class="tw-cap">${LX('소리', 'Sounds')}</div>
+  <div class="tw-sndrow"><span class="tw-sndname">${LX('소리 느낌', 'Sound style')}</span><span class="tw-seg" style="flex:1"><span data-feel="clear">${LX('또렷하게', 'Crisp')}</span><span data-feel="soft">${LX('부드럽게', 'Soft')}</span></span></div>
+  <div class="tw-sub">${LX('펫 소리와 답 도착 소리가 한꺼번에 바뀌어요. 부드럽게는 조금 길게 울려요. 올려 둔 내 소리는 그대로예요.', 'Changes pet sounds and reply sounds together. Soft rings a little longer. Your own sound files stay as they are.')}</div>
   <label class="tw-check"><input type="checkbox" data-s="replyOn"> ${LX('답 도착 알림', 'Reply arrival alert')}</label>
   <div class="tw-sub">${LX('체크한 소리가 답이 올 때마다 돌아가며 나요. 펫 꾸미기 탭에서 그 펫의 답 도착 소리를 올려 두었으면 그게 먼저예요.', 'The checked sounds take turns each time a reply arrives. A pet’s own reply sound (set in its Style tab) comes first.')}</div>
   <div class="tw-sounds tw-replies">${repliesHtml()}</div>
@@ -6663,6 +6727,7 @@ function fillSettings() {
         vol.disabled = !on;
         box.querySelector(`[data-pct="${k}"]`).textContent = `${vol.value}%`;
     }
+    box.querySelectorAll('[data-feel]').forEach(x => x.classList.toggle('on', x.dataset.feel === (s.soundFeel === 'soft' ? 'soft' : 'clear')));   // 0.11.19
     box.querySelectorAll('[data-theme-pick]').forEach(t => t.classList.toggle('tw-on', t.dataset.themePick === (THEMES[s.winTheme] ? s.winTheme : 'theme')));
     // connection profiles (only when SillyTavern's Connection Manager is there)
     const profiles = connectionProfiles();
@@ -7923,6 +7988,8 @@ function onWinClick(e) {
     if (look) return pickLook(look.dataset.look);
     const theme = t.closest('[data-theme-pick]');
     if (theme) return setSetting('winTheme', theme.dataset.themePick);
+    const fe = t.closest('[data-feel]');                                // 0.11.19 소리 느낌: pick → hear it
+    if (fe) { setSetting('soundFeel', fe.dataset.feel === 'soft' ? 'soft' : 'clear'); fillSettings(); sndTouched = true; return playSound('heart', 1, true); }
 }
 
 function onWinInput(e) {
