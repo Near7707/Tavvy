@@ -1285,6 +1285,7 @@ function fx(actor, text, cls = '') {
 /* ---------- 0.10.5 소리: short sounds made in code (no files). Off unless turned on in ⚙ 설정. ---------- */
 
 const SND_GAP = 0.8;          // seconds before the same sound can play again
+const SND_MASTER = 0.6 * 3.3; // 0.11.13: loudness at 100% (was 0.6 — too quiet next to the phone's own sounds)
 let sndCtx = null, sndOut = null, sndTouched = false, sndBusyTill = 0, sndNoise = null;
 const sndLast = {};
 
@@ -1331,8 +1332,6 @@ const REPLY_SOUNDS = [
     ['marimba', LX('마림바', 'Marimba'), 0.46, (k) => { sndTone(659, 0.22, { v: 0.4, k }); sndTone(523, 0.3, { v: 0.4, k, at: 0.14 }); }],
     ['arrive', LX('도착', 'Arrival'), 0.37, (k) => { sndTone(1047, 0.1, { type: 'square', v: 0.26, k, lp: 1800 }); sndTone(1319, 0.25, { type: 'square', v: 0.26, k, lp: 1800, at: 0.1 }); }],   // 0.11.8: was 0.08 (too quiet)
     ['orgel', LX('오르골', 'Music box'), 1.14, (k) => { sndTone(1568, 0.6, { v: 0.32, k }); sndTone(2093, 0.6, { v: 0.27, k, at: 0.16 }); sndTone(1760, 0.8, { v: 0.27, k, at: 0.32 }); }],   // 0.11.8: ×1.8
-    ['whistle', LX('휘파람', 'Whistle'), 0.56, (k) => { sndTone(900, 0.25, { to: 1300, v: 0.33, k, atk: 0.06 }); sndTone(1300, 0.3, { to: 1000, v: 0.33, k, atk: 0.03, at: 0.24 }); }],   // 0.11.8: ×1.5
-    ['bubble', LX('뾱', 'Boop'), 0.11, (k) => sndTone(300, 0.09, { to: 1200, v: 0.4, k })],
     ['letter', LX('편지 종', 'Letter bell'), 1.02, (k) => {
         sndTone(880, 0.6, { v: 0.25, k }); sndTone(1760, 0.3, { v: 0.06, k });
         sndTone(660, 0.7, { v: 0.25, k, at: 0.3 }); sndTone(1320, 0.3, { v: 0.05, k, at: 0.3 });
@@ -1340,6 +1339,9 @@ const REPLY_SOUNDS = [
     // 0.11.8: 도착·피리릭·반짝 3~4×, 오르골 1.8×, 휘파람 1.5× — they were much quieter than the rest
     ['trill', LX('피리릭', 'Flute'), 0.25, (k) => { [1568, 1760, 2093].forEach((f, i) => sndTone(f, 0.09, { type: 'square', v: 0.26, k, lp: 2400, at: i * 0.07 })); }],
     ['sparkle', LX('반짝', 'Twinkle'), 0.34, (k) => { [2093, 2637, 3136].forEach((f, i) => sndTone(f, 0.18, { v: 0.32, k, at: i * 0.07 })); }],
+    // 0.11.13: 휘파람·뾱 out, 실로폰·풍경 in
+    ['xylo', LX('실로폰', 'Xylophone'), 0.54, (k) => { [784, 988, 1175].forEach((f, i) => { sndTone(f, 0.3, { v: 0.3, k, at: i * 0.11 }); sndTone(f * 4, 0.08, { v: 0.05, k, at: i * 0.11 }); }); }],
+    ['chime', LX('풍경', 'Wind chime'), 1.3, (k) => { [2349, 1976, 2637, 2093].forEach((f, i) => sndTone(f, 0.9, { v: 0.21, k, at: i * 0.13 })); }],
 ];
 const REPLY_FILES_MAX = 10;
 let replyLast = '';
@@ -1403,17 +1405,32 @@ function sndOnTouch() {
     if ((root?.settings?.soundOn || root?.settings?.replyOn) && (sndStuck || sndCtx?.state !== 'running')) sndWake();   // 0.11.10: iPhone can say 'running' and stay silent
 }
 
+/** 0.11.13: what happened to the last reply sound — shown under 답 도착 in ⚙ 설정 (not saved). */
+let replyLastNote = '';
+function replyNote(t) {
+    const d = new Date(), hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    replyLastNote = `${hm} ${t}`;
+    const el = win?.body?.querySelector?.('.tw-replynote');
+    if (el) el.textContent = `${LX('마지막 답 소리', 'Last reply sound')}: ${replyLastNote}`;
+}
+
 /** test = a try-out button (plays even when sound is off or the same sound just played). rec = the pet (its own sound file, if any).
  *  pick = which answer sound (settings ▶); none = the next one in turn. */
 function playSound(key, k = 1, test = false, rec = null, pick = null) {
     const s = root?.settings, def = SOUNDS[key];
-    if (!def || !s || document.hidden) return;
-    if (!test && (!(key === 'reply' ? s.replyOn : s.soundOn) || !sndTouched)) return;   // 0.10.11: 답 도착은 따로 켜고 끔
+    const note = (t) => { if (key === 'reply' && !test) replyNote(t); };   // 0.11.13: the last reply sound, for ⚙ 설정
+    if (!def || !s) return;
+    if (document.hidden) return note(LX('건너뜀 (다른 탭·앱을 보고 있어서)', 'skipped (another tab or app was open)'));
+    if (!test && !(key === 'reply' ? s.replyOn : s.soundOn)) return;   // 0.10.11: 답 도착은 따로 켜고 끔
+    if (!test && !sndTouched) return note(LX('건너뜀 (아직 화면을 안 눌러서)', 'skipped (no tap on the page yet)'));
     const now = performance.now() / 1000;
-    if (!test && (now < sndBusyTill || now - (sndLast[key] || -99) < SND_GAP)) return;   // one at a time
+    if (!test && now < sndBusyTill) return note(LX('건너뜀 (다른 소리가 나는 중이라)', 'skipped (another sound was playing)'));   // one at a time
+    if (!test && now - (sndLast[key] || -99) < SND_GAP) return note(LX('건너뜀 (바로 전에 울려서)', 'skipped (it just played)'));
     if (test) { if (sndCtx) sndStuck = true; sndWake(); }              // try-out buttons are touches — 0.11.10: always a fresh one (fixes a silent iPhone)
-    if (!sndReady()) return;
-    sndOut.gain.value = volOf(key) / 100 * 0.6;
+    if (!sndReady()) return note(LX('건너뜀 (이 브라우저에서 소리를 못 켜서)', 'skipped (sound isn’t available here)'));
+    note(sndCtx.state === 'running' ? LX('울림', 'played')
+        : LX('울리려 했지만 폰이 소리를 막고 있었을 수 있어요 (▶ 한 번 눌러 주세요)', 'tried, but the phone may have blocked it (press ▶ once)'));
+    sndOut.gain.value = volOf(key) / 100 * SND_MASTER;
     sndLast[key] = now;
     let path = rec?.sounds?.[key], len = def[0], play = def[1];
     if (key === 'reply' && typeof path !== 'string') {                  // 0.10.11: 그 펫의 내 소리가 없으면 설정의 답 도착 소리
@@ -6339,6 +6356,7 @@ function settingsHtml() {
   <input type="file" accept="${SND_ACCEPT}" data-f="replyfile">
   <div class="tw-msg tw-replymsg"></div>
   <div class="tw-row"><span class="tw-sub">${LX('답 도착 음량', 'Reply volume')}</span><input type="range" min="0" max="100" step="5" data-s="replyVol" class="tw-grow"><span class="tw-sub tw-volpct" data-pct="replyVol"></span></div>
+  <div class="tw-sub tw-replynote"></div>
   <label class="tw-check"><input type="checkbox" data-s="soundOn"> ${LX('펫 소리 (♥ · 깨우기 · 재우기 · 축하 · 콩 · 웅얼)', 'Pet sounds (♥ · wake · sleep · cheer · boop · mumble)')}</label>
   <div class="tw-row"><span class="tw-sub">${LX('펫 소리 음량', 'Pet sound volume')}</span><input type="range" min="0" max="100" step="5" data-s="soundVol" class="tw-grow"><span class="tw-sub tw-volpct" data-pct="soundVol"></span></div>
   <div class="tw-sub">${LX('다른 탭을 보고 있을 땐 소리가 나지 않아요. 폰은 화면을 한 번 누른 뒤부터 나요.', 'No sounds while you’re on another tab. On phones, sounds start after you tap the screen once.')}</div>
@@ -6379,6 +6397,7 @@ function fillSettings() {
     box.querySelector('[data-s="heartMode"]').value = s.heartMode || 'both';
     box.querySelector('[data-s="soundOn"]').checked = !!s.soundOn;
     box.querySelector('[data-s="replyOn"]').checked = !!s.replyOn;
+    box.querySelector('.tw-replynote').textContent = replyLastNote ? `${LX('마지막 답 소리', 'Last reply sound')}: ${replyLastNote}` : '';   // 0.11.13
     for (const [k, on] of [['soundVol', s.soundOn], ['replyVol', s.replyOn]]) {   // 0.11.8: two volumes
         const vol = box.querySelector(`[data-s="${k}"]`);
         vol.value = volOf(k === 'replyVol' ? 'reply' : 'heart');
