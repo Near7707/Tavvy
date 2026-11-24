@@ -465,6 +465,7 @@ function newPetRecord({ id, name, personality, look }) {
     return {
         id,
         name,
+        callMe: '',                                   // 0.11.14: what it calls you ({{user}}); empty = your SillyTavern name
         createdAt: now,
         acts090: true,                                // 0.9.0 rows (흥얼·두리번·앉기 out of 제자리 놀기) already in place
         look,                                         // images, facing, size, softness
@@ -976,9 +977,9 @@ function roleKeyOf(look, list) {
     return null;
 }
 
-/** {{user}} → your name. */
-function fillUser(text) {
-    return fillName(text, 'user', ctx().name1 || LX('나', 'you')).trim();
+/** {{user}} → what this pet calls you (0.11.14), else your name. */
+function fillUser(text, rec) {
+    return fillName(text, 'user', String(rec?.callMe || '').trim() || ctx().name1 || LX('나', 'you')).trim();
 }
 
 /* 0.10.10 이름 뒤 조사 맞추기: 적힌 조사가 받침과 안 맞으면 바꿈. [받침 있을 때, 없을 때] */
@@ -3983,7 +3984,7 @@ class Actor {
     }
 
     speak(text, ms = SAY_MS, max = LINE_MAX) {
-        const line = fillUser(text).slice(0, max);
+        const line = fillUser(text, this.rec).slice(0, max);
         if (!line) return;
         if (!this.sayEl) {
             this.sayEl = document.createElement('div');
@@ -6088,6 +6089,8 @@ function petHtml(p) {
 <div class="tw-pane" data-pane="gifts"></div>
 <div class="tw-pane tw-form" data-pane="edit">
   <label class="tw-label">${LX('이름', 'Name')} <input data-f="name" maxlength="20"></label>
+  <label class="tw-label">${LX('나를 부르는 이름', 'What it calls you')} <input data-f="callme" maxlength="20" placeholder="${esc(ctx().name1 || LX('나', 'you'))}"></label>
+  <div class="tw-sub">${LX('대사의 {{user}}가 이 이름으로 바뀌어요. 비워 두면 실리태번의 내 이름(페르소나)으로 불러요.', 'Replaces {{user}} in its lines. Leave empty to use your SillyTavern (persona) name.')}</div>
   <label class="tw-label">${LX('기본 성격', 'Base personality')} <select data-f="pers">${Object.entries(PERSONALITIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></label>
   <div class="tw-sub">${LX('성격을 바꾸면 행동은 바로 바뀌어요. 친밀도와 기록은 그대로예요.', 'Changing the personality changes behavior right away. Closeness and records stay.')}</div>
   <label class="tw-label">${LX('크기 (', 'Size (')}${device() === 'phone' ? LX('폰', 'phone') : 'PC'})
@@ -6265,9 +6268,10 @@ function removeSound(key) {
 function fillEdit(p) {
     const cur = lookKeyOf(p);
     win.form = { kind: 'edit', id: p.id, look: cur, file: null, prep: null,
-        base: { name: p.name, pers: p.personality?.base || 'aegyo', facing: p.look?.facing || 'front', squish: String(Math.round((p.look?.squish ?? 0.5) * 10) / 10), look: cur } };
+        base: { name: p.name, callMe: p.callMe || '', pers: p.personality?.base || 'aegyo', facing: p.look?.facing || 'front', squish: String(Math.round((p.look?.squish ?? 0.5) * 10) / 10), look: cur } };
     const b = win.form.base, box = win.body;
     box.querySelector('[data-f="name"]').value = b.name;
+    box.querySelector('[data-f="callme"]').value = b.callMe;
     box.querySelector('[data-f="pers"]').value = b.pers;
     box.querySelector('[data-f="facing"]').value = b.facing;
     box.querySelector('[data-f="squish"]').value = b.squish;
@@ -6500,7 +6504,7 @@ function formDirty() {
     if (talkDirty()) return true;
     const b = f.base;
     return f.look !== b.look || !!f.file
-        || val('name') !== b.name || val('pers') !== b.pers || val('facing') !== b.facing
+        || val('name') !== b.name || val('callme').trim() !== b.callMe || val('pers') !== b.pers || val('facing') !== b.facing
         || String(Number(val('squish'))) !== String(Number(b.squish));
 }
 
@@ -6906,6 +6910,7 @@ function formValues() {
     const v = (k) => box.querySelector(`[data-f="${k}"]`)?.value ?? '';
     return {
         name: v('name').trim(),
+        callMe: v('callme').trim().slice(0, 20),
         pers: PERSONALITIES[v('pers')] ? v('pers') : 'aegyo',
         facing: ['front', 'left', 'right'].includes(v('facing')) ? v('facing') : 'front',
         squish: Math.round(clamp(Number(v('squish')) || 0, 0, 1) * 10) / 10,
@@ -6938,6 +6943,7 @@ async function saveEdit() {
         if (added) root.looks.push(added);
         const oldFiles = look ? petFiles(p) : [];
         p.name = v.name;
+        p.callMe = v.callMe;
         p.personality = { ...(p.personality || {}), base: v.pers };
         if (look) { p.look.roles = look.roles; p.look.roleOpts = look.roleOpts || {}; p.look.kind = look.kind; p.look.baseline = look.baseline; }
         p.look.facing = v.facing;
@@ -7381,6 +7387,7 @@ function cleanPet(src, look) {
     if (Array.isArray(src.personality?.traits)) rec.personality.traits = src.personality.traits.filter(x => typeof x === 'string').slice(0, 10);
     if (isObj(src.lines)) for (const [k, v] of Object.entries(src.lines)) if (/^[a-zA-Z]{1,20}$/.test(k)) { const l = strList(v, 30); if (l.length) rec.lines[k] = l; }
     if (TALK_FREQ[src.talkFreq]) rec.talkFreq = src.talkFreq;
+    if (typeof src.callMe === 'string') rec.callMe = src.callMe.trim().slice(0, 20);
     src = { ...src, off: Array.isArray(src.off) ? [...src.off] : src.off, freq: isObj(src.freq) ? { ...src.freq } : src.freq };
     splitScreen(src);                                   // a pet file from before 0.8.2
     splitFidget(src);                                   // …and before 0.9.0
@@ -7607,7 +7614,7 @@ function onWinClick(e) {
     if (act === 'refit') return openRefit();
     if (act === 'refitok') return confirmRefit();
     if (act === 'refitno') return closeRefit();
-    if (act === 'copyprompt') return void copyPrompt();
+    if (act === 'copyprompt') return void copyPrompt(t.closest('[data-n]')?.dataset.n);
     if (act === 'sheetall') return win.body.querySelector('[data-f="sheetfile"]')?.click();
     if (act === 'sheetok') return confirmSheet();
     if (act === 'sheetno') { win.sheet = null; return drawRoles(); }
@@ -7976,28 +7983,37 @@ function lookNote(p) {
 }
 
 // 0.11.7: an example to copy into a picture AI (Tavvy itself never calls one)
-const AI_PIC_PROMPT = `Sprite sheet of one small chibi character: [describe your character here].
+// 0.11.14: two sheets of 3 × 2 instead of one 4 × 3 — fewer frames per sheet, so each picture comes out bigger
+const AI_PIC_PROMPTS = [`Sprite sheet of one small chibi character: [describe your character here].
 Same character in every frame, full body, same size and scale.
-4 columns x 3 rows grid, clear empty space between frames,
+3 columns x 2 rows grid, clear empty space between frames,
 plain white background, no text, no numbers.
-Row 1: standing (front), walking (side view) x2, sleeping
-Row 2: happy, angry, surprised, curious
-Row 3: sitting, eating, looking up, waving`;
+Row 1: standing (front), walking (side view) x2
+Row 2: sleeping, sitting, eating`, `Another sprite sheet of the same character as the first sheet: [describe your character here].
+Same look, same size and scale as the first sheet, full body.
+3 columns x 2 rows grid, clear empty space between frames,
+plain white background, no text, no numbers.
+Row 1: happy, angry, surprised
+Row 2: curious, looking up, waving`];
 
 function aiPromptHtml() {
+    const box = (n, cap) => `<div class="tw-sub"><b>${cap}</b></div>
+<textarea class="tw-aiprompt" data-n="${n}" readonly rows="9">${esc(AI_PIC_PROMPTS[n])}</textarea>
+<div class="tw-row"><div class="tw-btn tw-btn-small" data-act="copyprompt" data-n="${n}"><i class="fa-regular fa-copy"></i> ${LX('복사', 'Copy')}</div></div>`;
     return `<details class="tw-fold" data-group="aiprompt"${win.rolesOpen.has('aiprompt') ? ' open' : ''}><summary>${LX('AI로 그림 만들 때 예시', 'Example for making pictures with an AI')}</summary>
-<div class="tw-sub">${LX('그림 AI에 붙여 넣을 예시예요. [ ] 안에 생김새를 적어 주세요. 그림 AI는 영어를 잘 알아들어요.', 'An example to paste into a picture AI. Write the look inside [ ].')}</div>
-<textarea class="tw-aiprompt" readonly rows="10">${esc(AI_PIC_PROMPT)}</textarea>
-<div class="tw-row"><div class="tw-btn tw-btn-small" data-act="copyprompt"><i class="fa-regular fa-copy"></i> ${LX('복사', 'Copy')}</div></div>
-<div class="tw-sub">${LX('· 그림 사이를 띄워 두면 "시트로 한꺼번에 넣기"의 자동 찾기로 잘 나뉘어요. 안 되면 칸 수 4 × 3으로 나눠요.<br>· 걷기는 옆모습이 자연스러워요. 배경은 한 가지 색이 좋아요.<br>· 그림마다 키가 어긋나면 키 맞추기로 맞춰요.', '· With space between pictures, auto-find in "Add from a sheet" splits them well. If not, split by 4 × 3.<br>· Walking looks best from the side. A one-colour background works best.<br>· If the heights do not match, fix them with height matching.')}</div>
+<div class="tw-sub">${LX('그림 AI에 붙여 넣을 예시예요. [ ] 안에 생김새를 적어 주세요. 그림 AI는 영어를 잘 알아들어요. 한 장에 그림이 적을수록 크게 나와서, 6개씩 두 장으로 나눴어요.', 'An example to paste into a picture AI. Write the look inside [ ]. Fewer pictures per sheet come out bigger, so it is split into two sheets of 6.')}</div>
+${box(0, LX('1장 · 움직이기·쉬기', 'Sheet 1 · Moving · resting'))}
+${box(1, LX('2장 · 반응', 'Sheet 2 · Reactions'))}
+<div class="tw-sub">${LX('· 2장은 1장을 그린 대화에서 이어서 부탁하거나, 1장 그림을 같이 올리면 생김새가 잘 맞아요.<br>· 다른 동작도 필요하면 Row 줄의 동작만 바꿔서 몇 장이든 더 그려요.<br>· 그림 사이를 띄워 두면 "시트로 한꺼번에 넣기"의 자동 찾기로 잘 나뉘어요. 안 되면 칸 수 3 × 2로 나눠요.<br>· 걷기는 옆모습이 자연스러워요. 배경은 한 가지 색이 좋아요.<br>· 그림마다 키가 어긋나면 키 맞추기로 맞춰요.', '· For sheet 2, ask in the same chat as sheet 1, or attach the sheet 1 picture, so the look matches.<br>· Need other actions? Change the actions on the Row lines and make as many more sheets as you like.<br>· With space between pictures, auto-find in "Add from a sheet" splits them well. If not, split by 3 × 2.<br>· Walking looks best from the side. A one-colour background works best.<br>· If the heights do not match, fix them with height matching.')}</div>
 </details>`;
 }
 
-async function copyPrompt() {
+async function copyPrompt(n) {
+    n = n === '1' ? 1 : 0;
     let ok = false;
-    try { await navigator.clipboard.writeText(AI_PIC_PROMPT); ok = true; } catch { }
+    try { await navigator.clipboard.writeText(AI_PIC_PROMPTS[n]); ok = true; } catch { }
     if (!ok) {
-        const ta = win?.body.querySelector('.tw-aiprompt');
+        const ta = win?.body.querySelector(`.tw-aiprompt[data-n="${n}"]`);
         if (ta) { ta.focus(); ta.select(); try { ok = document.execCommand('copy'); } catch { } }
     }
     say(ok ? LX('복사했어요.', 'Copied.') : LX('복사가 안 됐어요. 글을 길게 눌러 직접 복사해 주세요.', 'Could not copy. Press and hold the text to copy it.'));
@@ -8823,7 +8839,7 @@ function talkHtml(p) {
   <label class="tw-label">${LX('말하는 빈도', 'How often it talks')}
     <select data-t="freq">${Object.entries(TALK_FREQ).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
   </label>
-  <div class="tw-sub">${LX('순간마다 한 줄에 하나씩 적어요. 여러 줄이면 그때그때 하나를 골라 펫 머리 위 말풍선으로 말해요.', 'Write one line per row for each moment. With several, one is picked each time and said in a bubble above the pet.')} <b>{{user}}</b>${LX('는 내 이름으로,', ' becomes your name,')} <b>{{pet}}</b>${LX('은 상대 펫 이름으로 바뀌어요. 바로 뒤 조사(은/는·이/가 등)는 이름에 맞게 저절로 바뀌어요. 한 줄은', ' becomes the other pet’s name. A line can be up to')} ${LINE_MAX}${LX('자까지예요.', ' characters.')}</div>
+  <div class="tw-sub">${LX('순간마다 한 줄에 하나씩 적어요. 여러 줄이면 그때그때 하나를 골라 펫 머리 위 말풍선으로 말해요.', 'Write one line per row for each moment. With several, one is picked each time and said in a bubble above the pet.')} <b>{{user}}</b>${LX('는 나를 부르는 이름(꾸미기 탭, 비우면 내 이름)으로,', ' becomes what it calls you (Style tab; empty = your name),')} <b>{{pet}}</b>${LX('은 상대 펫 이름으로 바뀌어요. 바로 뒤 조사(은/는·이/가 등)는 이름에 맞게 저절로 바뀌어요. 한 줄은', ' becomes the other pet’s name. A line can be up to')} ${LINE_MAX}${LX('자까지예요.', ' characters.')}</div>
   ${TALK_MOMENTS.map(m => `<label class="tw-label">${esc(m.name)}<textarea data-line="${m.key}" rows="2" placeholder="${LX('예)', 'e.g.')} ${esc(m.ex)}"></textarea></label>`).join('')}
   <div class="tw-btn tw-wide" data-act="aifill"><i class="fa-solid fa-wand-magic-sparkles"></i> ${LX('AI로 빈 칸 채우기', 'Fill empty slots with AI')}</div>
   <div class="tw-sub">${LX('누를 때만 한 번 만들어요. AI에게는 펫 이름과 성격만 보내요. 마음에 안 드는 줄은 저장하기 전에 고치거나 지우면 돼요.', 'Runs once, only when pressed. Only the pet’s name and personality are sent to the AI. Edit or delete lines you don’t like before saving.')}</div>

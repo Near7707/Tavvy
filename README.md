@@ -33,7 +33,7 @@ Tavvy speaks Korean and English. It uses Korean when SillyTavern's or your brows
 You can pick it yourself at the top of ⚙ Settings (**언어 · Language**); the change applies after you reload the page.
 Text you write yourself (pet names, lines, notes) is never translated. In English the starter pets are called Mochi · Barley · Button, and AI-written lines come out in English.
 
-## What it does (0.11.13)
+## What it does (0.11.14)
 
 - **Making a pet**: three starter pets (Mochi · Barley · Button) or one picture of your own (PNG · JPG). A plain one-color background, like white, is removed automatically (**Remove background**, with a strength slider in the preview). **Crop by hand** lets you cut just the character out of a bigger picture.
 - **Five base personalities**: Sweet · Prim · Easygoing · Grumpy · Aloof. Walking, dozing, greetings, eating and how it reacts to you all differ by personality. When it reacts to you, it looks at you for a moment first and holds the reaction a little; at most once every 30 seconds (0.11.7).
@@ -83,7 +83,7 @@ Text you write yourself (pet names, lines, notes) is never translated. In Englis
   - When closeness goes up it dances in colorful ✦ with "Closer now!".
 - **Reunions**: woken up, it looks around, spots you ("!") and greets you by personality. After a long time apart the greeting is longer; very close pets may even tear up. After 3+ days away, it has a word for you by the bed.
 - **The Tavvy window**: pet list, journal, new pets and settings in one place. Open it from **Pet info** in the wand menu or **Open Tavvy** in the extension settings.
-  - Each pet has **Journal** (days together, days chatted, messages exchanged, tokens eaten, biggest meal day, progress to the next stage, milestones) / **Actions** / **Style** (name, base personality, size, look, which way the picture faces, squishiness, sounds, export, say goodbye) / **Art** / **Lines** / **Presents**.
+  - Each pet has **Journal** (days together, days chatted, messages exchanged, tokens eaten, biggest meal day, progress to the next stage, milestones) / **Actions** / **Style** (name, what it calls you, base personality, size, look, which way the picture faces, squishiness, sounds, export, say goodbye) / **Art** / **Lines** / **Presents**.
   - Window color: **Follow theme / Cream · pink / Clean white / Night sky**.
   - On phones, tapping a text field opens a small input box at the top of the screen so the keyboard doesn't push the window around.
 - **Art tab** (your own pictures per action):
@@ -91,22 +91,30 @@ Text you write yourself (pet names, lines, notes) is never translated. In Englis
   - Up to 8 pictures per action play in turn. Speed per action: Slow / Normal / Fast (walking changes per step, eating per bite). Each action can face its own way, so front and side pictures can be mixed.
   - Pick one picture to **Crop · split** it in the preview: crop one part, or split a sprite sheet into several pictures (**Find automatically** or **Grid**).
   - **Add from a sheet**: split one sheet and choose an action for each picture (or a whole row at once).
-  - **Example for making pictures with an AI** (0.11.7, folded box at the bottom of the Pictures tab): an example to paste into a picture AI, with a **Copy** button. Write the look inside [ ]. Tavvy itself never calls an AI.
+  - **Example for making pictures with an AI** (0.11.7, folded box at the bottom of the Pictures tab): an example to paste into a picture AI, with a **Copy** button. Write the look inside [ ]. Since 0.11.14 it is two sheets of 6 (3 × 2) — fewer pictures per sheet come out bigger. Tavvy itself never calls an AI.
     ```
     Sprite sheet of one small chibi character: [describe your character here].
     Same character in every frame, full body, same size and scale.
-    4 columns x 3 rows grid, clear empty space between frames,
+    3 columns x 2 rows grid, clear empty space between frames,
     plain white background, no text, no numbers.
-    Row 1: standing (front), walking (side view) x2, sleeping
-    Row 2: happy, angry, surprised, curious
-    Row 3: sitting, eating, looking up, waving
+    Row 1: standing (front), walking (side view) x2
+    Row 2: sleeping, sitting, eating
     ```
-    - Space between pictures helps auto-find; otherwise split by 4 × 3. Walking looks best from the side; use a one-colour background.
+    ```
+    Another sprite sheet of the same character as the first sheet: [describe your character here].
+    Same look, same size and scale as the first sheet, full body.
+    3 columns x 2 rows grid, clear empty space between frames,
+    plain white background, no text, no numbers.
+    Row 1: happy, angry, surprised
+    Row 2: curious, looking up, waving
+    ```
+    - For sheet 2, ask in the same chat as sheet 1 or attach the sheet 1 picture so the look matches. Need other actions? Change the Row lines and make more sheets.
+    - Space between pictures helps auto-find; otherwise split by 3 × 2. Walking looks best from the side; use a one-colour background.
   - **Match height** scales pictures so the character's height matches the basic picture; you can fine-tune with a slider, now or later.
   - **Tap tap** (Reactions): shown while it hops after a click or tap.
   - Pictures you add are saved with the uploaded look, so new pets made with that look get them too (for starter looks, only this pet).
 - **Lines tab**:
-  - When woken / When put to bed / When patted / After a meal / Playing alone / Waiting for a reply / When a reply is late / Growing closer / Reunion after a while / When a reply arrives / When you send / Talking to another pet / When another pet talks to it / When another pet dozes. Write one line per row; one is picked each time and said in a bubble above the pet (up to 40 characters; `{{user}}` becomes your name, `{{pet}}` the other pet's name).
+  - When woken / When put to bed / When patted / After a meal / Playing alone / Waiting for a reply / When a reply is late / Growing closer / Reunion after a while / When a reply arrives / When you send / Talking to another pet / When another pet talks to it / When another pet dozes. Write one line per row; one is picked each time and said in a bubble above the pet (up to 40 characters; `{{user}}` becomes what it calls you — set per pet in the Style tab, 0.11.14; empty = your SillyTavern name, `{{pet}}` the other pet's name).
   - How often it talks: Off / Sometimes (default) / Often. With nothing written it stays quiet.
   - **Fill empty slots with AI**: runs once, only when pressed, sending just the pet's name and personality. Choose the connection in ⚙ Settings → "Connection used for AI lines" (SillyTavern Connection Manager profiles).
 - **Places together** (Journal tab): each room it lives in gets an entry automatically: the character's name (or group name), the dates, and the messages it ate there. Edit, remove, or add earlier places by hand. Not included in pet files or PNG cards (they contain room names).
