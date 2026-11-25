@@ -33,7 +33,7 @@ Tavvy speaks Korean and English. It uses Korean when SillyTavern's or your brows
 You can pick it yourself at the top of ⚙ Settings (**언어 · Language**); the change applies after you reload the page.
 Text you write yourself (pet names, lines, notes) is never translated. In English the starter pets are called Mochi · Barley · Button, and AI-written lines come out in English.
 
-## What it does (0.11.25)
+## What it does (0.11.26)
 
 - **Making a pet**: three starter pets (Mochi · Barley · Button) or one picture of your own (PNG · JPG). A plain one-color background, like white, is removed automatically (**Remove background**, with a strength slider in the preview). **Crop by hand** lets you cut just the character out of a bigger picture.
 - **Five base personalities**: Sweet · Prim · Easygoing · Grumpy · Aloof. Walking, dozing, greetings, eating and how it reacts to you all differ by personality. When it reacts to you, it looks at you for a moment first and holds the reaction a little; at most once every 30 seconds (0.11.7).
@@ -89,6 +89,7 @@ Text you write yourself (pet names, lines, notes) is never translated. In Englis
   - On phones, tapping a text field opens a small input box at the top of the screen so the keyboard doesn't push the window around.
 - **Art tab** (your own pictures per action):
   - Fill slots under "Common actions" (Basic · Walk · Held · Dance · Doze · Cry) and the folded groups (More movement / Reactions / Rest · eat / Special moments). Empty slots use the basic picture + movement instead.
+  - On screens that show a picture much smaller than it is (like a PC), it is shrunk once to the exact screen size and its edges crisped a little, so it does not look soft (phones unchanged).
   - Up to 8 pictures per action play in turn. Speed per action: Slow / Normal / Fast (walking changes per step, eating per bite). Each action can face its own way, so front and side pictures can be mixed.
   - Pick one picture to **Crop · split** it in the preview: crop one part, or split a sprite sheet into several pictures (**Find automatically** or **Grid**).
   - **Add from a sheet**: split one sheet and choose an action for each picture (or a whole row at once).

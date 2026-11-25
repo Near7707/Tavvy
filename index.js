@@ -875,6 +875,58 @@ function fitOf(src) {
     return null;
 }
 
+/* ---------- 0.11.26: 선명하게 — a big picture shown small on a PC screen (≈4× smaller, 1 dot per px) looked soft.
+   Shrink it once to the exact screen dots, then crisp up the edges a little. Phones (3 dots per px) are unchanged. ---------- */
+const SHARP_AMT = 1.0;        // edge crisping (picked from a side-by-side test: 0.5 weak · 1.0 · 1.6 strong)
+const SHARP_RATIO = 2.5;      // only when the picture is shrunk at least this much on screen (PC ≈4, phone ≈2)
+const SHARP_KEEP = 300;       // made pictures kept at once
+const sharps = new Map();     // key → blob url · '' while being made · null = not needed / could not
+function sharpOf(src, bw, bh) {
+    if (!src || src.startsWith(BASE) || !(bw > 0 && bh > 0)) return null;
+    const dpr = window.devicePixelRatio || 1;
+    const key = `${src}|${Math.round(bw)}x${Math.round(bh)}|${dpr}`;
+    if (sharps.has(key)) return sharps.get(key) || null;
+    sharps.set(key, '');
+    loadImage(src).then(async (im) => {
+        const nw = im.naturalWidth, nh = im.naturalHeight;
+        const z = Math.min(bw / nw, bh / nh);                                   // object-fit: contain
+        const W = Math.max(1, Math.round(nw * z * dpr)), H = Math.max(1, Math.round(nh * z * dpr));
+        if (nh / H < SHARP_RATIO) { sharps.set(key, null); return; }
+        let c = document.createElement('canvas');
+        c.width = nw; c.height = nh; c.getContext('2d').drawImage(im, 0, 0);
+        while (c.height / 2 >= H * 1.5) {                                       // halve in steps: smooth, no lost lines
+            const n = document.createElement('canvas');
+            n.width = Math.round(c.width / 2); n.height = Math.round(c.height / 2);
+            const x = n.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(c, 0, 0, n.width, n.height);
+            c = n;
+        }
+        const f = document.createElement('canvas');
+        f.width = W; f.height = H;
+        const x = f.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(c, 0, 0, W, H);
+        const id = x.getImageData(0, 0, W, H), d = id.data, pm = new Float32Array(d.length);
+        for (let i = 0; i < d.length; i += 4) { const a = d[i + 3] / 255; pm[i] = d[i] * a; pm[i + 1] = d[i + 1] * a; pm[i + 2] = d[i + 2] * a; pm[i + 3] = d[i + 3]; }
+        for (let y = 0; y < H; y++) for (let X = 0; X < W; X++) {               // each dot minus its 4 neighbours' average (edges stand out)
+            const i = (y * W + X) * 4;
+            const l = (y * W + Math.max(0, X - 1)) * 4, r = (y * W + Math.min(W - 1, X + 1)) * 4;
+            const u = (Math.max(0, y - 1) * W + X) * 4, dn = (Math.min(H - 1, y + 1) * W + X) * 4;
+            const v = [0, 0, 0, 0];
+            for (let k = 0; k < 4; k++) v[k] = pm[i + k] + (pm[i + k] - (pm[l + k] + pm[r + k] + pm[u + k] + pm[dn + k]) / 4) * SHARP_AMT;
+            const a = clamp(v[3], 0, 255);
+            d[i + 3] = a;
+            for (let k = 0; k < 3; k++) d[i + k] = a > 0 ? v[k] * 255 / a : 0;
+        }
+        x.putImageData(id, 0, 0);
+        const blob = await new Promise((res) => f.toBlob(res));
+        if (!blob) { sharps.set(key, null); return; }
+        if (sharps.size > SHARP_KEEP) {                                          // forget the oldest ones nobody shows
+            const using = new Set(actors.map((a) => a.curSrc));
+            for (const [k, u] of sharps) { if (sharps.size <= SHARP_KEEP * 0.8) break; if (u && !using.has(u)) { URL.revokeObjectURL(u); sharps.delete(k); } }
+        }
+        sharps.set(key, URL.createObjectURL(blob));
+    }).catch(() => sharps.set(key, null));                                     // e.g. a picture from another site (canvas can't read it)
+    return null;
+}
+
 function loadImage(src) {
     return new Promise((resolve, reject) => {
         const im = new Image();
@@ -4162,8 +4214,10 @@ class Actor {
             else i = Math.floor((performance.now() - this.animT0) / 1000 * (FRAME_FPS[opt.speed] || FRAME_FPS.normal));
         }
         const src = imgUrl(list[i % list.length]);
-        if (src !== this.curSrc) { this.img.src = src; this.curSrc = src; }
-        this.placeImg(fitOf(src));
+        const fit = fitOf(src);
+        const show = sharpOf(src, fit ? fit.w * this.k / fit.m : this.w, fit ? fit.h * this.k / fit.m : this.h) || src;   // 0.11.26 선명하게
+        if (show !== this.curSrc) { this.img.src = show; this.curSrc = show; }
+        this.placeImg(fit);
         const f = opt.facing || look.facing;                                      // each picture may face its own way
         const flip = (f === 'left' || f === 'right') && (f === 'right' ? this.dir < 0 : this.dir > 0);
         this.img.classList.toggle('tavvy-flip', flip);
