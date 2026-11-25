@@ -881,6 +881,9 @@ const SHARP_AMT = 1.0;        // edge crisping (picked from a side-by-side test:
 const SHARP_RATIO = 2.5;      // only when the picture is shrunk at least this much on screen (PC ≈4, phone ≈2)
 const SHARP_KEEP = 300;       // made pictures kept at once
 const sharps = new Map();     // key → blob url · '' while being made · null = not needed / could not
+const sharpDots = new Map();  // blob url → { w, h } its size in screen dots (0.11.28: placed dot-exact)
+/** 0.11.28: a spot on whole screen dots — half a dot off blurs a sharpened picture */
+const snapDot = (v) => { const d = window.devicePixelRatio || 1; return Math.round(v * d) / d; };
 function sharpOf(src, bw, bh) {
     if (!src || src.startsWith(BASE) || !(bw > 0 && bh > 0)) return null;
     const dpr = window.devicePixelRatio || 1;
@@ -920,9 +923,11 @@ function sharpOf(src, bw, bh) {
         if (!blob) { sharps.set(key, null); return; }
         if (sharps.size > SHARP_KEEP) {                                          // forget the oldest ones nobody shows
             const using = new Set(actors.map((a) => a.curSrc));
-            for (const [k, u] of sharps) { if (sharps.size <= SHARP_KEEP * 0.8) break; if (u && !using.has(u)) { URL.revokeObjectURL(u); sharps.delete(k); } }
+            for (const [k, u] of sharps) { if (sharps.size <= SHARP_KEEP * 0.8) break; if (u && !using.has(u)) { URL.revokeObjectURL(u); sharpDots.delete(u); sharps.delete(k); } }
         }
-        sharps.set(key, URL.createObjectURL(blob));
+        const url = URL.createObjectURL(blob);
+        sharpDots.set(url, { w: W, h: H });
+        sharps.set(key, url);
     }).catch(() => sharps.set(key, null));                                     // e.g. a picture from another site (canvas can't read it)
     return null;
 }
@@ -4182,7 +4187,7 @@ class Actor {
         const sx = 1 + (1 - sy) * 0.7;
         const left = this.x - this.w / 2 + shiver;
         const top = stage.floorY - this.y - this.h + this.basePx - bob;
-        this.el.style.transform = `translate3d(${(left - stage.ox).toFixed(1)}px, ${(top - stage.oy).toFixed(1)}px, 0)`;
+        this.el.style.transform = `translate3d(${snapDot(left - stage.ox).toFixed(2)}px, ${snapDot(top - stage.oy).toFixed(2)}px, 0)`;   // 0.11.28: on whole dots
         const ce = this.clipEdge;                                                 // 0.9.0 빼꼼: the part past the side is out of sight
         if (ce) {
             const hid = ce.s < 0 ? ce.E - left : left + this.w - ce.E;
@@ -4217,7 +4222,7 @@ class Actor {
         const fit = fitOf(src);
         const show = sharpOf(src, fit ? fit.w * this.k / fit.m : this.w, fit ? fit.h * this.k / fit.m : this.h) || src;   // 0.11.26 선명하게
         if (show !== this.curSrc) { this.img.src = show; this.curSrc = show; }
-        this.placeImg(fit);
+        this.placeImg(fit, sharpDots.get(show));
         const f = opt.facing || look.facing;                                      // each picture may face its own way
         const flip = (f === 'left' || f === 'right') && (f === 'right' ? this.dir < 0 : this.dir > 0);
         this.img.classList.toggle('tavvy-flip', flip);
@@ -4226,15 +4231,22 @@ class Actor {
     }
 
     /** A 키 맞추기 picture: its own size at the 기본 picture's scale, standing on the box's bottom middle. */
-    placeImg(fit) {
-        const key = fit ? `${fit.w}|${fit.h}|${fit.m}|${this.w}|${this.h}|${this.k}` : '';
+    placeImg(fit, dots) {
+        const dpr = window.devicePixelRatio || 1;
+        const key = (fit ? `${fit.w}|${fit.h}|${fit.m}|${this.w}|${this.h}|${this.k}` : '') + (dots ? `|s${dots.w}x${dots.h}|${this.w}|${this.h}|${dpr}` : '');
         if (key === this.fitKey) return;
         this.fitKey = key;
         const st = this.img.style;
         this.img.classList.toggle('tavvy-smooth', !!fit && fit.m > 1);
-        if (!fit) { st.cssText = ''; return; }
-        const W = fit.w * this.k / fit.m, H = fit.h * this.k / fit.m;
-        Object.assign(st, { position: 'absolute', maxWidth: 'none', maxHeight: 'none', width: W.toFixed(1) + 'px', height: H.toFixed(1) + 'px', left: ((this.w - W) / 2).toFixed(1) + 'px', top: (this.h - H).toFixed(1) + 'px' });
+        if (!fit && !dots) { st.cssText = ''; return; }
+        let W = fit ? fit.w * this.k / fit.m : 0, H = fit ? fit.h * this.k / fit.m : 0;
+        let left = (this.w - W) / 2, top = this.h - H;
+        if (dots) {                                       // 0.11.28 선명하게: one picture dot = one screen dot, on whole dots
+            W = dots.w / dpr; H = dots.h / dpr;
+            left = snapDot((this.w - W) / 2);
+            top = snapDot(fit ? this.h - H : (this.h - H) / 2);
+        }
+        Object.assign(st, { position: 'absolute', maxWidth: 'none', maxHeight: 'none', objectFit: dots ? 'fill' : '', width: W.toFixed(2) + 'px', height: H.toFixed(2) + 'px', left: left.toFixed(2) + 'px', top: top.toFixed(2) + 'px' });
     }
 
     /** A picture for this action, or what stands in for it (ROLE_DEFS fallbacks, ending at 기본). */
