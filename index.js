@@ -4248,12 +4248,15 @@ function ensureLoop() {
     raf = requestAnimationFrame(tick);
 }
 
+const STEP_MAX = 1 / 30;     // s — one movement step is never longer than this (ledges, landings stay exact)
+const FRAME_MAX = 0.15;      // s — 0.11.22: a slow screen (PC: few frames a second) catches up in several steps, up to this; longer gaps (tab hidden) don't
 function tick(t) {
     raf = 0;
-    const dt = Math.min(1 / 30, Math.max(0, (t - lastT) / 1000));
+    const gap = Math.min(FRAME_MAX, Math.max(0, (t - lastT) / 1000));
+    const n = Math.max(1, Math.ceil(gap / STEP_MAX - 1e-6)), dt = gap / n;   // was: one step capped at 1/30 s → half speed at 15 frames/s
     lastT = t;
     // keep geometry fresh: floor every ~0.25s (keyboard, toolbar changes), overlay origin every frame
-    remeasureT += dt;
+    remeasureT += gap;
     if (remeasureT > 0.25) {
         remeasureT = 0; measure();
         // missed "generation ended" signal (stopped / error) → stop waiting
@@ -4270,9 +4273,11 @@ function tick(t) {
         measureOrigin();
         if (ox !== stage.ox || oy !== stage.oy) placeBed();
     }
-    for (const a of [...actors]) a.step(dt);
-    if (actors.length > 1) { bumpCheck(); apartCheck(dt); meetCheck(); }
-    if (sparkles.length) stepSparkles(dt);
+    for (let i = 0; i < n && actors.length; i++) {
+        for (const a of [...actors]) a.step(dt);
+        if (actors.length > 1) { bumpCheck(); apartCheck(dt); meetCheck(); }
+        if (sparkles.length) stepSparkles(dt);
+    }
     if (actors.length) raf = requestAnimationFrame(tick);
 }
 
