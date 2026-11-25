@@ -374,20 +374,23 @@
 /* ---------- the Tavvy window (0.6.0) ---------- */
 /* The overlay is sized and placed from JS (fitWin) onto the part of the screen you can see. */
 .tavvy-modal {
+    /* 0.11.32: a <dialog> shown with showModal() — the browser centres it and keeps it in view with a phone keyboard */
     position: fixed;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh;
+    inset: 0;
+    margin: auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    width: min(400px, calc(100vw - 24px));
+    max-width: none;
+    height: fit-content;
+    max-height: calc(100dvh - 24px);
+    overflow: visible;
     z-index: 10010;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, .45);
-    padding: 12px;
-    box-sizing: border-box;
 }
-.tavvy-modal[hidden] { display: none; }
+.tavvy-modal[open] { display: flex; flex-direction: column; }
+.tavvy-modal::backdrop { background: rgba(0, 0, 0, .45); }
 
 .tavvy-win {
     /* theme: follow SillyTavern */
@@ -731,7 +734,6 @@
 .tavvy-bubble.tavvy-bubble-special { border-color: #f0a6c0; font-weight: 600; }
 
 /* the window above the phone keyboard: top of the visible part, filling it */
-.tavvy-modal.tavvy-kb { align-items: flex-start; padding: 6px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .45); }
 
 /* night sky window colour */
 .tavvy-win[data-theme="night"] {
@@ -922,8 +924,7 @@
 /* iPhone paints its own white over a box you're typing in → cover it from the inside with the field colour */
 .tavvy-win input:not([type="checkbox"]):not([type="range"]):not([type="file"]),
 .tavvy-win textarea,
-.tavvy-win select:focus,
-.tavvy-typer input, .tavvy-typer textarea {
+.tavvy-win select:focus {
     box-shadow: inset 0 0 0 100px var(--tw-field) !important;
     -webkit-text-fill-color: var(--tw-fg) !important;
     color: var(--tw-fg) !important;
@@ -932,35 +933,6 @@
 .tavvy-win input:-webkit-autofill, .tavvy-win textarea:-webkit-autofill {
     box-shadow: inset 0 0 0 100px var(--tw-field) !important;
     -webkit-text-fill-color: var(--tw-fg) !important;
-}
-/* the box being typed in (up top) is marked in the window */
-.tavvy-win .tw-typing { outline: 2px solid var(--tw-accent); outline-offset: 1px; }
-
-/* phone typing box: a small strip at the very top of the screen */
-.tavvy-typer {
-    position: fixed; top: 0; left: 0; width: 100vw; z-index: 10030;
-    padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 6px; box-sizing: border-box;
-    --tw-bg: var(--SmartThemeBlurTintColor, #fff); --tw-fg: var(--SmartThemeBodyColor, #222); --tw-sub: color-mix(in srgb, var(--tw-fg) 60%, transparent);
-    --tw-line: var(--SmartThemeBorderColor, #ccc); --tw-field: color-mix(in srgb, var(--tw-fg) 6%, var(--tw-bg)); --tw-accent: #d4537e;
-}
-.tavvy-typer[hidden] { display: none; }
-.tavvy-typer[data-theme="cream"] { --tw-bg: #fbf6ee; --tw-fg: #4b1528; --tw-sub: #993556; --tw-line: #f4c0d1; --tw-field: #fff; --tw-accent: #d4537e; }
-.tavvy-typer[data-theme="white"] { --tw-bg: #fff; --tw-fg: #2c2c2a; --tw-sub: #888780; --tw-line: #eceae5; --tw-field: #fff; --tw-accent: #d4537e; }
-.tavvy-typer[data-theme="night"] { --tw-bg: #22232e; --tw-fg: #e9e8f2; --tw-sub: #a9a8bd; --tw-line: #444760; --tw-field: #33354a; --tw-accent: #f0a6c0; }
-.tavvy-typer-box {
-    background: var(--tw-bg); color: var(--tw-fg); border: 1px solid var(--tw-line); border-radius: 14px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, .35); padding: 8px 10px 10px;
-    backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px)); -webkit-backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px));
-}
-.tavvy-typer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 13px; color: var(--tw-sub); }
-.tavvy-typer-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tavvy-typer .tw-btn {
-    flex: none; padding: 6px 14px; border-radius: 10px; background: var(--tw-accent); color: #fff; font-size: 14px; cursor: pointer; user-select: none;
-}
-.tavvy-typer[data-theme="night"] .tw-btn { color: #2a1b23; }
-.tavvy-typer input, .tavvy-typer textarea {
-    width: 100%; box-sizing: border-box; margin: 0; padding: 8px 10px; border-radius: 10px;
-    border: 1px solid var(--tw-line); background: var(--tw-field); font: inherit; font-size: 16px; resize: none;
 }
 
 /* ---------- 0.7.5: cut by hand / split a sheet ---------- */
@@ -1276,7 +1248,7 @@
 .tavvy-win .tw-aiprompt { width: 100%; box-sizing: border-box; margin: 6px 0; font-family: ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.4; resize: vertical; }
 
 /* 0.11.31 pet list under the name (pet page) */
-.tavvy-win { position: relative; }
+.tavvy-win { position: relative; width: 100%; max-height: calc(100dvh - 24px); min-height: 0; }
 .tavvy-win .tw-petpick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; cursor: pointer; border-radius: 10px; padding: 2px 6px 2px 2px; }
 .tavvy-win .tw-petpick:hover, .tavvy-win .tw-petpick.tw-open { background: var(--tw-card); }
 .tavvy-win .tw-petpick .tw-title { flex: 0 1 auto; }
@@ -1296,3 +1268,22 @@
 .tavvy-win .tw-pm-main span { font-size: 12px; color: var(--tw-sub); }
 .tavvy-win .tw-pmhome { border-top: 1px solid var(--tw-line); border-radius: 0 0 9px 9px; margin-top: 4px; }
 .tavvy-win .tw-pm-icon { align-items: center; color: var(--tw-sub); font-size: 16px; }
+/* 0.11.32 settings tabs */
+.tavvy-win .tw-stabs { margin-top: 0; }
+.tavvy-win .tw-spane[hidden] { display: none !important; }
+.tavvy-win .tw-spane { display: flex; flex-direction: column; gap: 6px; }
+.tavvy-win .tw-spane[data-spane="sound"] > .tw-cap:first-child, .tavvy-win .tw-spane[data-spane="pets"] > .tw-cap:first-child { display: none; }
+/* 0.11.32 pet page: one line up top, folds and a save bar in the Style tab */
+.tavvy-win .tw-heroline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tavvy-win .tw-heroline .tw-sub { margin: 0; }
+.tavvy-win [data-pane="journal"] .tw-hero { margin-bottom: 12px; }
+.tavvy-win .tw-efold:first-child { margin-top: 0; border-top: none; padding-top: 0; }
+.tavvy-win .tw-foldbody { display: flex; flex-direction: column; gap: 6px; padding-bottom: 6px; }
+.tavvy-win .tw-savebar {
+    position: sticky; bottom: -14px; z-index: 2;
+    margin: 8px -14px -14px; padding: 10px 14px 14px;
+    background: var(--tw-bg); border-top: 1px solid var(--tw-line);
+    display: flex; flex-direction: column; gap: 6px;
+}
+.tavvy-win .tw-savebar[hidden], .tavvy-win .tw-savebar [hidden] { display: none !important; }
+.tavvy-win .tw-savebar .tw-msg:empty { display: none; }

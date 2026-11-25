@@ -5644,8 +5644,10 @@ function findBed() {
 
 /** A short message at the bottom of whatever the window shows. */
 function say(text) {
-    const m = win?.body.querySelector('.tw-pane:not([hidden]) .tw-msg') || win?.body.querySelector('.tw-msg');
-    if (m) m.textContent = text;
+    const m = win?.body.querySelector('.tw-pane:not([hidden]) .tw-msg:not(.tw-sndmsg)') || win?.body.querySelector('.tw-msg');
+    if (!m) return;
+    m.textContent = text;
+    if (m.classList.contains('tw-savemsg')) { m.dataset.t = String(performance.now()); saveBarSoon(); }
 }
 
 function homeLabel(p) {
@@ -5840,6 +5842,12 @@ function persName(p) {
     return PERSONALITIES[p.personality?.base]?.name || '?';
 }
 
+/** 0.11.32: the line under the window's title on a pet's page (the big picture and the bar are in the Journal tab). */
+function heroLineHtml(p) {
+    const lv = levelLabel(p);
+    return `<div class="tw-heroline"><span class="tw-chip">${esc(persName(p))}</span><span class="tw-sub">${esc(homeLabel(p))}${lv ? ' · ' + esc(lv) : ''}</span></div>`;
+}
+
 function heroHtml(p) {
     const mode = root?.settings?.heartMode || 'both';
     const L = LEVELS[levelOf(p)];
@@ -5848,8 +5856,6 @@ function heroHtml(p) {
 <div class="tw-bar"><i style="width:${step.pct}%"></i></div><div class="tw-sub tw-center">${esc(step.text)}</div>`;
     return `<div class="tw-hero">
   <div class="tw-hero-img"><img src="${esc(imgUrl(p.look?.roles?.idle?.[0]))}" alt=""></div>
-  <div class="tw-hero-name">${esc(p.name)} <span class="tw-chip">${esc(persName(p))}</span></div>
-  <div class="tw-sub tw-center">${esc(homeLabel(p))}</div>
   ${hearts}
 </div>`;
 }
@@ -6118,205 +6124,29 @@ let win = null;   // { el, box, head, body, view, id, tab, form } while open
 
 function ensureWin() {
     if (win) return win;
-    const el = document.createElement('div');
+    // 0.11.32: a real <dialog> (as NAIce Shot does) — the browser keeps it in view when a phone keyboard comes up,
+    // so text boxes are typed in place (the separate phone typing box is gone)
+    const el = document.createElement('dialog');
     el.id = 'tavvy-win';
     el.className = 'tavvy-modal';
-    el.hidden = true;
     el.innerHTML = '<div class="tavvy-win" role="dialog" aria-modal="true"><div class="tavvy-win-head"></div><div class="tavvy-win-body"></div></div>';
     document.body.appendChild(el);
     win = { el, box: el.firstElementChild, head: el.querySelector('.tavvy-win-head'), body: el.querySelector('.tavvy-win-body'), open: false, view: 'home', id: null, tab: 'journal', form: null,
-        talkBase: null, roleEdit: null, rolesOpen: new Set(), prevTimer: 0, fit: '' };
+        talkBase: null, roleEdit: null, rolesOpen: new Set(), editOpen: new Set(['basic']), stab: 'screen', prevTimer: 0, fit: '' };
     el.addEventListener('pointerdown', (e) => { if (e.target === el) closeWin(); });
     el.addEventListener('click', onWinClick);
     el.addEventListener('input', onWinInput);
     el.addEventListener('change', onWinInput);
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && win?.open) { if (cutter) closeCutter(); else if (win.box.querySelector('.tw-petmenu')) closePetMenu(); else closeWin(); } });
-    const refit = () => { if (win?.open) fitWin(); };
-    window.addEventListener('resize', refit);
-    window.visualViewport?.addEventListener('resize', refit);
-    window.visualViewport?.addEventListener('scroll', refit);
-    el.addEventListener('focusin', refitSoon);
-    el.addEventListener('focusout', refitSoon);
-    hookTyper(el);
+    el.addEventListener('cancel', (e) => e.preventDefault());
+    for (const ev of ['input', 'change', 'click']) el.addEventListener(ev, saveBarSoon);   // 0.11.32 save bar follows edits       // Escape: our own handler below (asks about unsaved edits)
     el.addEventListener('toggle', (e) => {                          // folded groups in the 그림 tab stay as you left them
         const g = e.target?.dataset?.group;
         if (g) { if (e.target.open) win.rolesOpen.add(g); else win.rolesOpen.delete(g); }
+        const ef = e.target?.dataset?.efold;                       // 0.11.32 꾸미기 folds stay as you left them
+        if (ef) { if (e.target.open) win.editOpen.add(ef); else win.editOpen.delete(ef); }
     }, true);
-    // while open: if the visible screen changed without telling us (keyboard), fit again
-    setInterval(() => {
-        if (!win?.open || document.hidden) return;
-        const vv = window.visualViewport;
-        const now = vv ? `${Math.round(vv.width)}|${Math.round(vv.height)}|${Math.round(vv.offsetLeft)}|${Math.round(vv.offsetTop)}` : `${window.innerWidth}|${window.innerHeight}|0|0`;
-        if (now !== win.fit) fitWin();
-    }, 250);
     return win;
-}
-
-/**
- * Sit exactly on the part of the screen you can see. On some phones a "fixed" box is shifted or
- * taller than the screen (the same thing the pets' layer corrects for), which pushed the X off screen.
- */
-function fitWin() {
-    if (typer?.open) return;                                        // phone typing box is up → the window stays put
-    const el = win.el, vv = window.visualViewport;
-    const w = vv ? vv.width : window.innerWidth;
-    const h = vv ? vv.height : window.innerHeight;
-    const x = vv ? vv.offsetLeft : 0, y = vv ? vv.offsetTop : 0;
-    // phone keyboard up: the part you can see got much shorter → the window sits at its top and fills it
-    const kb = !!vv && window.innerHeight - h > 120;
-    // typing box just closed: the keyboard is still sliding down → keep the window as it was (no half-size flash)
-    if (typerShut) {
-        if (kb && performance.now() < typerShut) return;
-        typerShut = 0;
-    }
-    win.fit = `${Math.round(w)}|${Math.round(h)}|${Math.round(x)}|${Math.round(y)}`;
-    el.classList.toggle('tavvy-kb', kb);
-    el.style.width = `${Math.round(w)}px`;
-    el.style.height = `${Math.round(h)}px`;
-    el.style.transform = 'none';
-    if (kb) {
-        // keyboard up: stick straight onto the visible part (no measuring mid-slide — iPhone moves things
-        // while the keyboard animates, and correcting against that made the window jump about)
-        el.style.top = `${Math.round(y)}px`;
-        el.style.left = `${Math.round(x)}px`;
-        keepFocusVisible();
-        return;
-    }
-    el.style.top = '0px';
-    el.style.left = '0px';
-    const r = el.getBoundingClientRect();
-    const dx = x - r.left, dy = y - r.top;
-    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) el.style.transform = `translate(${Math.round(dx)}px, ${Math.round(dy)}px)`;
-}
-
-/* ---------- phone typing box ----------
- * On phones, tapping a text box in the window doesn't type in place: a small box opens at the very top of
- * the screen instead, and what you write goes back into the window's box when you finish. The keyboard
- * then never has to share the screen with the big window (iPhone kept cutting it in half). */
-const isTouchUi = () => window.matchMedia?.('(pointer: coarse)').matches;
-const TYPED = 'input:not([type="checkbox"]):not([type="range"]):not([type="file"]), textarea';
-let typer = null;   // { el, field, target, open }
-let typerShut = 0;  // until when the window waits for the keyboard to go down after the typing box closed
-const TYPER_SHUT_WAIT = 1000;   // ms
-
-function typerLabel(f) {
-    const lab = f.closest('label');
-    const t = lab ? [...lab.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' ').trim() : '';
-    return t || f.placeholder || LX('적기', 'Type');
-}
-
-function ensureTyper() {
-    if (typer) return typer;
-    const el = document.createElement('div');
-    el.className = 'tavvy-typer';
-    el.hidden = true;
-    el.innerHTML = `<div class="tavvy-typer-box"><div class="tavvy-typer-head"><span></span><div class="tw-btn" data-typer="done">${LX('완료', 'Done')}</div></div><div class="tavvy-typer-slot"></div></div>`;
-    document.body.appendChild(el);
-    typer = { el, field: null, target: null, open: false };
-    // tap "완료" without the field losing focus first (pointerdown keeps the focus) — and close on the click itself,
-    // so the tap ends on 완료 and doesn't land on the window's ✕ underneath (0.9.2)
-    const done = el.querySelector('[data-typer="done"]');
-    done.addEventListener('pointerdown', (e) => e.preventDefault());
-    done.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); closeTyper(true); });
-    const place = () => {
-        if (!typer.open) return;
-        const vv = window.visualViewport;
-        el.style.top = `${Math.round(vv ? vv.offsetTop : 0)}px`;
-        el.style.left = `${Math.round(vv ? vv.offsetLeft : 0)}px`;
-        el.style.width = `${Math.round(vv ? vv.width : window.innerWidth)}px`;
-    };
-    typer.place = place;
-    window.visualViewport?.addEventListener('resize', place);
-    window.visualViewport?.addEventListener('scroll', place);
-    return typer;
-}
-
-/** Copy what's typed back into the window's box, as if it was typed there. */
-function typerPush() {
-    const t = typer;
-    if (!t?.target || !t.field) return;
-    if (t.target.value === t.field.value) return;
-    t.target.value = t.field.value;
-    t.target.dispatchEvent(new Event('input', { bubbles: true }));
-}
-
-function openTyper(target) {
-    const t = ensureTyper();
-    if (t.open) closeTyper(true);
-    const multi = target.tagName === 'TEXTAREA';
-    const f = document.createElement(multi ? 'textarea' : 'input');
-    for (const a of ['type', 'inputmode', 'maxlength', 'min', 'max', 'step', 'placeholder', 'enterkeyhint']) {
-        const v = target.getAttribute(a);
-        if (v != null) f.setAttribute(a, v);
-    }
-    if (!multi) f.setAttribute('enterkeyhint', 'done');
-    if (multi) f.rows = 4;
-    f.value = target.value;
-    f.addEventListener('input', typerPush);
-    f.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !multi) { e.preventDefault(); closeTyper(true); } });
-    f.addEventListener('blur', () => setTimeout(() => { if (t.field === f) closeTyper(true); }, 0));   // keyboard closed
-    t.el.querySelector('.tavvy-typer-slot').replaceChildren(f);
-    t.el.querySelector('.tavvy-typer-head span').textContent = typerLabel(target);
-    t.el.dataset.theme = win?.box?.dataset?.theme || 'theme';
-    t.field = f; t.target = target; t.open = true;
-    t.el.hidden = false;
-    t.place();
-    target.classList.add('tw-typing');
-    // the keyboard's ˄ ˅ keys must not hop into the big window's boxes
-    for (const x of win?.body?.querySelectorAll(TYPED) || []) if (!x.readOnly) { x.readOnly = true; x.dataset.typerLock = '1'; }
-    f.focus();                                                      // same tap → iPhone opens the keyboard
-    try { const n = f.value.length; f.setSelectionRange(n, n); } catch { /* number boxes */ }
-}
-
-function closeTyper(keep = true) {
-    const t = typer;
-    if (!t?.open) return;
-    if (keep) {
-        typerPush();
-        t.target?.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-    t.target?.classList.remove('tw-typing');
-    for (const x of document.querySelectorAll('[data-typer-lock]')) { x.readOnly = false; delete x.dataset.typerLock; }
-    t.open = false;
-    const f = t.field;
-    t.field = null; t.target = null;
-    t.el.hidden = true;
-    typerShut = performance.now() + TYPER_SHUT_WAIT;
-    f?.blur();
-    if (win?.open) refitSoon();
-    setTimeout(() => { if (win?.open) fitWin(); }, TYPER_SHUT_WAIT + 50);   // in case the phone never says the keyboard is gone
-}
-
-/** Phones: the window's text boxes open the typing box instead of the keyboard in place. */
-function hookTyper(el) {
-    el.addEventListener('pointerdown', (e) => {
-        const f = e.target.closest?.(TYPED);
-        if (!f || !isTouchUi() || f.disabled) return;
-        if (!f.readOnly) { f.readOnly = true; f.dataset.typerLock = '1'; }   // no keyboard here…
-    }, true);
-    el.addEventListener('click', (e) => {
-        const f = e.target.closest?.(TYPED);
-        if (!f || !f.dataset.typerLock || !isTouchUi() || f.disabled) return;
-        e.preventDefault();
-        f.blur();
-        openTyper(f);                                               // …but up top
-    }, true);
-}
-
-/** The box you are typing in stays in view (scrolls inside the window, not the page). */
-function keepFocusVisible() {
-    const a = document.activeElement;
-    if (!a || !win.body.contains(a) || !a.matches('input, textarea, select')) return;
-    const b = win.body.getBoundingClientRect(), r = a.getBoundingClientRect();
-    if (r.bottom > b.bottom - 8) win.body.scrollTop += r.bottom - b.bottom + 16;
-    else if (r.top < b.top + 8) win.body.scrollTop -= b.top - r.top + 16;
-}
-
-/** The keyboard slides in and out over a moment, and phones don't always say when it's done → look again. */
-function refitSoon() {
-    if (!win?.open) return;
-    fitWin();
-    for (const ms of [80, 250, 500, 900]) setTimeout(() => { if (win?.open) fitWin(); }, ms);
 }
 
 function applyTheme() {
@@ -6333,9 +6163,8 @@ function openInfoFromMenu() {
 function openWin(view = 'home', opts = {}) {
     ensureWin();
     applyTheme();
-    win.el.hidden = false;
+    if (!win.el.open) win.el.showModal();
     win.open = true;
-    fitWin();
     show(view, opts);
 }
 
@@ -6373,7 +6202,7 @@ ${view !== 'settings' && view !== 'bye' ? `<div class="tw-icon" data-act="settin
     win.body.scrollTop = 0;
     if (view === 'pet') { fillEdit(p); fillTalk(p); showTab(win.tab); }
     if (view === 'new') fillNew();
-    if (view === 'settings') fillSettings();
+    if (view === 'settings') { fillSettings(); showSetTab(win.stab); }
     refreshWin();
 }
 
@@ -6437,8 +6266,7 @@ function togglePetMenu() {
 
 function closeWin() {
     if (!win?.open) return;
-    closeTyper(true);
-    leave(() => { closeCutter(); win.el.hidden = true; win.open = false; win.form = null; win.talkBase = null; stopPreview(); });
+    leave(() => { closeCutter(); closePetMenu(); win.el.close(); win.open = false; win.form = null; win.talkBase = null; stopPreview(); });
 }
 
 /* --- home --- */
@@ -6481,7 +6309,7 @@ function roomNote() {
 /* --- pet page --- */
 
 function petHtml(p) {
-    return `<div data-live="hero"></div>
+    return `<div data-live="heroline"></div>
 <div data-live="move"></div>
 <div class="tw-tabs">
   <div class="tw-tab" data-tab="journal">${LX('기록', 'Journal')}</div>
@@ -6491,12 +6319,13 @@ function petHtml(p) {
   <div class="tw-tab" data-tab="talk">${LX('대사', 'Lines')}</div>
   <div class="tw-tab" data-tab="gifts">${LX('선물', 'Presents')}</div>
 </div>
-<div class="tw-pane" data-pane="journal"><div data-live="journal"></div><div class="tw-places"></div></div>
+<div class="tw-pane" data-pane="journal"><div data-live="hero"></div><div data-live="journal"></div><div class="tw-places"></div></div>
 <div class="tw-pane" data-pane="acts" data-live="acts"></div>
 <div class="tw-pane" data-pane="roles"></div>
 <div class="tw-pane" data-pane="talk">${talkHtml(p)}</div>
 <div class="tw-pane" data-pane="gifts"></div>
 <div class="tw-pane tw-form" data-pane="edit">
+  <details class="tw-fold tw-efold" data-efold="basic"${win.editOpen.has('basic') ? ' open' : ''}><summary>${LX('기본 정보', 'Basics')} <span class="tw-sub">${LX('이름 · 부르는 이름 · 성격 · 크기', 'name · what it calls you · personality · size')}</span></summary><div class="tw-foldbody">
   <label class="tw-label">${LX('이름', 'Name')} <input data-f="name" maxlength="20"></label>
   <label class="tw-label">${LX('나를 부르는 이름', 'What it calls you')} <input data-f="callme" maxlength="20" placeholder="${esc(ctx().name1 || LX('나', 'you'))}"></label>
   <div class="tw-sub">${LX('대사의 {{user}}가 이 이름으로 바뀌어요. 비워 두면 실리태번의 내 이름(페르소나)으로 불러요.', 'Replaces {{user}} in its lines. Leave empty to use your SillyTavern (persona) name.')}</div>
@@ -6506,24 +6335,30 @@ function petHtml(p) {
     <div class="tw-row"><input type="number" inputmode="numeric" min="${SIZE_MIN}" max="${SIZE_MAX}" step="1" value="${petSize(p)}" data-size="${esc(p.id)}" class="tw-num"><span class="tw-sub" data-sizeval="${esc(p.id)}">${sizeLabel(p, petSize(p))}</span></div>
   </label>
   <div class="tw-sub">${LX('크기는 적으면 바로 바뀌어요. 폰과 PC는 따로 기억해요.', 'Size changes as you type. Phone and PC are remembered separately.')}</div>
-  <div class="tw-cap">${LX('외형', 'Look')}</div>
+  </div></details>
+  <details class="tw-fold tw-efold" data-efold="look"${win.editOpen.has('look') ? ' open' : ''}><summary>${LX('외형', 'Look')} <span class="tw-sub">${LX('그림 · 보는 쪽 · 말랑', 'picture · facing · squishiness')}</span></summary><div class="tw-foldbody">
   <div class="tw-lookgrid"></div>
   ${uploadHtml()}
   ${facingHtml()}
-  <div class="tw-btn tw-btn-main tw-wide" data-act="save">${LX('저장', 'Save')}</div>
-  <div class="tw-msg"></div>
-  <div class="tw-cap">${LX('소리', 'Sounds')}</div>
+  </div></details>
+  <details class="tw-fold tw-efold" data-efold="sound"${win.editOpen.has('sound') ? ' open' : ''}><summary>${LX('소리', 'Sounds')} <span class="tw-sub">${LX('펫 소리 · 목소리 · 하트', 'pet sounds · voice · heart')}</span></summary><div class="tw-foldbody">
   <div class="tw-sounds">${soundsHtml(p)}</div>
   <input type="file" accept="${SND_ACCEPT}" data-f="sndfile">
   <div class="tw-sub">mp3 · wav · ogg · m4a, ${SND_MAX_SEC}${LX('초까지. 비워 두면 기본 소리예요. 올리거나 빼면 바로 저장돼요. 소리는 ⚙ 설정에서 켜야 나요(▶ 듣기는 꺼져 있어도 들려요).', ' s max. Empty = default sound. Uploading or removing saves right away. Turn sounds on in ⚙ Settings (▶ preview plays even when off).')}</div>
   <div class="tw-msg tw-sndmsg"></div>
-  <div class="tw-cap">${LX('내보내기', 'Export')}</div>
+  </div></details>
+  <details class="tw-fold tw-efold" data-efold="export"${win.editOpen.has('export') ? ' open' : ''}><summary>${LX('내보내기 · 작별', 'Export · Goodbye')} <span class="tw-sub">${LX('펫 파일 · PNG 카드', 'pet file · PNG card')}</span></summary><div class="tw-foldbody">
   <div class="tw-row"><div class="tw-btn" data-act="exportpet"><i class="fa-solid fa-file-arrow-down"></i> ${LX('펫 파일', 'Pet file')}</div><span class="tw-sub">${LX('기록까지 모두 담긴 백업 파일이에요.', 'A backup file with all its records.')}</span></div>
   <div class="tw-row"><div class="tw-btn" data-act="exportcard"><i class="fa-solid fa-image"></i> ${LX('PNG 카드', 'PNG card')}</div><span class="tw-sub">${LX('외형과 동작 그림만 담긴 그림이에요. 남에게 나눠 줄 때 써요.', 'An image holding only the look and action pictures. For sharing with others.')}</span></div>
   <div class="tw-sub">${LX('펫이 사는 방 정보는 넣지 않아요. 메신저·사진 앱을 거치면 카드 안 정보가 지워질 수 있어요. 그럴 땐 파일 그대로 보내 주세요.', 'Room info is never included. Messengers and photo apps may strip the data inside the card, so send it as a file.')}</div>
   <div class="tw-danger">
     <div class="tw-btn tw-btn-danger" data-act="delete"><i class="fa-solid fa-hand"></i> ${LX('작별하기', 'Say goodbye')}</div>
     <div class="tw-sub">${LX('함께한 기록은 사라지고 되돌릴 수 없어요. 외형은', 'Its records will be gone for good. The look stays in')} "${LX('내가 올린 외형', 'My uploaded looks')}"${LX('에 남아요.', '.')}</div>
+  </div>
+  </div></details>
+  <div class="tw-savebar" hidden>
+    <div class="tw-btn tw-btn-main tw-wide" data-act="save">${LX('저장', 'Save')}</div>
+    <div class="tw-msg tw-savemsg"></div>
   </div>
 </div>`;
 }
@@ -6707,6 +6542,7 @@ function fillEdit(p) {
     box.querySelector('[data-f="squish"]').value = b.squish;
     drawLookGrid();
     showSquish();
+    updateSaveBar();
 }
 
 function showTab(tab) {
@@ -6749,6 +6585,8 @@ function settingsHtml() {
     const themes = Object.entries(THEMES).map(([k, v]) =>
         `<div class="tw-theme" data-theme-pick="${k}"><div class="tw-swatch tw-swatch-${k}"><i></i><i></i></div><span>${v}</span></div>`).join('');
     return `<div class="tw-form">
+  <div class="tw-tabs tw-stabs">${SET_TABS.map(([k, n]) => `<div class="tw-tab" data-stab="${k}">${n}</div>`).join('')}</div>
+  <div class="tw-spane" data-spane="screen">
   <div class="tw-cap">언어 · Language</div>
   <label class="tw-label">${LX('언어', 'Language')}
     <select data-s="lang">
@@ -6762,6 +6600,15 @@ function settingsHtml() {
   <div class="tw-cap">${LX('창 색', 'Window color')}</div>
   <div class="tw-themes">${themes}</div>
 
+  <div class="tw-cap">${LX('깨우기 버튼', 'Wake button')}</div>
+  <div class="tw-row">
+    <div class="tw-btn" data-act="bedreset">${LX('위치 처음으로', 'Reset position')}</div>
+    <div class="tw-btn" data-act="bedfind">${LX('찾기 (화면 가운데로)', 'Find (move to center)')}</div>
+  </div>
+  <div id="tavvy-diag" class="tw-sub tw-diag"></div>
+
+  </div>
+  <div class="tw-spane" data-spane="pets">
   <div class="tw-cap">${LX('펫', 'Pets')}</div>
   <label class="tw-check"><input type="checkbox" data-s="autoWake"> ${LX('방에 들어올 때 자동으로 깨우기', 'Wake pets automatically when entering a room')}</label>
   <label class="tw-label">${LX('무대', 'Stage')}
@@ -6782,6 +6629,14 @@ function settingsHtml() {
     </select>
   </label>
 
+  <div class="tw-cap">${LX('대사', 'Lines')}</div>
+  <label class="tw-label tw-profrow">${LX('AI로 대사 만들 때 쓸 연결', 'Connection used for AI lines')}
+    <select data-s="talkProfile"></select>
+  </label>
+  <div class="tw-sub tw-profrow">${LX('대사 탭의', 'Only used when you press')} "${LX('AI로 빈 칸 채우기', 'Fill empty slots with AI')}"${LX('를 누를 때만 써요. 실리태번 연결 프로필(Connection Manager)에서 골라요.', ' in the Lines tab. Pick from SillyTavern connection profiles (Connection Manager).')}</div>
+
+  </div>
+  <div class="tw-spane" data-spane="sound">
   <div class="tw-cap">${LX('소리', 'Sounds')}</div>
   <div class="tw-sndrow"><span class="tw-sndname">${LX('소리 느낌', 'Sound style')}</span><span class="tw-seg" style="flex:1"><span data-feel="clear">${LX('또렷하게', 'Crisp')}</span><span data-feel="soft">${LX('부드럽게', 'Soft')}</span></span></div>
   <div class="tw-sub">${LX('펫 소리와 답 도착 소리가 한꺼번에 바뀌어요. 부드럽게는 조금 길게 울려요. 올려 둔 내 소리는 그대로예요.', 'Changes pet sounds and reply sounds together. Soft rings a little longer. Your own sound files stay as they are.')}</div>
@@ -6797,27 +6652,27 @@ function settingsHtml() {
   <div class="tw-row"><span class="tw-sub">${LX('펫 소리 음량', 'Pet sound volume')}</span><input type="range" min="0" max="100" step="5" data-s="soundVol" class="tw-grow"><span class="tw-sub tw-volpct" data-pct="soundVol"></span></div>
   <div class="tw-sub">${LX('다른 탭을 보고 있을 땐 소리가 나지 않아요. 폰은 화면을 한 번 누른 뒤부터 나요.', 'No sounds while you’re on another tab. On phones, sounds start after you tap the screen once.')}</div>
 
-  <div class="tw-cap">${LX('대사', 'Lines')}</div>
-  <label class="tw-label tw-profrow">${LX('AI로 대사 만들 때 쓸 연결', 'Connection used for AI lines')}
-    <select data-s="talkProfile"></select>
-  </label>
-  <div class="tw-sub tw-profrow">${LX('대사 탭의', 'Only used when you press')} "${LX('AI로 빈 칸 채우기', 'Fill empty slots with AI')}"${LX('를 누를 때만 써요. 실리태번 연결 프로필(Connection Manager)에서 골라요.', ' in the Lines tab. Pick from SillyTavern connection profiles (Connection Manager).')}</div>
-
-  <div class="tw-cap">${LX('깨우기 버튼', 'Wake button')}</div>
-  <div class="tw-row">
-    <div class="tw-btn" data-act="bedreset">${LX('위치 처음으로', 'Reset position')}</div>
-    <div class="tw-btn" data-act="bedfind">${LX('찾기 (화면 가운데로)', 'Find (move to center)')}</div>
   </div>
-  <div id="tavvy-diag" class="tw-sub tw-diag"></div>
-
+  <div class="tw-spane" data-spane="manage">
   <div class="tw-cap">${LX('내가 올린 외형', 'My uploaded looks')}</div>
   <div data-live="looks"></div>
 
   <div class="tw-cap">${LX('백업', 'Backups')} <span class="tw-sub">${LX('(하루 한 번 자동, 최근', '(automatic once a day, last')} ${BACKUP_KEEP}${LX('개)', ')')}</span></div>
   <div class="tw-row"><select data-live="backups" class="tw-grow"></select><div class="tw-btn" data-act="restore">${LX('되돌리기', 'Restore')}</div></div>
   <div class="tw-sub">${LX('되돌리면 모든 펫의 기록(먹은 양 등)이 그날 기록으로 바뀌어요.', 'Restoring replaces every pet’s records (food eaten, etc.) with that day’s.')}</div>
+  </div>
   <div class="tw-msg"></div>
 </div>`;
+}
+
+/** 0.11.32 settings in four tabs. */
+const SET_TABS = [['screen', LX('화면', 'Screen')], ['pets', LX('펫', 'Pets')], ['sound', LX('소리', 'Sounds')], ['manage', LX('관리', 'Manage')]];
+
+function showSetTab(k) {
+    if (!SET_TABS.some(([x]) => x === k)) k = 'screen';
+    win.stab = k;
+    win.body.querySelectorAll('[data-stab]').forEach(t => t.classList.toggle('tw-on', t.dataset.stab === k));
+    win.body.querySelectorAll('[data-spane]').forEach(pn => { pn.hidden = pn.dataset.spane !== k; });
 }
 
 function fillSettings() {
@@ -6894,6 +6749,7 @@ function refreshWin() {
         if (kind === 'home') html = homeLiveHtml();
         else if (kind === 'room') html = esc(roomNote());
         else if (kind === 'hero') html = heroHtml(p);
+        else if (kind === 'heroline') html = heroLineHtml(p);
         else if (kind === 'move') html = moveHtml(p);
         else if (kind === 'journal') { if (win.tab !== 'journal') return; html = journalHtml(p); }
         else if (kind === 'acts') { if (win.tab !== 'acts') return; html = actsHtml(p); }
@@ -6936,11 +6792,38 @@ function formDirty() {
     const val = (k) => box.querySelector(`[data-f="${k}"]`)?.value ?? '';
     if (f.kind === 'new') return !!val('name').trim() || !!f.look;
     if (f.kind !== 'edit') return false;
-    if (talkDirty()) return true;
+    return talkDirty() || editDirty();
+}
+
+/** 0.11.32: the Style tab's own fields (what its Save button saves). */
+function editDirty() {
+    const f = win?.form;
+    if (!f || f.kind !== 'edit' || !win.open) return false;
+    const box = win.body;
+    const val = (k) => box.querySelector(`[data-f="${k}"]`)?.value ?? '';
     const b = f.base;
     return f.look !== b.look || !!f.file
         || val('name') !== b.name || val('callme').trim() !== b.callMe || val('pers') !== b.pers || val('facing') !== b.facing
         || String(Number(val('squish'))) !== String(Number(b.squish));
+}
+
+/** 0.11.32: the Save button sits at the bottom of the Style tab only while something there is changed
+ * (and a moment after a message, so "saved" or a problem can be read). */
+function updateSaveBar() {
+    const bar = win?.body?.querySelector('.tw-savebar');
+    if (!bar) return;
+    const m = bar.querySelector('.tw-savemsg');
+    const recent = m && m.textContent && performance.now() - (Number(m.dataset.t) || 0) < SAVEBAR_MSG_MS;
+    const dirty = editDirty(), show = dirty || !!recent;
+    if (bar.hidden === show) bar.hidden = !show;
+    const btn = bar.querySelector('[data-act="save"]');
+    if (btn && btn.hidden === dirty) btn.hidden = !dirty;          // a message alone (e.g. after saving) shows without the button
+    if (!show && m?.textContent) m.textContent = '';
+}
+const SAVEBAR_MSG_MS = 2500;
+function saveBarSoon() {
+    updateSaveBar();
+    for (const ms of [300, 1200, SAVEBAR_MSG_MS + 100]) setTimeout(updateSaveBar, ms);
 }
 
 function pickLook(key) {
@@ -8098,6 +7981,8 @@ function onWinClick(e) {
     if (role) return openRole(role.dataset.role);
     const pet = t.closest('[data-pet]');
     if (pet) return show('pet', { id: pet.dataset.pet });
+    const stab = t.closest('[data-stab]');
+    if (stab) return showSetTab(stab.dataset.stab);
     const tab = t.closest('[data-tab]');
     if (tab) return showTab(tab.dataset.tab);
     const dl = t.closest('[data-dellook]');
