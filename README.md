@@ -33,13 +33,13 @@ Tavvy speaks Korean and English. It uses Korean when SillyTavern's or your brows
 You can pick it yourself at the top of ⚙ Settings (**언어 · Language**); the change applies after you reload the page.
 Text you write yourself (pet names, lines, notes) is never translated. In English the starter pets are called Mochi · Barley · Button, and AI-written lines come out in English.
 
-## What it does (0.11.23)
+## What it does (0.11.24)
 
 - **Making a pet**: three starter pets (Mochi · Barley · Button) or one picture of your own (PNG · JPG). A plain one-color background, like white, is removed automatically (**Remove background**, with a strength slider in the preview). **Crop by hand** lets you cut just the character out of a bigger picture.
 - **Five base personalities**: Sweet · Prim · Easygoing · Grumpy · Aloof. Walking, dozing, greetings, eating and how it reacts to you all differ by personality. When it reacts to you, it looks at you for a moment first and holds the reaction a little; at most once every 30 seconds (0.11.7).
 - **Free tuning (Actions tab)**: the personality is only a starting point; change anything per pet. Changes save right away.
   - **Frequency** for each everyday behavior (Climb the screen · Fly · Dash · Portal · Climb messages · Doze · Humming · Looking around · Sit · Pretending to read · Sudden runs · Peekaboo · Roll · Reacting to you · Spacing out) and each learned one: **Off / Rarely / Normal / Often**. Normal follows the personality, Rarely is about half, Often about double.
-  - **Walking speed**: Slow / Normal / Fast. On a wide chat (like a PC) pets walk a little faster to match (up to 1.6×; phones unchanged).
+  - **Walking speed**: Slow / Normal / Fast. On a wide chat (like a PC) pets walk a little faster to match (up to 1.4×; phones unchanged).
   - **How it treats you** (off at first):
     - **Tagging along**: tap the screen and it walks over there.
     - **…where did you go?**: leave SillyTavern for over 5 minutes and it comes to the middle and stares at you.
