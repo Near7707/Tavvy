@@ -33,7 +33,7 @@ Tavvy speaks Korean and English. It uses Korean when SillyTavern's or your brows
 You can pick it yourself at the top of ⚙ Settings (**언어 · Language**); the change applies after you reload the page.
 Text you write yourself (pet names, lines, notes) is never translated. In English the starter pets are called Mochi · Barley · Button, and AI-written lines come out in English.
 
-## What it does (0.11.32)
+## What it does (0.11.33)
 
 - **Making a pet**: three starter pets (Mochi · Barley · Button) or one picture of your own (PNG · JPG). A plain one-color background, like white, is removed automatically (**Remove background**, with a strength slider in the preview). **Crop by hand** lets you cut just the character out of a bigger picture.
 - **Five base personalities**: Sweet · Prim · Easygoing · Grumpy · Aloof. Walking, dozing, greetings, eating and how it reacts to you all differ by personality. When it reacts to you, it looks at you for a moment first and holds the reaction a little; at most once every 30 seconds (0.11.7).
@@ -84,13 +84,13 @@ Text you write yourself (pet names, lines, notes) is never translated. In Englis
   - When closeness goes up it dances in colorful ✦ with "Closer now!".
 - **Reunions**: woken up, it looks around, spots you ("!") and greets you by personality. After a long time apart the greeting is longer; very close pets may even tear up. After 3+ days away, it has a word for you by the bed.
 - **The Tavvy window**: pet list, journal, new pets and settings in one place. Open it from **Pet info** in the wand menu or **Open Tavvy** in the extension settings.
-  - On a pet's page, tap the name (next to its small picture) to open a list of pets with their pictures, personality and closeness (0.11.32). Picking another pet keeps the tab you were on; **All pets · New pet** at the bottom goes to the first screen. ⚙ Settings is at the top right on every page, and Back from Settings returns to the pet you were looking at.
+  - On a pet's page, tap the name (next to its small picture) to open a list of pets with their pictures, personality and closeness (0.11.33). Picking another pet keeps the tab you were on; **All pets · New pet** at the bottom goes to the first screen. ⚙ Settings is at the top right on every page, and Back from Settings returns to the pet you were looking at.
   - Each pet has **Journal** (days together, days chatted, messages exchanged, tokens eaten, biggest meal day, progress to the next stage, milestones) / **Actions** / **Style** (name, what it calls you, base personality, size, look, which way the picture faces, squishiness, sounds, export, say goodbye) / **Art** / **Lines** / **Presents**.
   - Window color: **Follow theme / Cream · pink / Clean white / Night sky**.
   - Text fields are typed in place, on phones too (from 0.11.32; before, phones opened a separate input box at the top of the screen).
-  - The top of a pet's page shows its personality, home and closeness on one line; the big picture and the progress bar are at the top of the **Journal** tab (0.11.32).
-  - The **Style** tab is folded into **Basics / Look / Sounds / Export · Goodbye**. The **Save** button appears at the bottom only while something is changed (0.11.32).
-  - ⚙ Settings has four tabs: **Screen** (language, window color, wake button) / **Pets** (pets, lines) / **Sounds** / **Manage** (my uploaded looks, backups) (0.11.32).
+  - The top of a pet's page shows its personality, home and closeness on one line; the big picture and the progress bar are at the top of the **Journal** tab (0.11.33).
+  - The **Style** tab is folded into **Basics / Look / Sounds / Export · Goodbye**. The **Save** button appears at the bottom only while something is changed (0.11.33).
+  - ⚙ Settings has four tabs: **Screen** (language, window color, wake button) / **Pets** (pets, lines) / **Sounds** / **Manage** (my uploaded looks, backups) (0.11.33).
 - **Art tab** (your own pictures per action):
   - Fill slots under "Common actions" (Basic · Walk · Held · Dance · Doze · Cry) and the folded groups (More movement / Reactions / Rest · eat / Special moments). Empty slots use the basic picture + movement instead.
   - On screens that show a picture much smaller than it is (like a PC), it is shrunk once to the exact screen size and its edges crisped a little, so it does not look soft (phones unchanged).
