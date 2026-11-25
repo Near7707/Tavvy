@@ -1327,7 +1327,7 @@ const isAtt = (key) => ATTITUDES.some(a => a.key === key);
 /** A chance p scaled by the behaviour's 빈도 (never quite certain unless it already was). */
 const chance = (who, key, p) => (p >= 1 ? p * Math.min(1, fr(who, key)) : Math.min(0.95, p * fr(who, key)));
 // 0.11.23: a wide stage (PC chat ~960px vs phone ~390px) made every walk 2–3× longer → felt like half speed. Faster on wide screens only.
-const WIDE_BASE = 600, WIDE_MAX = 1.4;   // stage px where speeding up starts · most it speeds up
+const WIDE_BASE = 600, WIDE_MAX = 1.2;   // stage px where speeding up starts · most it speeds up
 const wideK = () => clamp((stage.right - stage.left) / WIDE_BASE, 1, WIDE_MAX) || 1;
 const paceOf = (rec) => (PACES.find(x => x[0] === rec?.pace) || PACES[1])[2] * wideK();
 
