@@ -877,7 +877,7 @@ function fitOf(src) {
 
 /* ---------- 0.11.26: 선명하게 — a big picture shown small on a PC screen (≈4× smaller, 1 dot per px) looked soft.
    Shrink it once to the exact screen dots, then crisp up the edges a little. Phones (3 dots per px) are unchanged. ---------- */
-const SHARP_AMT = 1.0;        // edge crisping (picked from a side-by-side test: 0.5 weak · 1.0 · 1.6 strong)
+const SHARP_AMT = 0.7;        // edge crisping (0.11.29: 0.7, picked side by side once pets sat on whole dots; tried 0.3 · 0.5 · 0.7 · 1.0 · 1.6)
 const SHARP_RATIO = 2.5;      // only when the picture is shrunk at least this much on screen (PC ≈4, phone ≈2)
 const SHARP_KEEP = 300;       // made pictures kept at once
 const sharps = new Map();     // key → blob url · '' while being made · null = not needed / could not
