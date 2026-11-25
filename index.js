@@ -6130,7 +6130,7 @@ function ensureWin() {
     el.addEventListener('click', onWinClick);
     el.addEventListener('input', onWinInput);
     el.addEventListener('change', onWinInput);
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && win?.open) { if (cutter) closeCutter(); else closeWin(); } });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && win?.open) { if (cutter) closeCutter(); else if (win.box.querySelector('.tw-petmenu')) closePetMenu(); else closeWin(); } });
     const refit = () => { if (win?.open) fitWin(); };
     window.addEventListener('resize', refit);
     window.visualViewport?.addEventListener('resize', refit);
@@ -6356,9 +6356,14 @@ function show(view, opts = {}) {
     const p = view === 'pet' ? root?.pets.find(x => x.id === win.id) : null;
     if (view === 'pet' && !p) return show('home');
     const title = { home: 'Tavvy', pet: p?.name || '', new: LX('새 펫 만들기', 'New pet'), settings: LX('설정', 'Settings'), bye: LX('작별', 'Farewell') }[view];
-    win.head.innerHTML = `${back ? LX('<div class="tw-icon" data-act="back" title="뒤로"><i class="fa-solid fa-arrow-left"></i></div>', '<div class="tw-icon" data-act="back" title="Back"><i class="fa-solid fa-arrow-left"></i></div>') : '<div class="tw-icon tw-paw"><i class="fa-solid fa-paw"></i></div>'}
-<b class="tw-title">${esc(title)}</b>
-${view === 'home' ? LX('<div class="tw-icon" data-act="settings" title="설정"><i class="fa-solid fa-gear"></i></div>', '<div class="tw-icon" data-act="settings" title="Settings"><i class="fa-solid fa-gear"></i></div>') : ''}
+    closePetMenu();
+    // 0.11.31: on a pet's page the name opens a list of pets (with pictures); the gear is on every page but settings itself
+    const titleHtml = view === 'pet'
+        ? `<div class="tw-petpick" data-act="petmenu" title="${LX('다른 펫 보기', 'Other pets')}"><span class="tw-petpick-av"><img src="${esc(imgUrl(p.look?.roles?.idle?.[0]))}" alt=""></span><b class="tw-title">${esc(title)}</b><i class="fa-solid fa-chevron-down tw-petpick-chev"></i></div>`
+        : `<b class="tw-title">${esc(title)}</b>`;
+    win.head.innerHTML = `${back ? `<div class="tw-icon" data-act="back" title="${LX('뒤로', 'Back')}"><i class="fa-solid fa-arrow-left"></i></div>` : '<div class="tw-icon tw-paw"><i class="fa-solid fa-paw"></i></div>'}
+${titleHtml}
+${view !== 'settings' && view !== 'bye' ? `<div class="tw-icon" data-act="settings" title="${LX('설정', 'Settings')}"><i class="fa-solid fa-gear"></i></div>` : ''}
 <div class="tw-icon" data-act="close" title="${LX('닫기', 'Close')}"><i class="fa-solid fa-xmark"></i></div>`;
     if (view === 'home') win.body.innerHTML = homeHtml();
     else if (view === 'pet') win.body.innerHTML = petHtml(p);
@@ -6394,6 +6399,40 @@ async function leave(fn) {
     if (leaving) return;
     leaving = true;
     try { if (await okToLeave()) fn(); } finally { leaving = false; }
+}
+
+/* ---------- 0.11.31 pet list under the name (pet page) ---------- */
+function petMenuHtml() {
+    const here = residents();
+    const others = (root?.pets || []).filter(p => !here.includes(p));
+    const row = (p, dim) => {
+        const lv = levelLabel(p);
+        return `<div class="tw-pmrow${p.id === win.id ? ' tw-on' : ''}${dim ? ' tw-dim' : ''}" data-pickpet="${esc(p.id)}">
+  <span class="tw-pm-av"><img src="${esc(imgUrl(p.look?.roles?.idle?.[0]))}" alt=""></span>
+  <span class="tw-pm-main"><b>${esc(p.name)}</b><span>${esc(persName(p))}${lv ? ' · ' + esc(lv) : ''}</span></span>
+  ${p.id === win.id ? '<i class="fa-solid fa-check"></i>' : ''}
+</div>`;
+    };
+    let html = '';
+    if (here.length) html += `<div class="tw-pmcap">${LX('이 방에 사는 펫', 'Pets in this room')}</div>${here.map(p => row(p, false)).join('')}`;
+    if (others.length) html += `<div class="tw-pmcap">${LX('다른 방의 펫', 'Pets in other rooms')}</div>${others.map(p => row(p, true)).join('')}`;
+    return html + `<div class="tw-pmrow tw-pmhome" data-pickhome="1"><span class="tw-pm-av tw-pm-icon"><i class="fa-solid fa-table-cells-large"></i></span><span class="tw-pm-main"><b>${LX('모아보기 · 새 펫 만들기', 'All pets · New pet')}</b></span></div>`;
+}
+
+function closePetMenu() {
+    if (!win) return;
+    win.box.querySelector('.tw-petmenu')?.remove();
+    win.head.querySelector('.tw-petpick')?.classList.remove('tw-open');
+}
+
+function togglePetMenu() {
+    if (win.box.querySelector('.tw-petmenu')) return closePetMenu();
+    const m = document.createElement('div');
+    m.className = 'tw-petmenu';
+    m.innerHTML = petMenuHtml();
+    m.style.top = `${win.head.offsetHeight}px`;
+    win.box.appendChild(m);
+    win.head.querySelector('.tw-petpick')?.classList.add('tw-open');
 }
 
 function closeWin() {
@@ -6867,6 +6906,8 @@ function refreshWin() {
     if (win.view === 'pet') {
         const t = win.head.querySelector('.tw-title');
         if (p && t.textContent !== p.name) t.textContent = p.name;
+        const av = win.head.querySelector('.tw-petpick-av img'), src = imgUrl(p?.look?.roles?.idle?.[0]);
+        if (p && av && av.getAttribute('src') !== src) av.setAttribute('src', src);
     }
 }
 
@@ -7949,8 +7990,23 @@ function onWinClick(e) {
     const t = e.target;
     const act = t.closest('[data-act]')?.dataset.act;
     if (act === 'close') return closeWin();
-    if (act === 'back') return leave(() => show('home'));
-    if (act === 'settings') return show('settings');
+    if (act === 'petmenu') return togglePetMenu();
+    if (t.closest('.tw-petmenu')) {
+        const row = t.closest('[data-pickpet]');
+        if (row) { const id = row.dataset.pickpet, tab = win.tab; closePetMenu(); if (id !== win.id) leave(() => show('pet', { id, tab })); return; }
+        if (t.closest('[data-pickhome]')) { closePetMenu(); return leave(() => show('home')); }
+        return;
+    }
+    if (win.box.querySelector('.tw-petmenu')) {                     // list open: a tap outside just closes it (buttons up top still work)
+        closePetMenu();
+        if (!t.closest('.tavvy-win-head')) return;
+    }
+    if (act === 'back') {
+        const r = win.view === 'settings' ? win.ret : null;          // 0.11.31: settings → back to where you were
+        if (r?.view === 'pet' && root?.pets.some(x => x.id === r.id)) return leave(() => show('pet', { id: r.id, tab: r.tab }));
+        return leave(() => show('home'));
+    }
+    if (act === 'settings') return leave(() => { win.ret = { view: win.view, id: win.id, tab: win.tab }; show('settings'); });
     if (act === 'replyup') { sndTouched = true; return win.body.querySelector('[data-f="replyfile"]')?.click(); }   // 0.10.11
     if (act === 'gohome') return show('home');
     if (act === 'uploadno') return cancelUpload();

@@ -1274,3 +1274,25 @@
 .tavvy-portal.tavvy-portal-on { transform: scale(1, 1); opacity: 1; }
 /* 0.11.7: AI picture prompt example */
 .tavvy-win .tw-aiprompt { width: 100%; box-sizing: border-box; margin: 6px 0; font-family: ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.4; resize: vertical; }
+
+/* 0.11.31 pet list under the name (pet page) */
+.tavvy-win { position: relative; }
+.tavvy-win .tw-petpick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; cursor: pointer; border-radius: 10px; padding: 2px 6px 2px 2px; }
+.tavvy-win .tw-petpick:hover, .tavvy-win .tw-petpick.tw-open { background: var(--tw-card); }
+.tavvy-win .tw-petpick .tw-title { flex: 0 1 auto; }
+.tavvy-win .tw-petpick-av, .tavvy-win .tw-pm-av { flex: none; width: 30px; height: 30px; border-radius: 8px; background: var(--tw-card); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.tavvy-win .tw-petpick-av img, .tavvy-win .tw-pm-av img { width: 84%; height: 84%; object-fit: contain; image-rendering: pixelated; }
+.tavvy-win .tw-petpick-chev { flex: none; font-size: 12px; color: var(--tw-sub); transition: transform .15s; }
+.tavvy-win .tw-petpick.tw-open .tw-petpick-chev { transform: rotate(180deg); }
+.tavvy-win .tw-petmenu { position: absolute; left: 8px; right: 8px; z-index: 5; max-height: min(60vh, 420px); overflow-y: auto; padding: 4px; border: 1px solid var(--tw-line); border-radius: 12px; background: var(--tw-bg); box-shadow: 0 10px 30px rgba(0, 0, 0, .35); }
+.tavvy-win .tw-pmcap { font-size: 12px; color: var(--tw-sub); padding: 8px 8px 3px; }
+.tavvy-win .tw-pmrow { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 9px; cursor: pointer; }
+.tavvy-win .tw-pmrow:hover { background: var(--tw-card); }
+.tavvy-win .tw-pmrow.tw-on { background: var(--tw-chip-bg); }
+.tavvy-win .tw-pmrow.tw-dim { opacity: .6; }
+.tavvy-win .tw-pmrow .tw-pm-av { width: 40px; height: 40px; }
+.tavvy-win .tw-pm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.tavvy-win .tw-pm-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tavvy-win .tw-pm-main span { font-size: 12px; color: var(--tw-sub); }
+.tavvy-win .tw-pmhome { border-top: 1px solid var(--tw-line); border-radius: 0 0 9px 9px; margin-top: 4px; }
+.tavvy-win .tw-pm-icon { align-items: center; color: var(--tw-sub); font-size: 16px; }
