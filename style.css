@@ -1295,3 +1295,5 @@
 .tavvy-win .tw-rsel, .tavvy-win .tw-sheet-head select { padding-right: 24px; background-position: right 12px center, right 7px center !important; }
 .tavvy-win .tw-date select { padding-right: 24px; background-position: right 12px center, right 7px center !important; }
 .tavvy-win .tw-sheet-frame select { padding-right: 18px; background-position: right 9px center, right 4px center !important; }
+/* 0.11.34: the window itself takes focus when it opens (dialog) → no blue ring around it (fields keep theirs) */
+.tavvy-modal:focus, .tavvy-modal:focus-visible, .tavvy-modal .tavvy-win:focus { outline: none; }
