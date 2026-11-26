@@ -4921,10 +4921,27 @@ function clampBed(p) {
     };
 }
 
+/* Bed spot lives in this browser (localStorage), not in the shared settings:
+   another device's stale copy of the settings can't drag it back. */
+const BED_KEY = 'tavvy_bedpos';
+function bedStore() {
+    try { const o = JSON.parse(localStorage.getItem(BED_KEY) || 'null'); if (o && typeof o === 'object') return o; } catch { /* ignore */ }
+    return null;
+}
+function bedSave(o) { try { localStorage.setItem(BED_KEY, JSON.stringify(o)); } catch { /* ignore */ } }
+
 function currentBedPos() {
-    const saved = root?.settings?.bedPos?.[device()];
+    const dev = device();
+    let st = bedStore();
+    if (!st) {   // first run: take over the spots kept in settings
+        const old = root?.settings?.bedPos || {};
+        st = { phone: old.phone || null, pc: old.pc || null };
+        if (st.pc && typeof st.pc.dy === 'number' && typeof st.pc.x === 'number') st.pc = { x: st.pc.x, y: Math.round(stage.floorY - st.pc.dy) };
+        if (root) bedSave(st);
+    }
+    const saved = st[dev];
     if (saved && typeof saved.x === 'number') {
-        // lower half: remembered as "this far above the input bar" → rises with it when the keyboard opens
+        // phone, lower half: "this far above the input bar" → rises with it when the keyboard opens
         if (typeof saved.dy === 'number') return clampBed({ x: saved.x, y: stage.floorY - saved.dy });
         if (typeof saved.y === 'number') return clampBed(saved);
     }
@@ -4934,12 +4951,14 @@ function currentBedPos() {
 function setBedPos(x, y, save) {
     const p = clampBed({ x, y });
     bed.style.transform = `translate3d(${p.x - stage.ox}px, ${p.y - stage.oy}px, 0)`;
-    if (save && root) {
-        const lower = p.y + BED_SIZE / 2 > stage.floorY / 2;
-        root.settings.bedPos[device()] = lower
+    if (save) {
+        const dev = device();
+        const lower = dev === 'phone' && p.y + BED_SIZE / 2 > stage.floorY / 2;   // PC: stays put while the input box grows
+        const st = bedStore() || { phone: null, pc: null };
+        st[dev] = lower
             ? { x: Math.round(p.x), dy: Math.round(stage.floorY - p.y) }
             : { x: Math.round(p.x), y: Math.round(p.y) };
-        saveSoon();
+        bedSave(st);
     }
 }
 
@@ -7905,6 +7924,7 @@ function onWinClick(e) {
     if (act === 'pickfile') return win.body.querySelector('[data-f="file"]').click();   // SillyTavern hides file inputs
     if (act === 'bedreset') {
         root.settings.bedPos = { phone: null, pc: null };
+        bedSave({ phone: null, pc: null });
         saveSoon(); placeBed();
         return say(LX('깨우기 버튼을 처음 자리로 옮겼어요.', 'Moved the wake button back to its starting spot.'));
     }

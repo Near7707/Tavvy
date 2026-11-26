@@ -23,7 +23,7 @@ A little stand-in for your character moves into the chat and grows closer to you
    Choose a starter pet or one of **My uploaded looks**. To use your own picture, choose **Upload new → Choose picture**.
    Uploaded pictures stay in "My uploaded looks", so next time you can just pick them.
 3. **Tap** the 🛏️ button that appears on screen to wake your pet. Tap again and it waves and goes back to bed.
-4. **Drag** the 🛏️ button to move it. Phone and PC positions are remembered separately.
+4. **Drag** the 🛏️ button to move it. Each device (and each browser) remembers its own spot, so moving it on your phone never moves it on your PC (0.11.35).
 5. **Drag a pet** to pick it up and it dangles; let go and it falls. If there's a message on the way, it lands on top of it.
    If a pet ever gets stuck while held, tap it once.
 
@@ -33,7 +33,7 @@ Tavvy speaks Korean and English. It uses Korean when SillyTavern's or your brows
 You can pick it yourself at the top of ⚙ Settings (**언어 · Language**); the change applies after you reload the page.
 Text you write yourself (pet names, lines, notes) is never translated. In English the starter pets are called Mochi · Barley · Button, and AI-written lines come out in English.
 
-## What it does (0.11.34)
+## What it does (0.11.35)
 
 - **Making a pet**: three starter pets (Mochi · Barley · Button) or one picture of your own (PNG · JPG). A plain one-color background, like white, is removed automatically (**Remove background**, with a strength slider in the preview). **Crop by hand** lets you cut just the character out of a bigger picture.
 - **Five base personalities**: Sweet · Prim · Easygoing · Grumpy · Aloof. Walking, dozing, greetings, eating and how it reacts to you all differ by personality. When it reacts to you, it looks at you for a moment first and holds the reaction a little; at most once every 30 seconds (0.11.7).
