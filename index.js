@@ -5265,8 +5265,8 @@ function refreshBed() {
     ensureBed();
     bed.hidden = false;
     bed.classList.toggle('tavvy-awake', actors.length > 0);
-    // number of messages waiting in the bowl (while asleep)
-    const n = here.reduce((t, p) => t + bowlCount(p), 0);
+    // messages waiting while asleep: every pet gets each message, so show the fullest bowl, not the sum
+    const n = here.reduce((t, p) => Math.max(t, bowlCount(p)), 0);
     const badge = bed.querySelector('.tavvy-bed-badge');
     const show = !actors.length && n > 0 && root?.settings.badge !== false;
     badge.hidden = !show;
