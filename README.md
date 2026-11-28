@@ -159,6 +159,6 @@ Text you write yourself (pet names, lines, notes) is never translated. In Englis
 
 ## License
 
-[GNU AGPL v3](LICENSE)
+[MIT](LICENSE)
 
 The starter pet art (Mochi · Barley · Button) shows original characters made for this project.
